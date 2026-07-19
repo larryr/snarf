@@ -6,11 +6,13 @@
     <title>Snarf</title>
     <style>
       html, body { margin: 0; height: 100%; background: #ffffea; }
-      canvas { display: block; width: 100vw; height: 100vh; }
+      /* Fixed 640×480 display (R-P5-3), matching the frozen goldens and the
+         main_wasm dimensions; canvasResize + DPR (R-GFX-05) land with input. */
+      canvas { display: block; width: 640px; height: 480px; image-rendering: pixelated; }
     </style>
   </head>
   <body>
-    <canvas id="screen"></canvas>
+    <canvas id="screen" width="640" height="480"></canvas>
     <!-- Hand-written shim, the single JS boundary (S-06 §4). -->
     <script type="module" src="./shim.js"></script>
   </body>
