@@ -33,6 +33,7 @@ file system, and the origin server as one namespace.
 | 12 | [spec/04-input-devices.md](spec/04-input-devices.md) | /dev/mouse//dev/kbd, chord synthesis machine |
 | 13 | [spec/05-editor-core.md](spec/05-editor-core.md) | Piece table, mouse language, Edit engine |
 | 14 | [spec/06-build-toolchain.md](spec/06-build-toolchain.md) | zig build graph, shim ABI, CI |
+| 15 | [spec/07-source-layout.md](spec/07-source-layout.md) | ACME C survey → Zig module structure, C→Zig map |
 | — | [spec/adr/](spec/adr/) | ADR-0001..0004 |
 
 ## Rendering the diagrams
@@ -58,3 +59,6 @@ tools are documentation-time only and never build dependencies (R-BLD-05).
   [spec/00-architecture.md](spec/00-architecture.md) §6.
 - Decisions with real alternatives get an ADR; requirement docs get a revision-log entry
   when a decision feeds back (see R-04 v2 and R-05 v2 for the pattern).
+- Original-source citations use the pinned reference forks `larryr/plan9port@337c6ac`
+  (acme code) and `larryr/plan9@ed1a9c2` (device semantics) — see
+  [spec/07-source-layout.md](spec/07-source-layout.md) §1.

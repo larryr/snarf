@@ -44,22 +44,17 @@ a worker gives us two options; we support both, chosen at startup:
 In both modes the **main thread only** captures input events and presents frames; all
 Snarf logic runs in the worker.
 
-## 3. Source tree (planned)
+## 3. Source tree
+
+The top-level shape (per-file layout, C→Zig mapping, and import rules are owned by
+[07-source-layout.md](07-source-layout.md)):
 
 ```
 src/
-  core/       editor: text, buffers, windows, cols, edit-lang, look/execute
-  draw/       libdraw-like client: Display, Image, Font, string(), draw()
-  ninep/      9P: messages, client, server framework, mount table
-  dev/        device servers: draw.zig, input.zig, dom.zig, host.zig, misc.zig
-  shim/       Zig side of the WASM import/export boundary (extern fns, ring buffers)
-  main_wasm.zig    freestanding entry (exports: init, wake, tick)
-  main_native.zig  native test harness entry (headless backend)
-web/
-  index.html shim.js
-assets/fonts/
-build.zig  build.zig.zon  .zigversion
-docs/
+  core/       editor (browser-free)     draw/   libdraw-like client + frame
+  ninep/      9P2000                    dev/    device servers
+  shim/       WASM boundary             main_wasm.zig  main_native.zig
+web/ (index.html, shim.js)   assets/fonts/   build.zig  build.zig.zon  .zigversion
 ```
 
 ## 4. Boot sequence
