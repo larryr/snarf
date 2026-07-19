@@ -22,8 +22,8 @@ authorization for this file only). Prune freely — git keeps history.
   `application/wasm` + COOP/COEP + `Cache-Control: no-store`; `-Dport` (default 8017);
   rejects `..`, maps `/`→`/index.html`. Host-only dev tool, outside the editor module
   graph. Built on 0.16 `std.Io` (see learning below). Confirmed loads in a browser.
-- **Phase 1 (ninep) COMPLETE on branch `phase1-ninep` (`096e0a1`) — NOT yet merged to
-  `main`, awaiting user sign-off.** Full 9P2000 core: qid/msg codec (+wire cursor,
+- **Phase 1 (ninep) MERGED to `main` (`f5da818`, user-approved); phase branch and agent
+  worktrees deleted.** Full 9P2000 core: qid/msg codec (+wire cursor,
   stat(5) codec), transport vtable, errors, chan (SPSC ring+Pipe), server (lib9p-shaped
   Srv), client (sync + pump), mount (ordered prefix table). 84/84 tests incl. an
   end-to-end acceptance test (client walks/opens/reads/writes a served tree over a Pipe,
