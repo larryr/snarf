@@ -25,8 +25,10 @@ where possible." Candidate temptations and what std already covers:
 - The WASM module and native test builds depend on **the Zig standard library only**.
   `build.zig.zon` keeps an **empty dependency table**; adding any entry requires amending
   this ADR with the concrete justification and a review of transitive cost.
-- **Assets are not libraries**: embedded font data (Go fonts, BSD-3 license — verify at
-  import, OQ-GFX-2) and any icon/cursor bitmaps are permitted with license notes in-tree.
+- **Assets are not libraries**: embedded font data (v1: XFree86 misc-fixed subfont,
+  public domain — OQ-GFX-2 resolved, see assets/fonts/fixed/README.md; Go fonts BSD-3
+  deferred pending an offline conversion tool) and any icon/cursor bitmaps are permitted
+  with license notes in-tree.
 - **Docs-time tools** (PlantUML/Java or Kroki, GitHub Actions) never become build
   dependencies (R-BLD-05).
 - **Browser APIs are the platform, not dependencies**: Canvas2D/OffscreenCanvas,

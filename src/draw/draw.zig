@@ -9,6 +9,7 @@ const std = @import("std");
 pub const proto = @import("proto.zig");
 pub const Display = @import("Display.zig");
 pub const Image = @import("Image.zig");
+pub const Font = @import("Font.zig");
 pub const Point = proto.Point;
 pub const Rect = proto.Rect;
 
@@ -205,4 +206,187 @@ test "phase-2: display draws a rect through a fake devdraw" {
     // deinit clunks the ctl + data fids ⇒ server fid count back to baseline.
     disp.deinit();
     try testing.expectEqual(baseline, srv.fids.count());
+}
+
+// ==========================================================================
+// Phase-3 font integration (§5). Same fake devdraw, now driving Font.init +
+// drawString and asserting the emitted write stream. R-P2-3 test-only server.
+// ==========================================================================
+
+/// The hand-built 116-byte tiny subfont (client §5): GREY1 4×2 strip
+/// r=(0,0,4,2), rows {0xA0,0x50}; trailer n=2 height=2 ascent=1; two width-2
+/// glyphs closed by a third Fontchar.
+fn tinySubfont() [116]u8 {
+    var f: [116]u8 = undefined;
+    const putCell = struct {
+        fn put(data: []u8, base: usize, i: usize, s: []const u8) void {
+            const dst = data[base + i * 12 ..][0..12];
+            @memset(dst, ' ');
+            @memcpy(dst[0..s.len], s);
+        }
+    }.put;
+    putCell(&f, 0, 0, "k1");
+    putCell(&f, 0, 1, "0");
+    putCell(&f, 0, 2, "0");
+    putCell(&f, 0, 3, "4");
+    putCell(&f, 0, 4, "2");
+    f[60] = 0xA0;
+    f[61] = 0x50;
+    putCell(&f, 62, 0, "2");
+    putCell(&f, 62, 1, "2");
+    putCell(&f, 62, 2, "1");
+    const fc = [_][6]u8{
+        .{ 0x00, 0x00, 0x00, 0x02, 0x00, 0x02 },
+        .{ 0x02, 0x00, 0x00, 0x02, 0x00, 0x02 },
+        .{ 0x04, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    };
+    var i: usize = 0;
+    while (i < 3) : (i += 1) @memcpy(f[98 + i * 6 ..][0..6], &fc[i]);
+    return f;
+}
+
+/// A live `Display` over a heap `FakeDrawTree` for the font tests (640×480,
+/// r == clipr). Mirrors the phase-2 setup; the caller drives it then `finish`es.
+const FontFixture = struct {
+    pipe: *ninep.chan.Pipe,
+    tree: *FakeDrawTree,
+    srv: *server.Server,
+    cl: *ninep.Client,
+    disp: *Display,
+    baseline: usize,
+
+    fn init() !FontFixture {
+        const a = testing.allocator;
+        const pipe = try ninep.chan.Pipe.init(a, 16384);
+        const tree = try a.create(FakeDrawTree);
+        tree.* = .{ .alloc = a, .conn_line = undefined };
+        tree.buildConnLine(.{ "1", "0", "x8r8g8b8", "0", "0", "0", "640", "480", "0", "0", "640", "480" });
+        const srv = try a.create(server.Server);
+        srv.* = try server.Server.init(a, pipe.serverEnd(), &FakeDrawTree.ops, tree, 8192);
+        const cl = try a.create(ninep.Client);
+        cl.* = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+        cl.pump = .{ .ctx = srv, .run = fakePump };
+        _ = try cl.version(8192);
+        const root = try cl.attach("glenda", "");
+        const baseline = srv.fids.count();
+        const disp = try Display.init(a, cl, root.fid);
+        return .{ .pipe = pipe, .tree = tree, .srv = srv, .cl = cl, .disp = disp, .baseline = baseline };
+    }
+
+    fn deinit(self: *FontFixture) void {
+        const a = testing.allocator;
+        self.cl.deinit();
+        self.srv.deinit();
+        self.tree.deinitTree();
+        a.destroy(self.cl);
+        a.destroy(self.srv);
+        a.destroy(self.tree);
+        self.pipe.deinit();
+    }
+};
+
+test "phase-3: font draws a string through a fake devdraw" {
+    var fx = try FontFixture.init();
+    defer fx.deinit();
+    const disp = fx.disp;
+    const tree = fx.tree;
+
+    // white(1), black(2) already flushed by Display.init.
+    try testing.expectEqual(@as(usize, 2), tree.writes.items.len);
+
+    var red = try disp.allocImage(proto.Rect.make(0, 0, 1, 1), proto.RGBA32, true, proto.DRed);
+    try testing.expectEqual(@as(usize, 3), tree.writes.items.len); // red 'b'
+
+    // Font.init own writes: 'b' strip, 'y', 'b' cache, then one i/l…/f batch.
+    var font = try Font.init(testing.allocator, disp, &tinySubfont());
+    try testing.expectEqual(@as(usize, 7), tree.writes.items.len);
+    try testing.expectEqual(@as(u8, 'b'), tree.writes.items[3][0]); // strip
+    try testing.expectEqual(@as(u8, 'y'), tree.writes.items[4][0]);
+    try testing.expectEqual(@as(u8, 'b'), tree.writes.items[5][0]); // cache
+
+    // The i/l/l/f batch: 'i'(nchars=2, ascent=1) + two identity 'l's + 'f' strip.
+    const batch = tree.writes.items[6];
+    try testing.expectEqual(@as(u8, 'i'), batch[0]);
+    try testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, batch[5..9], .little));
+    try testing.expectEqual(@as(u8, 1), batch[9]);
+    try testing.expectEqual(@as(u8, 'l'), batch[10]);
+    try testing.expectEqual(proto.Rect.make(0, 0, 2, 2), readRect(batch, 10 + 11));
+    try testing.expectEqual(@as(u8, 'l'), batch[47]);
+    try testing.expectEqual(proto.Rect.make(2, 0, 4, 2), readRect(batch, 47 + 11));
+    try testing.expectEqual(@as(u8, 'f'), batch[84]);
+    try testing.expectEqual(@as(usize, 89), batch.len);
+
+    // drawString buffers a single 's'; flush appends the bare 'v'.
+    const end = try font.drawString(&disp.image, .{ .x = 10, .y = 10 }, &red, "\x00\x01");
+    try testing.expectEqual(@as(i32, 14), end.x); // 10 + 2 + 2
+    try testing.expectEqual(@as(i32, 10), end.y); // top-left y unchanged
+    try testing.expectEqual(@as(usize, 7), tree.writes.items.len); // still buffered
+    try disp.flush();
+    try testing.expectEqual(@as(usize, 8), tree.writes.items.len);
+
+    const s = tree.writes.items[7];
+    try testing.expectEqual(@as(u8, 's'), s[0]);
+    try testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, s[1..5], .little)); // dst = display
+    try testing.expectEqual(red.id, std.mem.readInt(u32, s[5..9], .little)); // src = red
+    try testing.expectEqual(font.cache.id, std.mem.readInt(u32, s[9..13], .little));
+    try testing.expectEqual(@as(i32, 10), std.mem.readInt(i32, s[13..17], .little)); // p.x
+    try testing.expectEqual(@as(i32, 11), std.mem.readInt(i32, s[17..21], .little)); // p.y = 10+ascent
+    try testing.expectEqual(proto.Rect.make(0, 0, 640, 480), readRect(s, 21)); // clipr = dst.clipr
+    try testing.expectEqual(@as(u16, 2), std.mem.readInt(u16, s[45..47], .little)); // ni
+    try testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, s[47..49], .little));
+    try testing.expectEqual(@as(u16, 1), std.mem.readInt(u16, s[49..51], .little));
+    try testing.expectEqual(@as(u8, 'v'), s[51]);
+
+    // deinit ⇒ one 'f' cache write; then the display's fids clunk back.
+    font.deinit();
+    try testing.expectEqual(@as(usize, 9), tree.writes.items.len);
+    const fcache = tree.writes.items[8];
+    try testing.expectEqual(@as(u8, 'f'), fcache[0]);
+    try testing.expectEqual(font.cache.id, std.mem.readInt(u32, fcache[1..5], .little));
+
+    disp.deinit();
+    try testing.expectEqual(fx.baseline, fx.srv.fids.count());
+}
+
+test "phase-3: string chunks at 100 indices" {
+    var fx = try FontFixture.init();
+    defer fx.deinit();
+    const disp = fx.disp;
+    const tree = fx.tree;
+
+    var red = try disp.allocImage(proto.Rect.make(0, 0, 1, 1), proto.RGBA32, true, proto.DRed);
+    var font = try Font.init(testing.allocator, disp, &tinySubfont());
+    defer {
+        font.deinit();
+        disp.deinit();
+    }
+
+    // 150 ASCII 0x00 glyphs (each width 2) ⇒ two 's' verbs (100 + 50).
+    const s150 = [_]u8{0} ** 150;
+    const base = tree.writes.items.len;
+    _ = try font.drawString(&disp.image, .{ .x = 0, .y = 0 }, &red, &s150);
+    try disp.flush();
+    try testing.expectEqual(base + 1, tree.writes.items.len); // both 's' + 'v' in one write
+
+    const w = tree.writes.items[base];
+    // First 's': ni=100, p.x=0.
+    try testing.expectEqual(@as(u8, 's'), w[0]);
+    try testing.expectEqual(@as(u16, 100), std.mem.readInt(u16, w[45..47], .little));
+    try testing.expectEqual(@as(i32, 0), std.mem.readInt(i32, w[13..17], .little));
+    // Second 's' begins at 47 + 2*100 = 247: ni=50, p.x advanced by 100*width.
+    const off2: usize = 47 + 2 * 100;
+    try testing.expectEqual(@as(u8, 's'), w[off2]);
+    try testing.expectEqual(@as(u16, 50), std.mem.readInt(u16, w[off2 + 45 .. off2 + 47], .little));
+    try testing.expectEqual(@as(i32, 200), std.mem.readInt(i32, w[off2 + 13 .. off2 + 17], .little));
+    try testing.expectEqual(@as(u8, 'v'), w[off2 + 47 + 2 * 50]);
+}
+
+/// Decode a `proto.Rect` from a 16-byte little-endian field at `w[off..]`.
+fn readRect(w: []const u8, off: usize) proto.Rect {
+    return proto.Rect.make(
+        std.mem.readInt(i32, w[off..][0..4], .little),
+        std.mem.readInt(i32, w[off + 4 ..][0..4], .little),
+        std.mem.readInt(i32, w[off + 8 ..][0..4], .little),
+        std.mem.readInt(i32, w[off + 12 ..][0..4], .little),
+    );
 }

@@ -63,11 +63,21 @@ Diagram source: [diagrams/draw-pipeline.puml](diagrams/draw-pipeline.puml)
 ## 4. Fonts (R-GFX-04)
 
 Plan 9 font/subfont model verbatim: a `.font` file lists ranges → subfont files; subfonts
-are images plus glyph metrics, loaded with `k`/`l` messages by the libdraw client. Snarf
-ships Go Regular + Go Mono pre-converted to subfonts (license check: OQ-GFX-2) embedded via
-`@embedFile`, and can load additional fonts from the namespace (e.g.
+are images plus glyph metrics, loaded with `i`/`l` messages by the libdraw client (this
+spec's §2 table previously listed a fictional `k` verb; the real devdraw font verbs are
+`i`/`l`/`s` — 9/port/devdraw.c:1662,1688,1951). v1 ships one embedded bitmap subfont:
+the `fixed/unicode.9x18` latin1 subfont (`9x18.0000`, public domain, converted from the
+XFree86 misc-fixed BDFs; provenance + license text in `assets/fonts/fixed/README.md`),
+stored verbatim in its compressed image(6) form and inflated at font init
+(**OQ-GFX-2: resolved** — note the Lucida families are license-encumbered and must never
+be embedded). Go Regular + Go Mono remain the target proportional/mono faces for a later
+phase, contingent on an offline TTF→subfont pre-conversion tool (run once at import,
+never a build dependency). Additional fonts can load from the namespace (e.g.
 `/mnt/host/fonts/...`). No browser text APIs are used for editor text (deterministic
 metrics; headless tests render identically).
+
+> Revision log: 2026-07-19 — Go-fonts sentence replaced with the misc-fixed v1 ruling
+> (phase-3 contract, agents/contracts/phase3-font.md §asset); `k`→`i` verb correction.
 
 ## 5. Resize & refresh (R-GFX-05)
 

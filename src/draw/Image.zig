@@ -46,6 +46,52 @@ pub fn free(self: *Image) Display.Error!void {
     try self.display.emit(.{ .free = .{ .id = self.id } });
 }
 
+pub const LoadError = Display.Error || error{ BadRect, ShortData };
+
+/// Upload raw pixel rows into rectangle `r` of this image (loadimage.c:5-54).
+/// `data` is `bytesPerLine(r, depth)` per row, top row first, byte-aligned
+/// (G11). CHUNKED like libdraw: each 'y' carries at most `chunk = buf_size-64`
+/// bytes (`dy = min(rows left, chunk/bpl)` rows), so a single upload never
+/// trips `Display.emit`'s oversized guard. `dy == 0` (one row wider than the
+/// chunk) ⇒ `BadRect`; `r ⊄ self.r` ⇒ `BadRect`; too little data ⇒ `ShortData`.
+/// Ends with `display.doFlush()` (no 'v') so a failure is attributed here
+/// (loadimage.c:51). Buffered otherwise — pixels are visible on the next flush.
+pub fn load(self: *Image, r: proto.Rect, data: []const u8) LoadError!void {
+    const disp = self.display;
+    if (!rectInRect(r, self.r)) return error.BadRect;
+    const depth = proto.chanDepth(self.chan) orelse return error.BadRect;
+    const bpl = proto.bytesPerLine(r, depth);
+    if (bpl == 0) return error.BadRect;
+    const dy_total: usize = @intCast(r.max.y - r.min.y);
+    if (data.len < bpl * dy_total) return error.ShortData;
+
+    // loadimage.c:13 chunk = bufsize - 64. Guard the (unrealistic) tiny-buffer
+    // underflow so a too-small display degrades to BadRect, not a panic.
+    const chunk: usize = if (disp.buf_size > 64) disp.buf_size - 64 else 0;
+    var y = r.min.y;
+    var off: usize = 0;
+    while (y < r.max.y) {
+        var dy: usize = @intCast(r.max.y - y);
+        if (dy * bpl > chunk) dy = chunk / bpl;
+        if (dy == 0) return error.BadRect; // loadimage.c:30 "too wide for buffer"
+        const n = dy * bpl;
+        try disp.emit(.{ .load = .{
+            .id = self.id,
+            .r = proto.Rect.make(r.min.x, y, r.max.x, y + @as(i32, @intCast(dy))),
+            .data = data[off .. off + n],
+        } });
+        off += n;
+        y += @intCast(dy);
+    }
+    try disp.doFlush();
+}
+
+/// `rectinrect` (rectclip.c): `r` lies entirely within `s` (half-open).
+fn rectInRect(r: proto.Rect, s: proto.Rect) bool {
+    return s.min.x <= r.min.x and r.max.x <= s.max.x and
+        s.min.y <= r.min.y and r.max.y <= s.max.y;
+}
+
 test {
     // Image has no pure behavior to exercise on its own; its draw/free paths
     // are covered by the fake-devdraw integration test in draw.zig.

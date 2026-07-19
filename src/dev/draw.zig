@@ -57,6 +57,17 @@ fn nodeOf(path: u64) Node {
 }
 
 // ===========================================================================
+// Per-font state (mirrors the kernel's DImage font fields, devdraw.c:107-115,
+// 130-132). A font is a normal image ('b') promoted by an 'i' verb: it grows a
+// glyph-metrics table whose entries 'l' fills. `miny`/`maxy` are TRUNCATED to
+// u8 exactly as the kernel's `uchar` FChar fields (devdraw.c:130-131, G18).
+// ===========================================================================
+
+const FChar = struct { minx: i32, maxx: i32, miny: u8, maxy: u8, left: i8, width: u8 };
+const FontRec = struct { ascent: u8, chars: []FChar };
+const zero_fchar: FChar = .{ .minx = 0, .maxx = 0, .miny = 0, .maxy = 0, .left = 0, .width = 0 };
+
+// ===========================================================================
 // DevDraw — one exclusive connection over a Backend.
 // ===========================================================================
 
@@ -71,6 +82,10 @@ pub const DevDraw = struct {
     /// Image ids allocated on this connection since it opened, so a clunk-reset
     /// can free them (devdraw.c drawfreeclient teardown; R-P2-6).
     allocated: std.ArrayListUnmanaged(u32) = .empty,
+    /// Per-image font metrics, keyed by image id. An image gains an entry when
+    /// 'i' promotes it to a font (devdraw.c:1679-1684); 'f'/reset/deinit free
+    /// the entry and its owned `chars` slice (leak-checked by the tests).
+    fonts: std.AutoHashMapUnmanaged(u32, FontRec) = .empty,
 
     const Self = @This();
 
@@ -79,8 +94,37 @@ pub const DevDraw = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.freeAllFonts();
+        self.fonts.deinit(self.allocator);
         self.allocated.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    /// Free the metrics table owned by font `id`, if any (devdraw.c:1679 `free`).
+    fn freeFont(self: *Self, id: u32) void {
+        if (self.fonts.fetchRemove(id)) |kv| self.allocator.free(kv.value.chars);
+    }
+
+    /// Free every font's `chars` slice and empty the map (clunk-reset / deinit).
+    fn freeAllFonts(self: *Self) void {
+        var it = self.fonts.valueIterator();
+        while (it.next()) |fr| self.allocator.free(fr.chars);
+        self.fonts.clearRetainingCapacity();
+    }
+
+    /// Is `id` a live image on this connection (a 'b'-allocation not yet freed)?
+    fn isAllocated(self: *Self, id: u32) bool {
+        for (self.allocated.items) |v| if (v == id) return true;
+        return false;
+    }
+
+    /// Font ladder shared by 'l' and 's' (devdraw.c:1691-1694, 1963-1966): a
+    /// live font ⇒ its record; an allocated image that is not a font ⇒ NotFont;
+    /// anything else ⇒ NoDrawImage.
+    fn fontLadder(self: *Self, id: u32) OpError!*FontRec {
+        if (self.fonts.getPtr(id)) |fr| return fr;
+        if (self.isAllocated(id)) return error.NotFont;
+        return error.NoDrawImage;
     }
 
     fn devOf(ctx: *anyopaque) *Self {
@@ -158,7 +202,113 @@ pub const DevDraw = struct {
                     const id = rdU32(a, 1);
                     self.backend.freeImage(id) catch |e| return opError(e);
                     self.forget(id);
+                    self.freeFont(id); // 'i'-promoted images drop their metrics too
                     i += 5;
+                },
+                // 'y' — load pixels: id[4]@1 r[16]@5 data[..]@21 (devdraw.c:2082-2101).
+                //   The fixed check is the 21-byte header only; the backend consumes
+                //   `Dy*bytesperline` payload bytes and returns that count so the loop
+                //   advances past exactly the payload — more verbs may follow (G17).
+                'y' => {
+                    if (a.len < 21) return error.ShortDraw;
+                    const id = rdU32(a, 1);
+                    const r = rdRect(a, 5);
+                    const consumed = self.backend.loadPixels(id, r, a[21..]) catch |e| return opError(e);
+                    i += 21 + consumed;
+                },
+                // 'i' — init font: fontid[4]@1 nchars[4]@5 ascent[1]@9 (devdraw.c:1662-1686).
+                //   id 0 (display) ⇒ BadDraw; unknown id ⇒ NoDrawImage; nchars out of
+                //   (0,4096] ⇒ BadDraw. Replaces any prior metrics with a zeroed table.
+                'i' => {
+                    if (a.len < 10) return error.ShortDraw;
+                    const fontid = rdU32(a, 1);
+                    if (fontid == 0) return error.BadDraw; // "cannot use display as font" ⇒ BadDraw (R-P3-4)
+                    if (!self.isAllocated(fontid)) return error.NoDrawImage;
+                    const nchars = rdU32(a, 5);
+                    if (nchars == 0 or nchars > 4096) return error.BadDraw; // "bad font size" ⇒ BadDraw
+                    const ascent = a[9];
+                    const chars = self.allocator.alloc(FChar, nchars) catch return error.IoError;
+                    @memset(chars, zero_fchar);
+                    const gop = self.fonts.getOrPut(self.allocator, fontid) catch {
+                        self.allocator.free(chars);
+                        return error.IoError;
+                    };
+                    if (gop.found_existing) self.allocator.free(gop.value_ptr.chars);
+                    gop.value_ptr.* = .{ .ascent = ascent, .chars = chars };
+                    i += 10;
+                },
+                // 'l' — load char: fontid[4]@1 srcid[4]@5 index[2]@9 r[16]@11 sp[8]@27
+                //   left[1]@35 (SIGNED) width[1]@36 (devdraw.c:1688-1713). The glyph
+                //   bits are stamped into the font image by an op-S copy (:1705); the
+                //   metrics record the rect verbatim (miny/maxy TRUNCATED to u8, G18).
+                'l' => {
+                    if (a.len < 37) return error.ShortDraw;
+                    const fontid = rdU32(a, 1);
+                    const font = try self.fontLadder(fontid);
+                    const srcid = rdU32(a, 5);
+                    const ci = rdU16(a, 9);
+                    if (ci >= font.chars.len) return error.BadIndex;
+                    const r = rdRect(a, 11);
+                    const sp = rdPoint(a, 27);
+                    self.backend.copy(fontid, srcid, r, sp) catch |e| return opError(e);
+                    font.chars[ci] = .{
+                        .minx = r.min.x,
+                        .maxx = r.max.x,
+                        .miny = @truncate(@as(u32, @bitCast(r.min.y))),
+                        .maxy = @truncate(@as(u32, @bitCast(r.max.y))),
+                        .left = @bitCast(a[35]),
+                        .width = a[36],
+                    };
+                    i += 37;
+                },
+                // 's' — string: dstid[4]@1 srcid[4]@5 fontid[4]@9 p[8]@13 clipr[16]@21
+                //   sp[8]@37 ni[2]@45 indices[2·ni]@47 (devdraw.c:1949-2014). Two-stage
+                //   short check: 47 header first, then +2·ni once ni is known. The wire
+                //   clipr REPLACES dst.clipr for the op and is restored on every exit
+                //   path (incl. BadIndex mid-string and backend faults) (:1976-2011).
+                's' => {
+                    if (a.len < 47) return error.ShortDraw;
+                    const ni = rdU16(a, 45);
+                    if (a.len < 47 + 2 * @as(usize, ni)) return error.ShortDraw;
+                    const dstid = rdU32(a, 1);
+                    const srcid = rdU32(a, 5);
+                    const fontid = rdU32(a, 9);
+                    const p = rdPoint(a, 13); // baseline point (client added ascent)
+                    const clipr = rdRect(a, 21);
+                    var sp = rdPoint(a, 37);
+                    const dst_info = self.backend.imageInfo(dstid) catch |e| return opError(e);
+                    _ = self.backend.imageInfo(srcid) catch |e| return opError(e);
+                    const font = try self.fontLadder(fontid);
+                    const ascent: i32 = font.ascent;
+                    const old_clipr = dst_info.clipr;
+                    self.backend.setClipr(dstid, clipr) catch |e| return opError(e);
+                    var q = p;
+                    var k: usize = 0;
+                    while (k < ni) : (k += 1) {
+                        const ci = rdU16(a, 47 + 2 * k);
+                        if (ci >= font.chars.len) {
+                            self.backend.setClipr(dstid, old_clipr) catch {};
+                            return error.BadIndex; // prior glyphs stay painted (G5)
+                        }
+                        const fc = font.chars[ci];
+                        const left: i32 = fc.left;
+                        const miny: i32 = fc.miny;
+                        // drawchar geometry (devdraw.c:894-900, G19): baseline at p.y.
+                        const r = draw_backend.Rect{
+                            .min = .{ .x = q.x + left, .y = p.y - (ascent - miny) },
+                            .max = .{ .x = q.x + left + (fc.maxx - fc.minx), .y = p.y - (ascent - miny) + (@as(i32, fc.maxy) - miny) },
+                        };
+                        const sp1 = draw_backend.Point{ .x = sp.x + left, .y = sp.y + miny };
+                        const mp = draw_backend.Point{ .x = fc.minx, .y = miny };
+                        self.backend.draw(dstid, srcid, fontid, r, sp1, mp) catch |e| {
+                            self.backend.setClipr(dstid, old_clipr) catch {};
+                            return opError(e);
+                        };
+                        q.x += fc.width; // pen + source advance (devdraw.c:927-928)
+                        sp.x += fc.width;
+                    }
+                    self.backend.setClipr(dstid, old_clipr) catch {};
+                    i += 47 + 2 * @as(usize, ni);
                 },
                 // 'v' — visible/flush: bare byte (devdraw.c:2075).
                 'v' => {
@@ -187,6 +337,7 @@ pub const DevDraw = struct {
     fn reset(self: *Self) void {
         for (self.allocated.items) |id| self.backend.freeImage(id) catch {};
         self.allocated.clearRetainingCapacity();
+        self.freeAllFonts();
         self.busy = false;
     }
 
@@ -320,6 +471,9 @@ fn opError(e: draw_backend.Error) OpError {
         error.UnknownImage => error.NoDrawImage, // "unknown id for draw image"
         error.ImageExists, error.BadChan, error.BadRect, error.Unsupported => error.BadDraw,
         error.OutOfMemory => error.IoError,
+        // R-P3-9: 3a carries the opError arms for the new backend Error members; the rest of §3 is B1's.
+        error.WriteOutside => error.WriteOutside,
+        error.ShortData => error.BadWriteImage,
     };
 }
 
@@ -330,6 +484,10 @@ fn opError(e: draw_backend.Error) OpError {
 
 fn rdU32(a: []const u8, off: usize) u32 {
     return std.mem.readInt(u32, a[off..][0..4], .little);
+}
+
+fn rdU16(a: []const u8, off: usize) u16 {
+    return std.mem.readInt(u16, a[off..][0..2], .little);
 }
 
 fn rdI32(a: []const u8, off: usize) i32 {
@@ -428,7 +586,56 @@ fn buildD(buf: *[45]u8, dstid: u32, srcid: u32, maskid: u32, r: draw_backend.Rec
     @memset(buf[29..45], 0); // sp[8] + mp[8]
 }
 
+fn wU16(buf: []u8, off: usize, v: u16) void {
+    std.mem.writeInt(u16, buf[off..][0..2], v, .little);
+}
+fn wPoint(buf: []u8, off: usize, p: draw_backend.Point) void {
+    std.mem.writeInt(i32, buf[off + 0 ..][0..4], p.x, .little);
+    std.mem.writeInt(i32, buf[off + 4 ..][0..4], p.y, .little);
+}
+
+/// Build a 21-byte 'y' (load pixels) header; the caller appends the payload.
+fn buildYHdr(buf: []u8, id: u32, r: draw_backend.Rect) void {
+    buf[0] = 'y';
+    wU32(buf, 1, id);
+    wRect(buf, 5, r);
+}
+
+/// Build a 10-byte 'i' (init font) frame.
+fn buildI(buf: *[10]u8, fontid: u32, nchars: u32, ascent: u8) void {
+    buf[0] = 'i';
+    wU32(buf, 1, fontid);
+    wU32(buf, 5, nchars);
+    buf[9] = ascent;
+}
+
+/// Build a 37-byte 'l' (load char) frame (left is a signed i8 @35).
+fn buildL(buf: *[37]u8, fontid: u32, srcid: u32, index: u16, r: draw_backend.Rect, sp: draw_backend.Point, left: i8, width: u8) void {
+    buf[0] = 'l';
+    wU32(buf, 1, fontid);
+    wU32(buf, 5, srcid);
+    wU16(buf, 9, index);
+    wRect(buf, 11, r);
+    wPoint(buf, 27, sp);
+    buf[35] = @bitCast(left);
+    buf[36] = width;
+}
+
+/// Build a 's' (string) frame of 47 + 2·ni bytes into `buf`.
+fn buildS(buf: []u8, dstid: u32, srcid: u32, fontid: u32, p: draw_backend.Point, clipr: draw_backend.Rect, sp: draw_backend.Point, indices: []const u16) void {
+    buf[0] = 's';
+    wU32(buf, 1, dstid);
+    wU32(buf, 5, srcid);
+    wU32(buf, 9, fontid);
+    wPoint(buf, 13, p);
+    wRect(buf, 21, clipr);
+    wPoint(buf, 37, sp);
+    wU16(buf, 45, @intCast(indices.len));
+    for (indices, 0..) |ci, k| wU16(buf, 47 + 2 * k, ci);
+}
+
 const R = draw_backend.Rect;
+const P = draw_backend.Point;
 const unit = R.init(0, 0, 1, 1);
 const repl_clipr = R.init(-0x3FFFFFFF, -0x3FFFFFFF, 0x3FFFFFFF, 0x3FFFFFFF); // G10
 const WHITE: u32 = 0xFFFFFFFF;
@@ -773,4 +980,327 @@ test "devdraw: stat and walk table" {
     const refresh = try h.stat(5);
     try testing.expectEqualStrings("refresh", refresh.name);
     try testing.expectEqual(@as(u32, 0o444), refresh.mode);
+}
+
+// ===========================================================================
+// Phase 3 — font verbs 'y'/'i'/'l'/'s' (device §3 tests 11-16). Verbs are
+// hand-encoded (no src/draw import, G7). FROZEN-D per R-P2-7: spot-checks are
+// authoritative and verified first; the Wyhash literal is frozen only after
+// they pass, with a scene comment.
+// ===========================================================================
+
+test "devdraw: y upload then draw round-trip" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    // ONE Twrite: mask(1) + 2×2 RGBA32 image(2) + 'y'(16B payload) + 'd' + 'v'.
+    // The 'd' sitting right after the 16-byte payload pins the payload advance.
+    var b1: [51]u8 = undefined;
+    buildB(&b1, 1, draw_backend.GREY1, true, unit, repl_clipr, WHITE); // opaque mask
+    var b2: [51]u8 = undefined;
+    buildB(&b2, 2, draw_backend.RGBA32, false, R.init(0, 0, 2, 2), R.init(0, 0, 2, 2), 0);
+    var yhdr: [21]u8 = undefined;
+    buildYHdr(&yhdr, 2, R.init(0, 0, 2, 2));
+    // RGBA32 wire order per pixel is [a,b,g,r] (G13). Row-major, 8 B/row.
+    const payload = [16]u8{
+        0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0x00, // (0,0)=red   (1,0)=green
+        0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, // (0,1)=blue  (1,1)=white
+    };
+    var d: [45]u8 = undefined;
+    buildD(&d, 0, 2, 1, R.init(0, 0, 2, 2));
+
+    var batch: [51 + 51 + 21 + 16 + 45 + 1]u8 = undefined;
+    var o: usize = 0;
+    inline for (.{ b1[0..], b2[0..], yhdr[0..], payload[0..], d[0..] }) |seg| {
+        @memcpy(batch[o..][0..seg.len], seg);
+        o += seg.len;
+    }
+    batch[o] = 'v';
+
+    const rw = try h.write(2, &batch);
+    try testing.expect(rw.body == .rwrite);
+    try testing.expectEqual(@as(u32, batch.len), rw.body.rwrite.count);
+
+    // Spot-checks: the four loaded pixels landed opaque on the display.
+    try testing.expectEqual(@as(u32, 0xFF0000FF), h.hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0x00FF00FF), h.hb.pixelAt(1, 0));
+    try testing.expectEqual(@as(u32, 0x0000FFFF), h.hb.pixelAt(0, 1));
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), h.hb.pixelAt(1, 1));
+    try testing.expectEqual(@as(u32, 1), h.hb.flush_count);
+}
+
+test "devdraw: y errors" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    var b1: [51]u8 = undefined;
+    buildB(&b1, 1, draw_backend.RGBA32, false, R.init(0, 0, 2, 2), R.init(0, 0, 2, 2), 0);
+    _ = try h.write(2, &b1);
+
+    // (a) r not contained in the image ⇒ WriteOutside.
+    var y_out: [21]u8 = undefined;
+    buildYHdr(&y_out, 1, R.init(0, 0, 4, 4));
+    const ro = try h.write(2, &y_out);
+    try testing.expect(ro.body == .rerror);
+    try testing.expectEqualStrings("writeimage outside image", ro.body.rerror.ename);
+
+    // (b) payload shorter than Dy*bpl ⇒ ShortData ⇒ "bad writeimage call".
+    var y_short: [21 + 8]u8 = undefined;
+    buildYHdr(y_short[0..21], 1, R.init(0, 0, 2, 2)); // needs 16, gets 8
+    @memset(y_short[21..], 0);
+    const rs = try h.write(2, &y_short);
+    try testing.expect(rs.body == .rerror);
+    try testing.expectEqualStrings("bad writeimage call", rs.body.rerror.ename);
+
+    // (c) unknown id ⇒ NoDrawImage.
+    var y_unk: [21]u8 = undefined;
+    buildYHdr(&y_unk, 999, R.init(0, 0, 2, 2));
+    const ru = try h.write(2, &y_unk);
+    try testing.expect(ru.body == .rerror);
+    try testing.expectEqualStrings("unknown id for draw image", ru.body.rerror.ename);
+}
+
+test "devdraw: i/l/s two-glyph string — spot checks + frozen hash" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    // Scene images: white mask (unused by 's'), RED source, GREY8 strip, GREY8
+    // font cache — all 8×4. The strip 'y'-loads four rows; 'l' copies its left
+    // 4 cols into glyph 0 and its right 4 cols into glyph 1 of the font image.
+    var b1: [51]u8 = undefined;
+    buildB(&b1, 1, draw_backend.GREY1, true, unit, repl_clipr, WHITE);
+    var b2: [51]u8 = undefined;
+    buildB(&b2, 2, draw_backend.RGBA32, true, unit, repl_clipr, RED);
+    var b3: [51]u8 = undefined;
+    buildB(&b3, 3, draw_backend.GREY8, false, R.init(0, 0, 8, 4), R.init(0, 0, 8, 4), 0);
+    var b4: [51]u8 = undefined;
+    buildB(&b4, 4, draw_backend.GREY8, false, R.init(0, 0, 8, 4), R.init(0, 0, 8, 4), 0);
+
+    var yhdr: [21]u8 = undefined;
+    buildYHdr(&yhdr, 3, R.init(0, 0, 8, 4)); // GREY8 8×4 ⇒ 8 B/row, 32 B total
+    const strip = [32]u8{
+        0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+        0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+    };
+
+    var ifont: [10]u8 = undefined;
+    buildI(&ifont, 4, 2, 3); // nchars 2, ascent 3
+    var l0: [37]u8 = undefined;
+    buildL(&l0, 4, 3, 0, R.init(0, 0, 4, 4), .{ .x = 0, .y = 0 }, 0, 5);
+    var l1: [37]u8 = undefined;
+    buildL(&l1, 4, 3, 1, R.init(4, 0, 8, 4), .{ .x = 4, .y = 0 }, 1, 6);
+
+    var s: [47 + 4]u8 = undefined;
+    buildS(&s, 0, 2, 4, .{ .x = 100, .y = 100 }, R.init(0, 0, 640, 480), .{ .x = 0, .y = 0 }, &.{ 0, 1 });
+
+    var batch: [51 * 4 + 21 + 32 + 10 + 37 * 2 + (47 + 4) + 1]u8 = undefined;
+    var o: usize = 0;
+    inline for (.{ b1[0..], b2[0..], b3[0..], b4[0..], yhdr[0..], strip[0..], ifont[0..], l0[0..], l1[0..], s[0..] }) |seg| {
+        @memcpy(batch[o..][0..seg.len], seg);
+        o += seg.len;
+    }
+    batch[o] = 'v';
+
+    const rw = try h.write(2, &batch);
+    try testing.expect(rw.body == .rwrite);
+    try testing.expectEqual(@as(u32, batch.len), rw.body.rwrite.count);
+
+    // Glyph 0: box (100,97)-(104,101), left=0 width=5. The GREY8 mask is the
+    // strip's left 4 columns ⇒ a checkerboard of RED (all opaque, XRGB dst).
+    const red = @as(u32, 0xFF0000FF);
+    for ([_][2]u32{
+        .{ 100, 97 }, .{ 102, 97 }, .{ 101, 98 },  .{ 103, 98 },
+        .{ 100, 99 }, .{ 102, 99 }, .{ 101, 100 }, .{ 103, 100 },
+    }) |pt| try testing.expectEqual(red, h.hb.pixelAt(pt[0], pt[1]));
+    // The complementary mask=0 cells inside glyph 0's box stay untouched.
+    for ([_][2]u32{ .{ 101, 97 }, .{ 103, 97 }, .{ 100, 98 }, .{ 102, 98 } }) |pt|
+        try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(pt[0], pt[1]));
+
+    // Glyph 1: pen advanced to q.x=105, left=1 ⇒ box (106,97)-(110,101). The
+    // mask is the strip's right 4 cols: cols 4,5 solid ⇒ x=106,107 RED for
+    // y=97..100; cols 6,7 empty ⇒ x=108,109 clear.
+    var yy: u32 = 97;
+    while (yy < 101) : (yy += 1) {
+        try testing.expectEqual(red, h.hb.pixelAt(106, yy));
+        try testing.expectEqual(red, h.hb.pixelAt(107, yy));
+        try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(108, yy));
+        try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(109, yy));
+    }
+
+    // Gaps and box edges stay black.
+    try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(105, 97)); // inter-glyph gap
+    try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(100, 96)); // above the box
+    try testing.expectEqual(@as(u32, 0), h.hb.pixelAt(100, 101)); // below the box
+    try testing.expectEqual(@as(u32, 1), h.hb.flush_count);
+
+    // FROZEN-D — scene: 640×480 zeroed fb; RED (0xFF0000FF) SoverD through the
+    // GREY8 font image as mask, drawing glyphs {0,1} of the 2-char font (ascent
+    // 3, widths 5/6) at baseline (100,100), wire clipr = full display, then 'v'.
+    try testing.expectEqual(@as(u64, 0x237ec3dc00be4b1d), h.hb.hash());
+}
+
+test "devdraw: font errors" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    // Fixtures: white mask(1), RED src(2), GREY8 strip(3), GREY8 font(4),
+    // and a plain non-font image(5).
+    {
+        var b1: [51]u8 = undefined;
+        buildB(&b1, 1, draw_backend.GREY1, true, unit, repl_clipr, WHITE);
+        var b2: [51]u8 = undefined;
+        buildB(&b2, 2, draw_backend.RGBA32, true, unit, repl_clipr, RED);
+        var b3: [51]u8 = undefined;
+        buildB(&b3, 3, draw_backend.GREY8, false, R.init(0, 0, 8, 4), R.init(0, 0, 8, 4), 0);
+        var b4: [51]u8 = undefined;
+        buildB(&b4, 4, draw_backend.GREY8, false, R.init(0, 0, 8, 4), R.init(0, 0, 8, 4), 0);
+        var b5: [51]u8 = undefined;
+        buildB(&b5, 5, draw_backend.RGBA32, false, R.init(0, 0, 4, 4), R.init(0, 0, 4, 4), 0);
+        var pre: [51 * 5]u8 = undefined;
+        inline for (.{ b1[0..], b2[0..], b3[0..], b4[0..], b5[0..] }, 0..) |seg, idx|
+            @memcpy(pre[idx * 51 ..][0..51], seg);
+        _ = try h.write(2, &pre);
+    }
+
+    const expectErr = struct {
+        fn f(hh: *Harness, data: []const u8, want: []const u8) !void {
+            const r = try hh.write(2, data);
+            try testing.expect(r.body == .rerror);
+            try testing.expectEqualStrings(want, r.body.rerror.ename);
+        }
+    }.f;
+
+    // 'i' fontid 0 ⇒ BadDraw; unknown id ⇒ NoDrawImage; nchars 0 / 4097 ⇒ BadDraw.
+    var ib: [10]u8 = undefined;
+    buildI(&ib, 0, 2, 3);
+    try expectErr(h, &ib, "bad draw message");
+    buildI(&ib, 999, 2, 3);
+    try expectErr(h, &ib, "unknown id for draw image");
+    buildI(&ib, 4, 0, 3);
+    try expectErr(h, &ib, "bad draw message");
+    buildI(&ib, 4, 4097, 3);
+    try expectErr(h, &ib, "bad draw message");
+
+    // 'l' on an allocated non-font image ⇒ NotFont.
+    var lb: [37]u8 = undefined;
+    buildL(&lb, 5, 3, 0, R.init(0, 0, 4, 4), .{ .x = 0, .y = 0 }, 0, 5);
+    try expectErr(h, &lb, "image not a font");
+
+    // Promote id 4 to a real 2-char font; 'l' index ≥ nchars ⇒ BadIndex.
+    buildI(&ib, 4, 2, 3);
+    _ = try h.write(2, &ib);
+    buildL(&lb, 4, 3, 5, R.init(0, 0, 4, 4), .{ .x = 0, .y = 0 }, 0, 5);
+    try expectErr(h, &lb, "character index out of range");
+
+    // 's' unknown fontid ⇒ NoDrawImage; 's' on a non-font ⇒ NotFont.
+    var sb: [47 + 2]u8 = undefined;
+    buildS(&sb, 0, 2, 999, .{ .x = 100, .y = 100 }, R.init(0, 0, 640, 480), .{ .x = 0, .y = 0 }, &.{0});
+    try expectErr(h, &sb, "unknown id for draw image");
+    buildS(&sb, 0, 2, 5, .{ .x = 100, .y = 100 }, R.init(0, 0, 640, 480), .{ .x = 0, .y = 0 }, &.{0});
+    try expectErr(h, &sb, "image not a font");
+
+    // 's' indices {0,99}: glyph 0 must be loaded so it paints before the fault.
+    var yhdr: [21]u8 = undefined;
+    buildYHdr(&yhdr, 3, R.init(0, 0, 8, 4));
+    const strip = [32]u8{
+        0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+        0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+    };
+    var yl: [21 + 32]u8 = undefined;
+    @memcpy(yl[0..21], &yhdr);
+    @memcpy(yl[21..], &strip);
+    _ = try h.write(2, &yl);
+    var l0: [37]u8 = undefined;
+    buildL(&l0, 4, 3, 0, R.init(0, 0, 4, 4), .{ .x = 0, .y = 0 }, 0, 5);
+    _ = try h.write(2, &l0);
+
+    // Wire clipr is a small window that excludes (0,0). glyph 0 paints; index 99
+    // ⇒ BadIndex; clipr must be restored to the display default afterward.
+    var sbad: [47 + 4]u8 = undefined;
+    buildS(&sbad, 0, 2, 4, .{ .x = 100, .y = 100 }, R.init(100, 90, 120, 110), .{ .x = 0, .y = 0 }, &.{ 0, 99 });
+    try expectErr(h, &sbad, "character index out of range");
+    try testing.expectEqual(@as(u32, 0xFF0000FF), h.hb.pixelAt(100, 97)); // glyph 0 stayed
+
+    // clipr restored ⇒ a 'd' fully outside the wire clipr (100,90,120,110) still paints.
+    var d: [45]u8 = undefined;
+    buildD(&d, 0, 2, 1, R.init(0, 0, 10, 10));
+    var dv: [46]u8 = undefined;
+    @memcpy(dv[0..45], &d);
+    dv[45] = 'v';
+    const rd = try h.write(2, &dv);
+    try testing.expect(rd.body == .rwrite);
+    try testing.expectEqual(@as(u32, 0xFF0000FF), h.hb.pixelAt(0, 0)); // painted ⇒ clipr was restored
+}
+
+test "devdraw: s short checks two-stage" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    // Stage 1: fewer than the 47-byte header ⇒ ShortDraw.
+    var short_hdr: [46]u8 = undefined;
+    short_hdr[0] = 's';
+    @memset(short_hdr[1..], 0);
+    const r1 = try h.write(2, &short_hdr);
+    try testing.expect(r1.body == .rerror);
+    try testing.expectEqualStrings("short draw message", r1.body.rerror.ename);
+
+    // Stage 2: header present, ni=3, but only 2 indices follow ⇒ ShortDraw.
+    var s2: [47 + 4]u8 = undefined;
+    buildS(&s2, 0, 2, 4, .{ .x = 0, .y = 0 }, R.init(0, 0, 640, 480), .{ .x = 0, .y = 0 }, &.{ 0, 0 });
+    wU16(&s2, 45, 3); // claim 3 indices while only 2 are present
+    const r2 = try h.write(2, &s2);
+    try testing.expect(r2.body == .rerror);
+    try testing.expectEqualStrings("short draw message", r2.body.rerror.ename);
+}
+
+test "devdraw: clunk resets fonts" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+    try h.openData();
+
+    // Allocate an image and promote it to a font.
+    var b2: [51]u8 = undefined;
+    buildB(&b2, 2, draw_backend.GREY8, false, R.init(0, 0, 8, 4), R.init(0, 0, 8, 4), 0);
+    var ib: [10]u8 = undefined;
+    buildI(&ib, 2, 2, 3);
+    var w1: [61]u8 = undefined;
+    @memcpy(w1[0..51], &b2);
+    @memcpy(w1[51..], &ib);
+    _ = try h.write(2, &w1);
+    try testing.expectEqual(@as(usize, 1), h.dd.fonts.count());
+
+    // Clunk the data fid then the ctl fid: the ctl close resets the connection,
+    // freeing images AND font metrics.
+    _ = try h.clunk(2);
+    const rc = try h.clunk(1);
+    try testing.expect(rc.body == .rclunk);
+    try testing.expectEqual(@as(usize, 0), h.dd.fonts.count());
+    try testing.expectEqual(@as(usize, 0), h.hb.images.count());
+
+    // Reconnect and re-'i' works on a fresh connection.
+    _ = try h.walk(0, 3, &.{"new"});
+    const o = try h.open(3, msg.ORDWR);
+    try testing.expect(o.body == .ropen);
+    const wd = try h.walk(0, 4, &.{ "1", "data" });
+    try testing.expect(wd.body == .rwalk);
+    const od = try h.open(4, msg.ORDWR);
+    try testing.expect(od.body == .ropen);
+    const r2 = try h.write(4, &w1);
+    try testing.expect(r2.body == .rwrite);
+    try testing.expectEqual(@as(usize, 1), h.dd.fonts.count());
 }

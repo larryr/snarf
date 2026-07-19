@@ -30,7 +30,10 @@ pub const ConnInfo = struct {
 };
 
 pub const ParseError = error{ ShortInfo, BadInfo };
-pub const Error = ninep.Client.Error || ParseError;
+/// Grows `proto.EncodeError` in phase 3 (R-P3-2): `emit`'s oversized-op guard
+/// surfaces `error.ShortBuffer` instead of the phase-2 `catch unreachable`
+/// hazard, so a chunking-discipline violation is a real error, never UB.
+pub const Error = ninep.Client.Error || ParseError || proto.EncodeError;
 
 /// Length of the connection line: 12 fields × 12 bytes (init.c:198 NINFO; G8).
 pub const info_size: usize = 144;
@@ -210,6 +213,12 @@ pub fn allocImage(self: *Display, r: proto.Rect, chan: proto.Chan, repl: bool, c
 /// overflow, `flush`, `allocImage`'s eager flush, or `deinit`.
 pub fn emit(self: *Display, op: proto.Op) Error!void {
     const size = proto.encodedSize(op);
+    // R-P3-2 oversized-op guard: a single op that cannot fit an empty buffer
+    // is a chunking-discipline violation (Image.load/Font.init keep each verb
+    // within `buf_size - 64`), so fail loudly BEFORE the overflow-flush check
+    // rather than let the encode below hit its `catch unreachable`. Phase-2
+    // ops always fit, so this never fired for them.
+    if (size > self.buf_size) return error.ShortBuffer;
     if (self.bufn + size > self.buf_size) try self.doFlush();
     const written = proto.encode(op, self.buf[self.bufn..self.buf_size]) catch unreachable;
     self.bufn += written.len;
@@ -227,7 +236,12 @@ pub fn flush(self: *Display) Error!void {
 /// Send the buffered bytes in ONE `data` write (doflush, init.c:427-435). A
 /// short ack is an I/O error; on success the buffer is reset. A zero-length
 /// buffer is a no-op (init.c:431-432).
-fn doFlush(self: *Display) Error!void {
+///
+/// Promoted private→pub in phase 3 (R-P3-2): `Image.load` and `Font.init`
+/// need libdraw's "flush without 'v'" so an upload/cache-build error is
+/// attributed to that call and not to a later visible-flush (loadimage.c:51,
+/// font.c:301,372). Body unchanged.
+pub fn doFlush(self: *Display) Error!void {
     if (self.bufn == 0) return;
     const n = try self.client.write(self.data_fid, 0, self.buf[0..self.bufn]);
     if (n != self.bufn) return error.IoError;
