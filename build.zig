@@ -18,9 +18,18 @@ pub fn build(b: *std.Build) void {
     const shim = b.addModule("shim", .{
         .root_source_file = b.path("src/shim/shim.zig"),
     });
+    // Embedded font asset (public domain misc-fixed subfont; ADR-0002 license
+    // note in assets/fonts/fixed/README.md). File-backed module so Font.zig can
+    // @embedFile("font_fixed9x18") from outside its module root (phase-3 contract).
+    const font_fixed9x18 = b.createModule(.{
+        .root_source_file = b.path("assets/fonts/fixed/9x18.0000"),
+    });
     const draw = b.addModule("draw", .{
         .root_source_file = b.path("src/draw/draw.zig"),
-        .imports = &.{.{ .name = "ninep", .module = ninep }},
+        .imports = &.{
+            .{ .name = "ninep", .module = ninep },
+            .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
+        },
     });
     const core = b.addModule("core", .{
         .root_source_file = b.path("src/core/core.zig"),
@@ -125,6 +134,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, target, optimize, "src/shim/shim.zig", &.{});
     addModuleTests(b, test_step, target, optimize, "src/draw/draw.zig", &.{
         .{ .name = "ninep", .module = ninep },
+        .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
     });
     addModuleTests(b, test_step, target, optimize, "src/core/core.zig", &.{
         .{ .name = "draw", .module = draw },
@@ -144,6 +154,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "draw", .module = draw },
         .{ .name = "ninep", .module = ninep },
         .{ .name = "dev", .module = dev },
+        .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
     });
 }
 

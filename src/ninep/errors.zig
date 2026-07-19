@@ -32,6 +32,12 @@ pub const OpError = error{
     BadDraw,
     ShortDraw,
     NoDrawImage,
+    // Phase-3 font/pixel-upload errors (ruling R-P3-4 in
+    // agents/contracts/phase3-font.md). [ref: 9/port/devdraw.c:182-184, 2098]
+    NotFont,
+    BadIndex,
+    WriteOutside,
+    BadWriteImage,
     Other,
 };
 
@@ -56,6 +62,10 @@ pub fn errorString(e: OpError) []const u8 {
         error.BadDraw => "bad draw message",
         error.ShortDraw => "short draw message",
         error.NoDrawImage => "unknown id for draw image",
+        error.NotFont => "image not a font",
+        error.BadIndex => "character index out of range",
+        error.WriteOutside => "writeimage outside image",
+        error.BadWriteImage => "bad writeimage call",
         error.Other => "i/o error",
     };
 }
@@ -82,6 +92,10 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "bad draw message")) return error.BadDraw;
     if (eq(u8, s, "short draw message")) return error.ShortDraw;
     if (eq(u8, s, "unknown id for draw image")) return error.NoDrawImage;
+    if (eq(u8, s, "image not a font")) return error.NotFont;
+    if (eq(u8, s, "character index out of range")) return error.BadIndex;
+    if (eq(u8, s, "writeimage outside image")) return error.WriteOutside;
+    if (eq(u8, s, "bad writeimage call")) return error.BadWriteImage;
     return error.Other;
 }
 
@@ -106,6 +120,10 @@ test "errors: round-trip every member" {
         error.BadDraw,
         error.ShortDraw,
         error.NoDrawImage,
+        error.NotFont,
+        error.BadIndex,
+        error.WriteOutside,
+        error.BadWriteImage,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));
