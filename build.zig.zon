@@ -1,0 +1,19 @@
+.{
+    .name = .snarf,
+    .version = "0.0.0",
+    // Regenerated for this project (delete + `zig build` to recompute).
+    .fingerprint = 0x5364933c957081a6,
+    // OQ-BLD-1 resolved: pin Zig 0.16.0 (ADR-0001 revision log). Keep in sync
+    // with .zigversion. `zig version` must equal this.
+    .minimum_zig_version = "0.16.0",
+    // ADR-0002: the dependency table stays EMPTY. Zig standard library only.
+    // Never add an entry here without an approved ADR-0002 amendment.
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "web",
+        "assets",
+    },
+}

@@ -43,3 +43,11 @@ large generated-glue surface); hand-managed clang+wasm-ld.
   adds a shim (wasi polyfill) for zero benefit.
 - **Rust**: fine language, but the project brief fixes Zig; also wasm-bindgen's generated
   JS surface is exactly what we're avoiding.
+
+## Revision log
+
+- **2026-07-19 — OQ-BLD-1 resolved: initial Zig pin = `0.16.0`.** S-06 §1 originally
+  guessed the "0.14.x or 0.15.x line"; by the time the scaffold landed, 0.16.0 was the
+  current stable release and what the developer had installed, so it was pinned directly
+  (user sign-off). Recorded in `.zigversion` and `build.zig.zon` `minimum_zig_version`.
+  Per §Decision.4, future bumps are dedicated PRs that update those two files and this log.
