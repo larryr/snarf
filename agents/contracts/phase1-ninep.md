@@ -31,9 +31,13 @@ C references (cite in doc comments as `file:line`):
   then Rerror: tauth → "authentication not required"; tcreate/tremove/twstat →
   "permission denied"; unknown codes / Terror / malformed → "bad message" (tag
   recoverable iff `frame.len >= 7`, else drop the frame).
-- **R6** Only sub-wave 1a touches `ninep.zig` (adds re-exports for its own files).
-  1b agents must NOT edit `ninep.zig`, `build.zig`, or any file outside their assignment;
-  the orchestrator adds 1b re-exports at merge and writes the acceptance test in Wave C.
+- **R6 (amended after 1a)** Each 1b agent adds exactly ONE line to `ninep.zig`: the
+  re-export of its own file (otherwise its tests are unreachable from the test root and
+  `zig build test` passes vacuously). No other `ninep.zig` edits; the orchestrator
+  resolves the resulting one-line merge conflicts. `build.zig` and files outside the
+  assignment remain off-limits. Acceptance test still added by the orchestrator in
+  Wave C. **Sequencing note:** `mount.zig` imports `client.zig` (type dependency), so
+  B4 builds in a follow-on sub-wave cut after B2 merges — not concurrently with it.
 - **R7** O2's OQ-1..OQ-9 resolved as recommended (accept transport/errors/stat files;
   adopt lib9p error strings; dir reads pass through to ops.read, fixtures return 0;
   bind = replace-in-place v1; boot owns root fids; WouldBlock + pump, SAB later; second
