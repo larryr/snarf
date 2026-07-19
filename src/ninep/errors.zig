@@ -27,6 +27,11 @@ pub const OpError = error{
     WalkNoDir,
     FidOpen,
     AuthNotRequired,
+    // Draw-device errors (S-03 §2; phase-2 addition, ruling OQ-1 in
+    // agents/contracts/phase2-draw.md). [ref: 9/port/devdraw.c:174-178]
+    BadDraw,
+    ShortDraw,
+    NoDrawImage,
     Other,
 };
 
@@ -48,6 +53,9 @@ pub fn errorString(e: OpError) []const u8 {
         error.WalkNoDir => "walk in non-directory",
         error.FidOpen => "cannot clone open fid",
         error.AuthNotRequired => "authentication not required",
+        error.BadDraw => "bad draw message",
+        error.ShortDraw => "short draw message",
+        error.NoDrawImage => "unknown id for draw image",
         error.Other => "i/o error",
     };
 }
@@ -71,6 +79,9 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "walk in non-directory")) return error.WalkNoDir;
     if (eq(u8, s, "cannot clone open fid")) return error.FidOpen;
     if (eq(u8, s, "authentication not required")) return error.AuthNotRequired;
+    if (eq(u8, s, "bad draw message")) return error.BadDraw;
+    if (eq(u8, s, "short draw message")) return error.ShortDraw;
+    if (eq(u8, s, "unknown id for draw image")) return error.NoDrawImage;
     return error.Other;
 }
 
@@ -92,6 +103,9 @@ test "errors: round-trip every member" {
         error.WalkNoDir,
         error.FidOpen,
         error.AuthNotRequired,
+        error.BadDraw,
+        error.ShortDraw,
+        error.NoDrawImage,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));
