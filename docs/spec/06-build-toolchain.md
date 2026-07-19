@@ -6,8 +6,9 @@ Satisfies: R-PLAT-01..04, R-BLD-01..05. Decision record:
 ## 1. Toolchain
 
 - **Zig, pinned** (exact version recorded in `.zigversion` and `build.zig.zon`
-  `minimum_zig_version`; initial pin decided when code lands — OQ-BLD-1, expected 0.14.x
-  or 0.15.x line). Zig is a hermetic cross-compiler: the same tarball builds the WASM
+  `minimum_zig_version`). OQ-BLD-1 **resolved 2026-07-19 → `0.16.0`** (the earlier
+  "0.14.x/0.15.x" estimate predated the 0.16 release; see ADR-0001 revision log). Zig is
+  a hermetic cross-compiler: the same tarball builds the WASM
   target on macOS (arm64/x86_64) and Linux (x86_64/arm64) — this alone satisfies R-BLD-01.
 - Recommended install: `zvm`/`zigup` or direct tarball; `zig version` must equal the pin.
   No Homebrew/apt requirement (their versions lag).
