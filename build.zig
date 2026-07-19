@@ -151,6 +151,7 @@ pub fn build(b: *std.Build) void {
     // Cross-module acceptance tests (orchestrator-owned): the one root where
     // the draw client and the dev servers meet natively (contract R-P2-2).
     addModuleTests(b, test_step, target, optimize, "src/accept.zig", &.{
+        .{ .name = "core", .module = core },
         .{ .name = "draw", .module = draw },
         .{ .name = "ninep", .module = ninep },
         .{ .name = "dev", .module = dev },

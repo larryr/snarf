@@ -10,6 +10,7 @@ pub const proto = @import("proto.zig");
 pub const Display = @import("Display.zig");
 pub const Image = @import("Image.zig");
 pub const Font = @import("Font.zig");
+pub const Frame = @import("frame/Frame.zig");
 pub const Point = proto.Point;
 pub const Rect = proto.Rect;
 
