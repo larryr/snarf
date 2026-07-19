@@ -7,6 +7,7 @@ pub const msg = @import("msg.zig");
 pub const stat = @import("stat.zig");
 pub const transport = @import("transport.zig");
 pub const errors = @import("errors.zig");
+pub const server = @import("server.zig");
 
 test {
     std.testing.refAllDecls(@This());
