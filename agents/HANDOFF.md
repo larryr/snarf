@@ -30,6 +30,11 @@ authorization for this file only). Prune freely — git keeps history.
   `larryr/plan9port@337c6ac` (acme code), `larryr/plan9@ed1a9c2` (device semantics).
   In remote sessions clone shallow to `/workspace/plan9port`, `/workspace/plan9`
   (~86 MB / ~254 MB).
+  - **Local (larry's Mac) 2026-07-19**: full clones at `~/proj/plan9port` and
+    `~/proj/plan9`; both default-branch tips already ARE the pinned SHAs (no checkout
+    needed). Public over HTTPS — no `gh` auth required. macOS case-insensitive FS causes
+    ~12 harmless case-collision dirty entries in plan9 postscript/troff/rc font dirs;
+    none touch cited paths (`sys/src/9/port/*`, `sys/man/`).
 - **Network policy in remote sandbox**: github release downloads and kroki.io are
   blocked by the proxy; **apt works** — `apt-get install -y plantuml` (1.2020.2) is the
   way to verify diagrams. Older PlantUML: salt tree-tables unsupported — use
