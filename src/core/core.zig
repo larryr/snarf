@@ -4,6 +4,7 @@
 const std = @import("std");
 
 pub const Editor = @import("Editor.zig");
+pub const File = @import("File.zig");
 
 test {
     std.testing.refAllDecls(@This());
