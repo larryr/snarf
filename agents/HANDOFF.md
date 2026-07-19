@@ -6,8 +6,8 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## Current state (update in place)
 
-- **Repo**: docs + **scaffold both merged to `main`** (scaffold merge `0c4ec78`, branch
-  `scaffold-build` deleted). `main` builds green.
+- **Repo**: docs + scaffold + `zig build serve` all on `main` (scaffold `0c4ec78`, serve
+  `d8a53d2`; branches deleted). `main` builds green.
 - **Docs**: 7 requirements + 8 specs (S-00..S-07) + 4 ADRs + 7 PlantUML diagrams under
   `docs/`. Entry point `docs/README.md`.
 - **Scaffold (on `main`)**: `build.zig` + `build.zig.zon` (empty deps) + `.zigversion`,
@@ -15,13 +15,16 @@ authorization for this file only). Prune freely — git keeps history.
   tests, `main_wasm.zig`/`main_native.zig`, `web/{index.html,shim.js}` stubs.
   All green on Zig 0.16.0: `zig build` → `zig-out/www/{snarf.wasm,index.html,shim.js}`
   (wasm instantiates + init/wake/tick callable, verified under node); `zig build test`
-  11/11; `zig build run-native` runs the headless Editor; `zig fmt` clean. S-07 §6 import
+  13/13; `zig build run-native` runs the headless Editor; `zig fmt` clean. S-07 §6 import
   rules are enforced by the module graph (core→shim fails to compile — verified). Only
-  representative stubs per namespace, NOT all ~55 files of S-07 §4. `zig build serve` not
-  yet implemented (needs std.http wiring).
+  representative stubs per namespace, NOT all ~55 files of S-07 §4.
+- **`zig build serve`** (done, `tools/serve.zig`): std-only dev server over `zig-out/www`,
+  `application/wasm` + COOP/COEP + `Cache-Control: no-store`; `-Dport` (default 8017);
+  rejects `..`, maps `/`→`/index.html`. Host-only dev tool, outside the editor module
+  graph. Built on 0.16 `std.Io` (see learning below). Confirmed loads in a browser.
 - **Next planned work** (not started): flesh out real modules — ninep msg/client/server,
   Buffer/piece-table, Text/Frame, then a first end-to-end draw path. Also outstanding:
-  `zig build serve` (std.http + COOP/COEP headers, S-06 §3) and CI (S-06 §5).
+  CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
   font licensing (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
@@ -76,6 +79,18 @@ authorization for this file only). Prune freely — git keeps history.
   needs `.name` as an enum literal (`.snarf`) and a `.fingerprint` (zig prints the correct
   value in the error if wrong). `std.testing.refAllDeclsRecursive` is GONE — only
   `refAllDecls` (non-recursive) exists, fine for one-level namespace roots.
+- **Zig 0.16 std.Io overhaul** (learned writing `tools/serve.zig`): `std.posix` DROPPED
+  the socket calls (socket/bind/listen/accept/connect) and `std.net` is GONE. Networking
+  is `std.Io.net` and needs an `Io`: `var t: std.Io.Threaded = .init(gpa, .{}); const io =
+  t.io();`. Listen/serve: `const a: std.Io.net.IpAddress = .{ .ip4 = .loopback(port) };
+  var srv = try a.listen(io, .{ .reuse_address = true }); var s = try srv.accept(io);`.
+  Get Io.Reader/Writer from a stream via `s.reader(io, &buf).interface` /
+  `s.writer(io, &buf).interface` and hand `&…interface` to `std.http.Server.init`. Files:
+  `std.fs` read helpers moved to `std.Io.Dir` — `std.Io.Dir.cwd().readFileAlloc(io,
+  path, gpa, .unlimited)`. `std.http.Server` has no content-type option; set it (and any
+  custom headers) via `respond`'s `extra_headers: []const std.http.Header`. Pass build→exe
+  constants with `b.addOptions()` + `.createModule()` imported as `build_options` (argv
+  iterators also churned; addOptions sidesteps them).
 
 ## Session log (newest first)
 
