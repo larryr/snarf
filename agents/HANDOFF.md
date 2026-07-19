@@ -49,9 +49,15 @@ authorization for this file only). Prune freely — git keeps history.
   i/l/s/y, general-mask CALC12 compositor). 148/148. **OQ-GFX-2 resolved**: fixed/ is
   public domain (embedded, sha256-pinned); Lucida is ENCUMBERED — never embed; Go fonts
   deferred (S-03 §4 amended w/ revision log). Contracts: phase3-font{,-client,-device}.md.
-- **Next planned work**: Phase 4 (Buffer/RuneIndex/File + draw/frame + a text line from
-  a real buffer) → Phase 5 (browser: draw_canvas.zig OffscreenCanvas backend + shim draw
-  imports). Then input/editing breadth. Also outstanding: CI (S-06 §5).
+- **Phase 4 (text) MERGED to `main`** (agents/reports/phase4-text.md): piece-table
+  Buffer/RuneIndex (verbatim-store/U+FFFD-at-read; NULs kept — flagged divergence),
+  File undo/redo (file.c-faithful, mod restoration), full libframe port
+  (frame/{Frame,insert,draw,util}, tab rule, '\n' 5000px quirk preserved), Text.fill.
+  192/192. Contracts: phase4-text{,-data,-frame}.md (rulings R-P4-1..7).
+- **Next planned work**: Phase 5 (browser: dev/draw_canvas.zig OffscreenCanvas backend +
+  web/shim.js draw imports + main_wasm boot wiring — the same FROZEN scenes appearing
+  on a real canvas) → then input/editing breadth (phases 6+: devinput, typing/select,
+  Window/Column/Row, Edit language). Also outstanding: CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
