@@ -23,20 +23,26 @@ pub fn main() !void {
 
     const www_dir = build_options.www_dir;
     const port = build_options.port;
+    const bind = build_options.bind;
 
-    const address: Io.net.IpAddress = .{ .ip4 = .loopback(port) };
+    // -Dbind=0.0.0.0 exposes the server on all interfaces (LAN testing);
+    // default stays loopback-only.
+    const address = Io.net.IpAddress.parse(bind, port) catch {
+        std.debug.print("snarf serve: bad -Dbind address: {s}\n", .{bind});
+        return error.InvalidAddress;
+    };
     var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
-        std.debug.print("snarf serve: cannot listen on 127.0.0.1:{d}: {s}\n", .{ port, @errorName(err) });
+        std.debug.print("snarf serve: cannot listen on {s}:{d}: {s}\n", .{ bind, port, @errorName(err) });
         return err;
     };
     defer server.deinit(io);
 
     std.debug.print(
-        \\snarf serve: http://127.0.0.1:{d}/   (Ctrl-C to stop)
+        \\snarf serve: http://{s}:{d}/   (Ctrl-C to stop)
         \\  root : {s}
         \\  headers: application/wasm + COOP/COEP (cross-origin isolated)
         \\
-    , .{ port, www_dir });
+    , .{ bind, port, www_dir });
 
     while (true) {
         var stream = server.accept(io) catch |err| {

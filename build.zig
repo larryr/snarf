@@ -110,9 +110,11 @@ pub fn build(b: *std.Build) void {
     //     setting application/wasm + COOP/COEP. Host tool, not in the editor
     //     module graph. Port via -Dport (default 8017). ---
     const port = b.option(u16, "port", "Port for `zig build serve` (default 8017)") orelse 8017;
+    const bind = b.option([]const u8, "bind", "Bind address for `zig build serve` (default 127.0.0.1; use 0.0.0.0 for all interfaces)") orelse "127.0.0.1";
     const serve_opts = b.addOptions();
     serve_opts.addOption([]const u8, "www_dir", b.getInstallPath(.prefix, "www"));
     serve_opts.addOption(u16, "port", port);
+    serve_opts.addOption([]const u8, "bind", bind);
     const serve_exe = b.addExecutable(.{
         .name = "snarf-serve",
         .root_module = b.createModule(.{
