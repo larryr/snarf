@@ -19,6 +19,11 @@ pub fn fontHeight(f: *const Frame) i32 {
     return f.font.height;
 }
 
+/// `ptinrect` (libdraw rectclip.c): half-open containment — `p` lies in `r`.
+pub fn ptInRect(p: Point, r: proto.Rect) bool {
+    return p.x >= r.min.x and p.x < r.max.x and p.y >= r.min.y and p.y < r.max.y;
+}
+
 /// One UTF-8 rune's cache width + byte length at `s[i..]`. Mirrors
 /// `Font.nextGlyph` (R-P3-3): an invalid/truncated sequence maps to slot 0 and
 /// advances one byte, so widths agree with `Font.stringWidth` byte-for-byte.
