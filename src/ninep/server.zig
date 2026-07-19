@@ -377,12 +377,17 @@ pub const Server = struct {
 
     /// [srv.c:601 sstat + :626 rstat] — encode the Stat (R4) into a scratch
     /// buffer FIRST, then let `reply` memcpy it into wbuf (avoids the aliasing
-    /// trap of building the blob inside wbuf).
+    /// trap of building the blob inside wbuf). A Stat too large for the
+    /// scratch degrades to an Rerror — device servers may return arbitrary
+    /// strings and the framework must never trap on their size.
     fn handleStat(self: *Server, tag: u16, fid: u32) Error!void {
         const fp = self.fids.getPtr(fid) orelse return self.replyError(tag, error.UnknownFid);
         const st = self.ops.stat(self.ctx, self, fp) catch |e| return self.replyError(tag, e);
         var blob: [1024]u8 = undefined;
-        const n = st.encode(&blob) catch unreachable; // fixture stats fit
+        const n = st.encode(&blob) catch |e| return self.replyError(tag, switch (e) {
+            error.ShortBuffer => error.IoError,
+            error.BadMessage => error.BadMessage,
+        });
         return self.reply(.{ .tag = tag, .body = .{ .rstat = .{ .stat = blob[0..n] } } });
     }
 };
@@ -866,4 +871,69 @@ test "server: stat name and length" {
     try testing.expectEqualStrings("index", st.name);
     try testing.expectEqual(@as(u64, 13), st.length);
     try testing.expectEqual(@as(u64, 2), st.qid.path);
+}
+
+test "server: oversized stat degrades to Rerror" {
+    // Wave C regression: Ops.stat may return a Stat whose strings exceed the
+    // encode scratch (device servers control those strings). The framework
+    // must answer Rerror "i/o error", never trap.
+    const Big = struct {
+        fn attachOp(_: *anyopaque, _: *Server, _: *Fid, _: []const u8) OpError!Qid {
+            return .{ .path = 1, .qtype = .{ .dir = true } };
+        }
+        fn walk1Op(_: *anyopaque, _: *Server, _: *Fid, _: []const u8) OpError!Qid {
+            return error.FileDoesNotExist;
+        }
+        fn openOp(_: *anyopaque, _: *Server, _: *Fid, _: u8) OpError!Qid {
+            return error.PermissionDenied;
+        }
+        fn readOp(_: *anyopaque, _: *Server, _: *Fid, _: u64, _: []u8) OpError!usize {
+            return error.PermissionDenied;
+        }
+        fn writeOp(_: *anyopaque, _: *Server, _: *Fid, _: u64, _: []const u8) OpError!usize {
+            return error.PermissionDenied;
+        }
+        fn statOp(_: *anyopaque, _: *Server, _: *Fid) OpError!stat {
+            return .{
+                .qid = .{ .path = 1, .qtype = .{ .dir = true } },
+                .mode = stat.DMDIR,
+                .length = 0,
+                .name = "x" ** 1200, // encodedSize 1249 > the 1024 scratch
+            };
+        }
+        const ops = Ops{
+            .attach = attachOp,
+            .walk1 = walk1Op,
+            .open = openOp,
+            .read = readOp,
+            .write = writeOp,
+            .stat = statOp,
+        };
+    };
+
+    var tt = TestTransport{ .alloc = testing.allocator };
+    defer tt.deinit();
+    var dummy: u8 = 0;
+    var srv = try Server.init(testing.allocator, tt.asTransport(), &Big.ops, &dummy, 8192);
+    defer srv.deinit();
+
+    var enc: [512]u8 = undefined;
+    var rbuf: [512]u8 = undefined;
+    const steps = [_]msg.Message{
+        .{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } },
+        .{ .tag = 1, .body = .{ .tattach = .{ .fid = 0, .afid = msg.NOFID, .uname = "glenda", .aname = "" } } },
+        .{ .tag = 2, .body = .{ .tstat = .{ .fid = 0 } } },
+    };
+    var last: msg.Message = undefined;
+    for (steps) |m| {
+        const n = try msg.encode(&m, &enc);
+        try tt.pushReq(enc[0..n]);
+        _ = try srv.step();
+        const reply = tt.popReply() orelse return error.NoReply;
+        defer testing.allocator.free(reply);
+        @memcpy(rbuf[0..reply.len], reply);
+        last = try msg.decode(rbuf[0..reply.len]);
+    }
+    try testing.expect(last.body == .rerror);
+    try testing.expectEqualStrings("i/o error", last.body.rerror.ename);
 }

@@ -31,6 +31,12 @@ C references (cite in doc comments as `file:line`):
   then Rerror: tauth → "authentication not required"; tcreate/tremove/twstat →
   "permission denied"; unknown codes / Terror / malformed → "bad message" (tag
   recoverable iff `frame.len >= 7`, else drop the frame).
+- **R8 (post-B1 as-built deltas)** `Ops.attach` signature is
+  `fn (ctx, srv, fid: *Fid, aname: []const u8) OpError!Qid` — the contract's separate
+  `uname` parameter was dropped; the framework dups uname into `fid.uname` BEFORE the
+  call. `Ops.stat` returns the `stat` module type (file-as-struct). `handleStat`
+  degrades an oversized Stat to `Rerror "i/o error"` (orchestrator patch + regression
+  test). B4/acceptance code against these actual signatures.
 - **R6 (amended after 1a)** Each 1b agent adds exactly ONE line to `ninep.zig`: the
   re-export of its own file (otherwise its tests are unreachable from the test root and
   `zig build test` passes vacuously). No other `ninep.zig` edits; the orchestrator
