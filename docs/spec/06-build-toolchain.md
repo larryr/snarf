@@ -62,6 +62,13 @@ inbound ring; no JS→WASM re-entrancy. This ABI is versioned in one Zig file
 constant (OQ-BLD-2: consider generating the JS stub from `abi.zig` with a build step —
 std-only, still no node).
 
+> Revision log: 2026-07-19 — the draw import surface shipped as ONE merged
+> `blit(ptr, fb_w, fb_h, x, y, w, h)` (no separate flush import; the wasm-side
+> flush IS the call site) plus `consoleLog(ptr, len)` as the panic sink. ABI
+> version = 2, checked at runtime via the exported `abi_version()` before init;
+> the generated-checksum build check (OQ-BLD-2) remains deferred (contract
+> R-P5-4/R-P5-6).
+
 ## 5. CI (sketch)
 
 GitHub Actions: matrix `{ubuntu-latest, macos-latest}` × steps: install pinned Zig (cache
