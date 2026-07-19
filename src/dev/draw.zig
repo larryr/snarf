@@ -320,6 +320,9 @@ fn opError(e: draw_backend.Error) OpError {
         error.UnknownImage => error.NoDrawImage, // "unknown id for draw image"
         error.ImageExists, error.BadChan, error.BadRect, error.Unsupported => error.BadDraw,
         error.OutOfMemory => error.IoError,
+        // R-P3-9: 3a carries the opError arms for the new backend Error members; the rest of §3 is B1's.
+        error.WriteOutside => error.WriteOutside,
+        error.ShortData => error.BadWriteImage,
     };
 }
 

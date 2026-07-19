@@ -118,9 +118,17 @@ pub const Error = error{
     BadRect,
     Unsupported,
     OutOfMemory,
+    /// 'y' load whose rect is not contained in the image (devdraw.c:2094).
+    WriteOutside,
+    /// 'y' payload shorter than `Dy*bytesperline` (load.c:14-16).
+    ShortData,
 };
 
 pub const DisplayInfo = struct { chan: u32, r: Rect, clipr: Rect };
+
+/// Read-only introspection for the 's' verb's clipr save/restore and for id
+/// validation (devdraw.c:1960-1962).
+pub const ImageInfo = struct { chan: u32, r: Rect, clipr: Rect, repl: bool };
 
 // ===================================================================
 // Backend — runtime vtable (mirrors ninep.transport.Transport).
@@ -141,6 +149,20 @@ pub const Backend = struct {
         /// Present accumulated damage; clears the dirty rect, bumps flush_count.
         flush: *const fn (ctx: *anyopaque) void,
         displayInfo: *const fn (ctx: *anyopaque) DisplayInfo,
+        /// 'y': raw pixel upload into `id`'s rectangle `r`. `r ⊄ image.r` ⇒
+        /// WriteOutside (devdraw.c:2094); `data.len < Dy*bpl` ⇒ ShortData
+        /// (load.c:14-16). Returns bytes CONSUMED (`Dy*bpl`) so the verb loop
+        /// advances past the payload; trailing bytes belong to the next verb.
+        loadPixels: *const fn (ctx: *anyopaque, id: u32, r: Rect, data: []const u8) Error!usize,
+        /// op-S straight copy (bytes stored verbatim incl. alpha; a non-alpha
+        /// dst forces A=0xFF). Used by 'l' (devdraw.c:1705). Case-B clip
+        /// geometry. `dst == src` ⇒ Unsupported.
+        copy: *const fn (ctx: *anyopaque, dst: u32, src: u32, r: Rect, sp: Point) Error!void,
+        /// Replace an image's clipr (assignment, NOT intersection —
+        /// devdraw.c:1976). id 0 sets the display's clipr.
+        setClipr: *const fn (ctx: *anyopaque, id: u32, clipr: Rect) Error!void,
+        /// Introspection for 's' (save/restore clipr; validate ids).
+        imageInfo: *const fn (ctx: *anyopaque, id: u32) Error!ImageInfo,
     };
 
     pub fn allocImage(self: Backend, id: u32, r: Rect, chan: u32, repl: bool, clipr: Rect, color: u32) Error!void {
@@ -157,6 +179,18 @@ pub const Backend = struct {
     }
     pub fn displayInfo(self: Backend) DisplayInfo {
         return self.vtable.displayInfo(self.ctx);
+    }
+    pub fn loadPixels(self: Backend, id: u32, r: Rect, data: []const u8) Error!usize {
+        return self.vtable.loadPixels(self.ctx, id, r, data);
+    }
+    pub fn copy(self: Backend, dst: u32, src: u32, r: Rect, sp: Point) Error!void {
+        return self.vtable.copy(self.ctx, dst, src, r, sp);
+    }
+    pub fn setClipr(self: Backend, id: u32, clipr: Rect) Error!void {
+        return self.vtable.setClipr(self.ctx, id, clipr);
+    }
+    pub fn imageInfo(self: Backend, id: u32) Error!ImageInfo {
+        return self.vtable.imageInfo(self.ctx, id);
     }
 };
 
@@ -193,6 +227,91 @@ fn calc11(a: u32, v: u32) u32 {
     return (t + (t >> 8)) >> 8;
 }
 
+/// `CALC12(a1,v1,a2,v2) = (t=a1*v1+a2*v2+128; (t+(t>>8))>>8)` — draw.c:23-24. ONE
+/// combined rounding over the two weighted terms; not two CALC11s summed (G14).
+fn calc12(a1: u32, v1: u32, a2: u32, v2: u32) u32 {
+    const t = a1 * v1 + a2 * v2 + 128;
+    return (t + (t >> 8)) >> 8;
+}
+
+/// NTSC luma `RGB2K(r,g,b) = (156763·r + 307758·g + 59769·b) >> 19` — draw.c:10.
+/// `RGB2K(k,k,k) == k` exactly, so grey pixels relabel cleanly as alpha (G15).
+fn rgb2k(r: u8, g: u8, b: u8) u8 {
+    return @intCast((156763 * @as(u32, r) + 307758 * @as(u32, g) + 59769 * @as(u32, b)) >> 19);
+}
+
+/// Mask alpha (G15): an alpha channel supplies alpha directly (draw.c:697-699);
+/// otherwise the grey value is relabeled as alpha (greymaskread draw.c:1307-1315).
+/// Deviation (R-P3-6 §1, accepted): a buffered GREY image 'b'-filled with a
+/// COLORED value stores rgb verbatim rather than pre-converting to grey; ma still
+/// matches the kernel because RGB2K is applied here, at read time.
+fn maskAlpha(chan: u32, p: Rgba) u8 {
+    return if (chanHasAlpha(chan)) p.a else rgb2k(p.r, p.g, p.b);
+}
+
+/// Bits per pixel for a channel (draw.h): GREY1⇒1, GREY8⇒8, RGB24⇒24, {RGBA,XRGB}32⇒32.
+fn chanDepth(chan: u32) u32 {
+    return switch (chan) {
+        GREY1 => 1,
+        GREY8 => 8,
+        RGB24 => 24,
+        RGBA32, XRGB32 => 32,
+        else => unreachable,
+    };
+}
+
+/// Byte-aligned, absolute-x-anchored row stride (G11; libdraw/bytesperline.c:5-34).
+/// NOT `ceil(Dx·d/8)`: the min.x<0 branch counts the two byte-runs separately.
+fn bytesPerLine(r: Rect, depth: u32) usize {
+    const d: i64 = @intCast(depth);
+    if (r.min.x >= 0) {
+        const l = @divTrunc(@as(i64, r.max.x) * d + 7, 8) - @divTrunc(@as(i64, r.min.x) * d, 8);
+        return @intCast(l);
+    }
+    const t = @divTrunc(-@as(i64, r.min.x) * d + 7, 8);
+    return @intCast(t + @divTrunc(@as(i64, r.max.x) * d + 7, 8));
+}
+
+/// Absolute bit index (from the row's leading byte) of pixel column x=min.x. The
+/// negative-min row lays its byte-run so that column x=0 is a byte boundary.
+fn bitBaseFor(minx: i32, depth: u32) i32 {
+    const d: i32 = @intCast(depth);
+    if (minx >= 0) return @divTrunc(minx * d, 8) * 8;
+    const nb = @divTrunc(-minx * d + 7, 8);
+    return -(nb * 8);
+}
+
+/// Decode one wire pixel at absolute column `x` from a row's bytes into RGBA
+/// storage `[r,g,b,a]`. Sub-byte: HIGH bit is leftmost (G12). Byte order is
+/// low-chan-byte-first (G13). Non-alpha channels store A=0xFF.
+fn readWirePixel(chan: u32, r: Rect, rowbytes: []const u8, x: i32) Rgba {
+    const d = chanDepth(chan);
+    const bit: i32 = x * @as(i32, @intCast(d)) - bitBaseFor(r.min.x, d);
+    const off: usize = @intCast(@divTrunc(bit, 8));
+    if (d == 1) {
+        const sh: u3 = @intCast(7 - @mod(bit, 8));
+        const k: u8 = if ((rowbytes[off] >> sh) & 1 != 0) 0xFF else 0x00;
+        return .{ .r = k, .g = k, .b = k, .a = 0xFF };
+    }
+    const pb = rowbytes[off..];
+    return switch (chan) {
+        GREY8 => .{ .r = pb[0], .g = pb[0], .b = pb[0], .a = 0xFF },
+        RGB24, XRGB32 => .{ .r = pb[2], .g = pb[1], .b = pb[0], .a = 0xFF },
+        RGBA32 => .{ .r = pb[3], .g = pb[2], .b = pb[1], .a = pb[0] },
+        else => unreachable,
+    };
+}
+
+/// Pack an RGBA quad into the storage word `0xRRGGBBAA`.
+fn pack(p: Rgba) u32 {
+    return (@as(u32, p.r) << 24) | (@as(u32, p.g) << 16) | (@as(u32, p.b) << 8) | @as(u32, p.a);
+}
+
+fn rectInRect(a: Rect, b: Rect) bool {
+    return a.min.x >= b.min.x and a.min.y >= b.min.y and
+        a.max.x <= b.max.x and a.max.y <= b.max.y;
+}
+
 // ===================================================================
 // Internal image record. A 1×1 repl solid carries no pixel buffer — just its
 // fill color (devdraw.c:1527-1539; O4 §1.3). Everything else gets a heap raster.
@@ -212,7 +331,7 @@ const Image = struct {
 /// A mutable draw target: display framebuffer or a buffered image.
 const Dst = struct { pixels: []u8, r: Rect, clipr: Rect, chan: u32 };
 /// A read-only draw source/mask view (may be a bufferless solid).
-const View = struct { pixels: ?[]const u8, r: Rect, clipr: Rect, repl: bool, fill: u32 };
+const View = struct { pixels: ?[]const u8, r: Rect, clipr: Rect, repl: bool, fill: u32, chan: u32 };
 
 fn composite(dst: Dst, x: i32, y: i32, s: Rgba) void {
     const w: usize = @intCast(dst.r.dx());
@@ -236,16 +355,27 @@ fn composite(dst: Dst, x: i32, y: i32, s: Rgba) void {
     if (!chanHasAlpha(dst.chan)) p[3] = 0xFF;
 }
 
-fn fillRect(dst: Dst, r: Rect, color: u32) void {
-    const s = unpack(color);
-    var y = r.min.y;
-    while (y < r.max.y) : (y += 1) {
-        var x = r.min.x;
-        while (x < r.max.x) : (x += 1) composite(dst, x, y, s);
-    }
+/// General SoverD-with-mask per-pixel blend (G14; alphacalc11 draw.c:1022-1071).
+/// `ma` is the mask alpha (0<ma<255 here; the 0 and 255 cases are handled by the
+/// caller — ma==0 is a no-op, ma==255 takes the phase-2 `composite` fast path).
+fn blend(dst: Dst, x: i32, y: i32, s: Rgba, ma: u32) void {
+    const w: usize = @intCast(dst.r.dx());
+    const col: usize = @intCast(x - dst.r.min.x);
+    const row: usize = @intCast(y - dst.r.min.y);
+    const p = dst.pixels[(row * w + col) * 4 ..][0..4];
+    const sa: u32 = s.a;
+    const fd: u32 = 255 - calc11(sa, ma); // draw.c:1037
+    p[0] = @intCast(@min(255, calc12(ma, s.r, fd, p[0])));
+    p[1] = @intCast(@min(255, calc12(ma, s.g, fd, p[1])));
+    p[2] = @intCast(@min(255, calc12(ma, s.b, fd, p[2])));
+    p[3] = @intCast(@min(255, calc12(ma, sa, fd, p[3])));
+    if (!chanHasAlpha(dst.chan)) p[3] = 0xFF; // draw.c:1063
 }
 
-fn copyRect(dst: Dst, r: Rect, src: View, delta: Point) void {
+/// op-S straight store of `src` (through `delta`) into `dst`'s rectangle `r`.
+/// Bytes copied verbatim (no SoverD); a non-alpha dst keeps A=0xFF.
+fn storeRect(dst: Dst, r: Rect, src: View, delta: Point) void {
+    const dw: usize = @intCast(dst.r.dx());
     const sw: usize = @intCast(src.r.dx());
     const buf = src.pixels.?;
     var y = r.min.y;
@@ -255,7 +385,11 @@ fn copyRect(dst: Dst, r: Rect, src: View, delta: Point) void {
             const scol: usize = @intCast(x - delta.x - src.r.min.x);
             const srow: usize = @intCast(y - delta.y - src.r.min.y);
             const sp = buf[(srow * sw + scol) * 4 ..][0..4];
-            composite(dst, x, y, .{ .r = sp[0], .g = sp[1], .b = sp[2], .a = sp[3] });
+            const dcol: usize = @intCast(x - dst.r.min.x);
+            const drow: usize = @intCast(y - dst.r.min.y);
+            const dp = dst.pixels[(drow * dw + dcol) * 4 ..][0..4];
+            dp.* = sp.*;
+            if (!chanHasAlpha(dst.chan)) dp[3] = 0xFF;
         }
     }
 }
@@ -273,13 +407,17 @@ pub const HeadlessBackend = struct {
     images: std.AutoHashMapUnmanaged(u32, Image) = .empty,
     dirty: ?Rect = null,
     flush_count: u32 = 0,
+    /// The display's clip rectangle (id 0). Assignable via `setClipr(0,·)`; the
+    /// 's' verb save/restores it around a string op (devdraw.c:1976). Init = bounds.
+    display_clipr: Rect = .{},
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) Error!Self {
         const fb = try allocator.alloc(u8, @as(usize, width) * @as(usize, height) * 4);
         @memset(fb, 0);
-        return .{ .allocator = allocator, .width = width, .height = height, .fb = fb };
+        const b = Rect.init(0, 0, @intCast(width), @intCast(height));
+        return .{ .allocator = allocator, .width = width, .height = height, .fb = fb, .display_clipr = b };
     }
 
     pub fn deinit(self: *Self) void {
@@ -359,7 +497,7 @@ pub const HeadlessBackend = struct {
 
     fn dstSurface(self: *Self, id: u32) Error!Dst {
         if (id == display_id)
-            return .{ .pixels = self.fb, .r = self.bounds(), .clipr = self.bounds(), .chan = XRGB32 };
+            return .{ .pixels = self.fb, .r = self.bounds(), .clipr = self.display_clipr, .chan = XRGB32 };
         const img = self.images.getPtr(id) orelse return Error.UnknownImage;
         const px = img.pixels orelse return Error.Unsupported; // can't paint onto a solid
         return .{ .pixels = px, .r = img.r, .clipr = img.clipr, .chan = img.chan };
@@ -367,23 +505,156 @@ pub const HeadlessBackend = struct {
 
     fn view(self: *Self, id: u32) Error!View {
         if (id == display_id)
-            return .{ .pixels = self.fb, .r = self.bounds(), .clipr = self.bounds(), .repl = false, .fill = 0 };
+            return .{ .pixels = self.fb, .r = self.bounds(), .clipr = self.display_clipr, .repl = false, .fill = 0, .chan = XRGB32 };
         const img = self.images.get(id) orelse return Error.UnknownImage;
-        return .{ .pixels = img.pixels, .r = img.r, .clipr = img.clipr, .repl = img.repl, .fill = img.fill };
+        return .{ .pixels = img.pixels, .r = img.r, .clipr = img.clipr, .repl = img.repl, .fill = img.fill, .chan = img.chan };
     }
 
+    /// SoverD `src` through `mask` into `dst`'s `r` (drawclip draw.c:226-306 +
+    /// alphacalc11 draw.c:1022-1071). Generalized from phase 2: real non-repl
+    /// masks with per-pixel alpha, and both `sp` and `mp` tracked through every
+    /// clip (G16). The ma==255 pixels still take the phase-2 `composite` path
+    /// verbatim, so all phase-2 frozen hashes are preserved by construction.
     fn drawImpl(self: *Self, dstid: u32, srcid: u32, maskid: u32, r_in: Rect, sp_in: Point, mp_in: Point) Error!void {
-        _ = mp_in; // mask is opaque-equivalent below ⇒ its geometry never bites.
         const dst = try self.dstSurface(dstid);
         const src = try self.view(srcid);
         const mask = try self.view(maskid);
 
-        // Mask must be the opaque substitute: 1×1 repl filled all-ones (G4;
-        // boolcopyfn draw.c:1952). Anything else is out of Phase-2 scope.
-        if (!(mask.repl and mask.r.is1x1() and mask.fill == 0xFFFFFFFF)) return Error.Unsupported;
+        // Step 1 — clip r to dst.r ∩ dst.clipr, dragging BOTH sp and mp along by
+        // the min shift (drawclip draw.c:236-245). Empty ⇒ successful no-op.
+        var r = r_in;
+        var sp = sp_in;
+        var mp = mp_in;
+        const rmin = r.min;
+        if (!r.clip(dst.r)) return;
+        if (!r.clip(dst.clipr)) return;
+        sp.x += r.min.x - rmin.x;
+        sp.y += r.min.y - rmin.y;
+        mp.x += r.min.x - rmin.x;
+        mp.y += r.min.y - rmin.y;
 
-        // Clip r to dst.r ∩ dst.clipr, dragging the source point along by the same
-        // min shift (drawclip, draw.c:236-245). Empty ⇒ successful no-op.
+        // Step 2 — source geometry. Case A: 1×1 repl solid (constant fill; sp
+        // irrelevant). Case B: non-repl buffer (map r into src, clip, reflect the
+        // shrink back into r, and slide mp with the source min). Repl non-1×1 ⇒ Unsupported.
+        const src_solid = src.repl and src.r.is1x1();
+        if (!src_solid) {
+            if (src.repl or src.pixels == null) return Error.Unsupported;
+            var sr = Rect.init(sp.x, sp.y, sp.x + r.dx(), sp.y + r.dy());
+            if (!sr.clip(src.r)) return;
+            if (!sr.clip(src.clipr)) return;
+            const ds = Point{ .x = sr.min.x - sp.x, .y = sr.min.y - sp.y };
+            r = Rect.init(r.min.x + ds.x, r.min.y + ds.y, r.min.x + ds.x + sr.dx(), r.min.y + ds.y + sr.dy());
+            sp = sr.min;
+            mp.x += ds.x;
+            mp.y += ds.y;
+        }
+
+        // Step 3 — mask geometry. (a) 1×1 repl solid ⇒ constant ma. (b) non-repl
+        // buffer ⇒ clip mr=(mp,mp+Δr) to mask.r ∩ mask.clipr and reflect the shrink
+        // back into r (and sp), mp=mr.min. (c) repl non-solid ⇒ Unsupported.
+        const mask_solid = mask.repl and mask.r.is1x1();
+        var const_ma: u32 = 0;
+        if (mask_solid) {
+            const_ma = maskAlpha(mask.chan, unpack(mask.fill));
+        } else {
+            if (mask.repl or mask.pixels == null) return Error.Unsupported;
+            var mr = Rect.init(mp.x, mp.y, mp.x + r.dx(), mp.y + r.dy());
+            if (!mr.clip(mask.r)) return;
+            if (!mr.clip(mask.clipr)) return;
+            const dm = Point{ .x = mr.min.x - mp.x, .y = mr.min.y - mp.y };
+            r = Rect.init(r.min.x + dm.x, r.min.y + dm.y, r.min.x + dm.x + mr.dx(), r.min.y + dm.y + mr.dy());
+            sp.x += dm.x;
+            sp.y += dm.y;
+            mp = mr.min;
+        }
+
+        // Step 4 — composite. srcCoord=(x,y)−r.min+sp, maskCoord=(x,y)−r.min+mp.
+        const src_fill = unpack(src.fill);
+        const sw: usize = if (src_solid) 0 else @intCast(src.r.dx());
+        const mw: usize = if (mask_solid) 0 else @intCast(mask.r.dx());
+        var y = r.min.y;
+        while (y < r.max.y) : (y += 1) {
+            var x = r.min.x;
+            while (x < r.max.x) : (x += 1) {
+                const ma: u32 = if (mask_solid) const_ma else blk: {
+                    const mx: usize = @intCast(x - r.min.x + mp.x - mask.r.min.x);
+                    const my: usize = @intCast(y - r.min.y + mp.y - mask.r.min.y);
+                    const q = mask.pixels.?[(my * mw + mx) * 4 ..][0..4];
+                    break :blk maskAlpha(mask.chan, .{ .r = q[0], .g = q[1], .b = q[2], .a = q[3] });
+                };
+                if (ma == 0) continue; // CALC12(0,s,255,d)=d — true no-op (G15)
+                const s: Rgba = if (src_solid) src_fill else blk: {
+                    const scol: usize = @intCast(x - r.min.x + sp.x - src.r.min.x);
+                    const srow: usize = @intCast(y - r.min.y + sp.y - src.r.min.y);
+                    const q = src.pixels.?[(srow * sw + scol) * 4 ..][0..4];
+                    break :blk .{ .r = q[0], .g = q[1], .b = q[2], .a = q[3] };
+                };
+                if (ma == 255) composite(dst, x, y, s) else blend(dst, x, y, s, ma);
+            }
+        }
+
+        if (dstid == display_id) self.markDirty(r);
+    }
+
+    /// 'y' raw pixel upload (devdraw.c:2082-2101; load.c:12-41). Decodes the
+    /// wire payload into RGBA storage; returns bytes CONSUMED so the verb loop
+    /// can advance. Trailing bytes belong to the next verb.
+    fn loadPixelsImpl(self: *Self, id: u32, r: Rect, data: []const u8) Error!usize {
+        var buf: []u8 = undefined;
+        var img_r: Rect = undefined;
+        var chan: u32 = undefined;
+        var solid: ?*Image = null;
+        if (id == display_id) {
+            img_r = self.bounds();
+            chan = XRGB32;
+            buf = self.fb;
+        } else {
+            const img = self.images.getPtr(id) orelse return Error.UnknownImage;
+            img_r = img.r;
+            chan = img.chan;
+            if (img.pixels) |px| buf = px else solid = img; // 1×1 repl solid has no buffer
+        }
+        if (!rectInRect(r, img_r)) return Error.WriteOutside;
+        const depth = chanDepth(chan);
+        const bpl = bytesPerLine(r, depth);
+        const need = bpl * @as(usize, @intCast(r.dy()));
+        if (data.len < need) return Error.ShortData;
+
+        if (solid) |img| {
+            // Its storage IS the fill word — decode the one pixel and update it.
+            img.fill = pack(readWirePixel(chan, r, data[0..bpl], r.min.x));
+            return need;
+        }
+
+        const w: usize = @intCast(img_r.dx());
+        var row: usize = 0;
+        var y = r.min.y;
+        while (y < r.max.y) : ({
+            y += 1;
+            row += 1;
+        }) {
+            const rb = data[row * bpl ..][0..bpl];
+            var x = r.min.x;
+            while (x < r.max.x) : (x += 1) {
+                const px = readWirePixel(chan, r, rb, x);
+                const col: usize = @intCast(x - img_r.min.x);
+                const rr: usize = @intCast(y - img_r.min.y);
+                const p = buf[(rr * w + col) * 4 ..][0..4];
+                p.* = .{ px.r, px.g, px.b, px.a };
+            }
+        }
+        if (id == display_id) self.markDirty(r);
+        return need;
+    }
+
+    /// op-S straight copy, Case-B clip geometry (devdraw.c:1705). `dst == src`
+    /// ⇒ Unsupported; solid sources are out of scope for 'l'.
+    fn copyImpl(self: *Self, dstid: u32, srcid: u32, r_in: Rect, sp_in: Point) Error!void {
+        if (dstid == srcid) return Error.Unsupported;
+        const dst = try self.dstSurface(dstid);
+        const src = try self.view(srcid);
+        if (src.pixels == null or src.repl) return Error.Unsupported;
+
         var r = r_in;
         var sp = sp_in;
         const rmin = r.min;
@@ -392,24 +663,29 @@ pub const HeadlessBackend = struct {
         sp.x += r.min.x - rmin.x;
         sp.y += r.min.y - rmin.y;
 
-        if (src.repl and src.r.is1x1()) {
-            // Case A — solid fill; sp irrelevant (drawreplxy, draw.c:292-298).
-            fillRect(dst, r, src.fill);
-        } else if (!src.repl and src.pixels != null) {
-            // Case B — non-repl copy. Map r into source (sr), clip sr to src.r ∩
-            // src.clipr, then reflect the shrink back into r (draw.c:246-290).
-            var sr = Rect.init(sp.x, sp.y, sp.x + r.dx(), sp.y + r.dy());
-            if (!sr.clip(src.r)) return;
-            if (!sr.clip(src.clipr)) return;
-            const delta = Point{ .x = r.min.x - sp.x, .y = r.min.y - sp.y };
-            r = sr.translate(delta);
-            copyRect(dst, r, src, delta);
-        } else {
-            // Case C — replicated tiles, image masks, etc.: not in Phase 2.
-            return Error.Unsupported;
-        }
-
+        var sr = Rect.init(sp.x, sp.y, sp.x + r.dx(), sp.y + r.dy());
+        if (!sr.clip(src.r)) return;
+        if (!sr.clip(src.clipr)) return;
+        const delta = Point{ .x = r.min.x - sp.x, .y = r.min.y - sp.y };
+        r = sr.translate(delta);
+        storeRect(dst, r, src, delta);
         if (dstid == display_id) self.markDirty(r);
+    }
+
+    fn setCliprImpl(self: *Self, id: u32, clipr: Rect) Error!void {
+        if (id == display_id) {
+            self.display_clipr = clipr;
+            return;
+        }
+        const img = self.images.getPtr(id) orelse return Error.UnknownImage;
+        img.clipr = clipr; // assignment, NOT intersection (devdraw.c:1976)
+    }
+
+    fn imageInfoImpl(self: *Self, id: u32) Error!ImageInfo {
+        if (id == display_id)
+            return .{ .chan = XRGB32, .r = self.bounds(), .clipr = self.display_clipr, .repl = false };
+        const img = self.images.get(id) orelse return Error.UnknownImage;
+        return .{ .chan = img.chan, .r = img.r, .clipr = img.clipr, .repl = img.repl };
     }
 
     fn markDirty(self: *Self, r: Rect) void {
@@ -452,6 +728,18 @@ pub const HeadlessBackend = struct {
     fn vDisplayInfo(ctx: *anyopaque) DisplayInfo {
         return ctxCast(ctx).displayInfoImpl();
     }
+    fn vLoadPixels(ctx: *anyopaque, id: u32, r: Rect, data: []const u8) Error!usize {
+        return ctxCast(ctx).loadPixelsImpl(id, r, data);
+    }
+    fn vCopy(ctx: *anyopaque, dst: u32, src: u32, r: Rect, sp: Point) Error!void {
+        return ctxCast(ctx).copyImpl(dst, src, r, sp);
+    }
+    fn vSetClipr(ctx: *anyopaque, id: u32, clipr: Rect) Error!void {
+        return ctxCast(ctx).setCliprImpl(id, clipr);
+    }
+    fn vImageInfo(ctx: *anyopaque, id: u32) Error!ImageInfo {
+        return ctxCast(ctx).imageInfoImpl(id);
+    }
 
     const vtable: Backend.VTable = .{
         .allocImage = vAlloc,
@@ -459,6 +747,10 @@ pub const HeadlessBackend = struct {
         .draw = vDraw,
         .flush = vFlush,
         .displayInfo = vDisplayInfo,
+        .loadPixels = vLoadPixels,
+        .copy = vCopy,
+        .setClipr = vSetClipr,
+        .imageInfo = vImageInfo,
     };
 };
 
@@ -681,4 +973,255 @@ test "headless: ppm dump shape" {
     try testing.expectEqual(header.len + 4 * 3 * 3, out.len);
     // First pixel's RGB is red.
     try testing.expectEqualSlices(u8, &.{ 0xFF, 0x00, 0x00 }, out[header.len..][0..3]);
+}
+
+// ===================================================================
+// Phase-3 tests (device §4, tests 1-10). Fixture 64×48. All pixel
+// expectations are hand-derived from G14/G15 (CALC12/RGB2K) in comments;
+// no new frozen hashes (R-P3-6: phase-2 hashes above are untouched).
+// ===================================================================
+
+/// Read packed 0xRRGGBBAA at (x,y) from buffered image `id`'s raster.
+fn imgPixel(hb: *HeadlessBackend, id: u32, x: i32, y: i32) u32 {
+    const img = hb.images.get(id).?;
+    const w: usize = @intCast(img.r.dx());
+    const col: usize = @intCast(x - img.r.min.x);
+    const row: usize = @intCast(y - img.r.min.y);
+    const i = (row * w + col) * 4;
+    const b = img.pixels.?;
+    return (@as(u32, b[i]) << 24) | (@as(u32, b[i + 1]) << 16) |
+        (@as(u32, b[i + 2]) << 8) | @as(u32, b[i + 3]);
+}
+
+test "headless: GREY8 gradient mask blend" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocWhiteMask(be, 1);
+    try allocSolid(be, 2, RED, RGBA32); // src RED (sa=255)
+    try allocSolid(be, 5, WHITE, RGBA32);
+    // White ground over the 4-pixel strip, then RED through a GREY8 gradient mask.
+    try be.draw(display_id, 5, 1, Rect.init(0, 0, 4, 1), .{}, .{});
+    try be.allocImage(3, Rect.init(0, 0, 4, 1), GREY8, false, Rect.init(0, 0, 4, 1), 0);
+    try testing.expectEqual(@as(usize, 4), try be.loadPixels(3, Rect.init(0, 0, 4, 1), &[_]u8{ 0x00, 0x40, 0x80, 0xFF }));
+    try be.draw(display_id, 2, 3, Rect.init(0, 0, 4, 1), .{}, .{});
+
+    // ma=0x00 ⇒ no-op ⇒ white. ma=0x40: fd=255-CALC11(255,64)=255-64=191;
+    //   R=CALC12(64,255,191,255)=255, G=B=CALC12(64,0,191,255)=191 ⇒ 0xFFBFBFFF.
+    // ma=0x80: fd=127; G=B=CALC12(128,0,127,255)=127 ⇒ 0xFF7F7FFF.
+    // ma=0xFF ⇒ opaque store ⇒ 0xFF0000FF.
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0xFFBFBFFF), hb.pixelAt(1, 0));
+    try testing.expectEqual(@as(u32, 0xFF7F7FFF), hb.pixelAt(2, 0));
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(3, 0));
+}
+
+test "headless: GREY1 mask bit order" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocSolid(be, 2, RED, RGBA32);
+    // One byte 0b10100000: HIGH bit leftmost (G12) ⇒ pixels x=0 and x=2 set.
+    try be.allocImage(3, Rect.init(0, 0, 8, 1), GREY1, false, Rect.init(0, 0, 8, 1), 0);
+    try testing.expectEqual(@as(usize, 1), try be.loadPixels(3, Rect.init(0, 0, 8, 1), &[_]u8{0b10100000}));
+    try be.draw(display_id, 2, 3, Rect.init(0, 0, 8, 1), .{}, .{});
+
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(0, 0)); // bit 0 set
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(1, 0)); // bit 1 clear
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(2, 0)); // bit 2 set
+    var x: u32 = 3;
+    while (x < 8) : (x += 1) try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(x, 0));
+}
+
+test "headless: general mask formula pin" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocWhiteMask(be, 1);
+    try allocSolid(be, 5, WHITE, RGBA32);
+    try allocSolid(be, 2, HALF_RED, RGBA32); // src 0x7F00007F (sa=127)
+    try allocSolid(be, 6, 0x808080FF, GREY8); // solid grey mask ⇒ ma=RGB2K(128,128,128)=128
+    try be.draw(display_id, 5, 1, Rect.init(0, 0, 1, 1), .{}, .{});
+    try be.draw(display_id, 2, 6, Rect.init(0, 0, 1, 1), .{}, .{});
+
+    // sa=127, ma=128 ⇒ CALC11(127,128)=64 ⇒ fd=191.
+    //   R=CALC12(128,127,191,255)=255=0xFF; G=B=CALC12(128,0,191,255)=191=0xBF;
+    //   A=CALC12(128,127,191,255)=255=0xFF  ⇒  EXACTLY 0xFFBFBFFF. Pins CALC12
+    //   (one combined rounding, NOT two CALC11s summed).
+    try testing.expectEqual(@as(u32, 0xFFBFBFFF), hb.pixelAt(0, 0));
+}
+
+test "headless: solid grey mask constant alpha" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocWhiteMask(be, 1);
+    try allocSolid(be, 5, WHITE, RGBA32);
+    try allocSolid(be, 2, RED, RGBA32);
+    try allocSolid(be, 6, 0x808080FF, GREY8); // ma=128
+
+    // (a) RED through the grey-128 mask over white ⇒ 0xFF7F7FFF (as in test 1, ma=0x80).
+    try be.draw(display_id, 5, 1, Rect.init(0, 0, 1, 1), .{}, .{});
+    try be.draw(display_id, 2, 6, Rect.init(0, 0, 1, 1), .{}, .{});
+    try testing.expectEqual(@as(u32, 0xFF7F7FFF), hb.pixelAt(0, 0));
+
+    // (b) a black GREY1 solid mask (RGB2K=0 ⇒ ma=0) is a true no-op: hash unchanged.
+    const h = hb.hash();
+    try allocSolid(be, 7, 0x000000FF, GREY1);
+    try allocSolid(be, 3, BLUE, RGBA32);
+    try be.draw(display_id, 3, 7, hb.bounds(), .{}, .{});
+    try testing.expectEqual(h, hb.hash());
+
+    // (c) a white GREY1 solid mask (ma=255) takes the phase-2 opaque path exactly.
+    try be.draw(display_id, 3, 1, Rect.init(5, 5, 6, 6), .{}, .{});
+    try testing.expectEqual(@as(u32, 0x0000FFFF), hb.pixelAt(5, 5));
+}
+
+test "headless: loadPixels round-trip" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    // RGBA32 2×2, wire byte order [a,b,g,r] per pixel (G13).
+    try be.allocImage(2, Rect.init(0, 0, 2, 2), RGBA32, false, Rect.init(0, 0, 2, 2), 0);
+    const rgba = [_]u8{
+        0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, // row 0: 0x11223344, 0x55667788
+        0xCC, 0xBB, 0xAA, 0x99, 0x00, 0xFF, 0xEE, 0xDD, // row 1: 0x99AABBCC, 0xDDEEFF00
+    };
+    try testing.expectEqual(@as(usize, 16), try be.loadPixels(2, Rect.init(0, 0, 2, 2), &rgba));
+    try testing.expectEqual(@as(u32, 0x11223344), imgPixel(&hb, 2, 0, 0));
+    try testing.expectEqual(@as(u32, 0x55667788), imgPixel(&hb, 2, 1, 0));
+    try testing.expectEqual(@as(u32, 0x99AABBCC), imgPixel(&hb, 2, 0, 1));
+    try testing.expectEqual(@as(u32, 0xDDEEFF00), imgPixel(&hb, 2, 1, 1));
+
+    // GREY8 2×2: each byte k ⇒ [k,k,k,FF].
+    try be.allocImage(3, Rect.init(0, 0, 2, 2), GREY8, false, Rect.init(0, 0, 2, 2), 0);
+    try testing.expectEqual(@as(usize, 4), try be.loadPixels(3, Rect.init(0, 0, 2, 2), &[_]u8{ 0x10, 0x20, 0x30, 0x40 }));
+    try testing.expectEqual(@as(u32, 0x101010FF), imgPixel(&hb, 3, 0, 0));
+    try testing.expectEqual(@as(u32, 0x404040FF), imgPixel(&hb, 3, 1, 1));
+
+    // XRGB32 straight to display id 0 (marks dirty). Wire [b,g,r,x] ⇒ [r,g,b,FF].
+    const xrgb = [_]u8{ 0x33, 0x22, 0x11, 0xAA, 0x66, 0x55, 0x44, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    try testing.expectEqual(@as(usize, 16), try be.loadPixels(display_id, Rect.init(0, 0, 2, 2), &xrgb));
+    try testing.expectEqual(@as(u32, 0x112233FF), hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0x445566FF), hb.pixelAt(1, 0));
+    try testing.expect(hb.dirty != null);
+
+    // A 1×1 repl solid has no buffer: loadPixels updates its fill word.
+    try allocSolid(be, 8, 0x00000000, RGBA32);
+    try testing.expectEqual(@as(usize, 4), try be.loadPixels(8, unit, &[_]u8{ 0xAA, 0xBB, 0xCC, 0xDD }));
+    const s8 = hb.images.get(8).?;
+    try testing.expectEqual(@as(u32, 0xDDCCBBAA), s8.fill);
+    try testing.expect(s8.pixels == null);
+}
+
+test "headless: loadPixels bytes-per-line math" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    // GREY1 r=(1,0,3,1): min.x>=0 ⇒ bpl = ceil(3/8)-floor(1/8) = 1. Byte 0b01100000
+    // (bits anchored to absolute x) sets x=1,2.
+    try be.allocImage(2, Rect.init(1, 0, 3, 1), GREY1, false, Rect.init(1, 0, 3, 1), 0);
+    try testing.expectEqual(@as(usize, 1), try be.loadPixels(2, Rect.init(1, 0, 3, 1), &[_]u8{0b01100000}));
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), imgPixel(&hb, 2, 1, 0));
+    try testing.expectEqual(@as(u32, 0xFFFFFFFF), imgPixel(&hb, 2, 2, 0));
+
+    // GREY1 r=(-3,0,2,1): negative-min branch ⇒ bpl = ceil(3/8)+ceil(2/8) = 2.
+    try be.allocImage(3, Rect.init(-3, 0, 2, 1), GREY1, false, Rect.init(-3, 0, 2, 1), 0);
+    try testing.expectEqual(@as(usize, 2), try be.loadPixels(3, Rect.init(-3, 0, 2, 1), &[_]u8{ 0x00, 0x00 }));
+
+    // GREY8 r=(0,0,3,2): bpl=3, two rows ⇒ 6 bytes.
+    try be.allocImage(4, Rect.init(0, 0, 3, 2), GREY8, false, Rect.init(0, 0, 3, 2), 0);
+    try testing.expectEqual(@as(usize, 6), try be.loadPixels(4, Rect.init(0, 0, 3, 2), &[_]u8{ 0, 0, 0, 0, 0, 0 }));
+}
+
+test "headless: loadPixels errors" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try be.allocImage(2, Rect.init(0, 0, 2, 2), GREY8, false, Rect.init(0, 0, 2, 2), 0);
+    // Rect not contained in image ⇒ WriteOutside.
+    try testing.expectError(Error.WriteOutside, be.loadPixels(2, Rect.init(0, 0, 3, 3), &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
+    // Short payload (need bpl*Dy = 2*2 = 4) ⇒ ShortData.
+    try testing.expectError(Error.ShortData, be.loadPixels(2, Rect.init(0, 0, 2, 2), &[_]u8{ 0, 0 }));
+    // Extra bytes ⇒ consumes exactly the needed count.
+    try testing.expectEqual(@as(usize, 4), try be.loadPixels(2, Rect.init(0, 0, 2, 2), &[_]u8{ 0, 0, 0, 0, 0xFF, 0xFF }));
+}
+
+test "headless: copy is a straight store" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    // Source: a 1×1 non-repl translucent red; dst: a 1×1 non-repl white RGBA32.
+    try be.allocImage(2, unit, RGBA32, false, unit, 0x7F00007F);
+    try be.allocImage(3, unit, RGBA32, false, unit, WHITE);
+    try be.copy(3, 2, unit, .{});
+    // Straight store keeps the src bytes verbatim (SoverD would blend to pink).
+    try testing.expectEqual(@as(u32, 0x7F00007F), imgPixel(&hb, 3, 0, 0));
+    // dst == src ⇒ Unsupported.
+    try testing.expectError(Error.Unsupported, be.copy(2, 2, unit, .{}));
+}
+
+test "headless: mask subrect via mp" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocSolid(be, 2, RED, RGBA32);
+    // GREY1 4×1 mask, bits 1010 (byte 0b10100000): cols 0,2 set; 1,3 clear.
+    try be.allocImage(3, Rect.init(0, 0, 4, 1), GREY1, false, Rect.init(0, 0, 4, 1), 0);
+    _ = try be.loadPixels(3, Rect.init(0, 0, 4, 1), &[_]u8{0b10100000});
+    // Draw 4-wide with mp=(2,0): maskCoord=(x+2). mr=(2,0,6,1) clips to mask.r
+    // (0,0,4,1) ⇒ (2,0,4,1), so r shrinks to 2 wide and only cols 2,3 gate.
+    try be.draw(display_id, 2, 3, Rect.init(0, 0, 4, 1), .{}, .{ .x = 2, .y = 0 });
+
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(0, 0)); // mask col 2 = set
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(1, 0)); // mask col 3 = clear
+    // cols 2,3 of dst never reached (r shrank) — pins the mp fix (col 2 would be
+    // painted if mp were ignored and cols 0..3 gated instead).
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(2, 0));
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(3, 0));
+}
+
+test "headless: setClipr and imageInfo" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocSolid(be, 2, RED, RGBA32);
+    try allocWhiteMask(be, 1);
+    // Narrow the display clipr; a full-display fill now only paints inside it.
+    try be.setClipr(display_id, Rect.init(0, 0, 4, 4));
+    try be.draw(display_id, 2, 1, hb.bounds(), .{}, .{});
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0xFF0000FF), hb.pixelAt(3, 3));
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(4, 4));
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(10, 10));
+
+    // imageInfo round-trips; clipr was intersected with r at alloc (non-repl).
+    try be.allocImage(5, Rect.init(1, 2, 10, 12), RGBA32, false, Rect.init(1, 2, 8, 9), 0);
+    const info = try be.imageInfo(5);
+    try testing.expectEqual(RGBA32, info.chan);
+    try testing.expectEqual(Rect.init(1, 2, 10, 12), info.r);
+    try testing.expectEqual(Rect.init(1, 2, 8, 9), info.clipr);
+    try testing.expectEqual(false, info.repl);
+    // setClipr is assignment, not intersection.
+    try be.setClipr(5, Rect.init(2, 3, 4, 5));
+    try testing.expectEqual(Rect.init(2, 3, 4, 5), (try be.imageInfo(5)).clipr);
+
+    // The display's own info reflects the new clipr.
+    const info0 = try be.imageInfo(display_id);
+    try testing.expectEqual(XRGB32, info0.chan);
+    try testing.expectEqual(hb.bounds(), info0.r);
+    try testing.expectEqual(Rect.init(0, 0, 4, 4), info0.clipr);
+
+    // Unknown id ⇒ UnknownImage.
+    try testing.expectError(Error.UnknownImage, be.imageInfo(999));
 }
