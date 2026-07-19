@@ -4,6 +4,9 @@ const std = @import("std");
 
 pub const Qid = @import("qid.zig");
 pub const msg = @import("msg.zig");
+pub const stat = @import("stat.zig");
+pub const transport = @import("transport.zig");
+pub const errors = @import("errors.zig");
 
 test {
     std.testing.refAllDecls(@This());
