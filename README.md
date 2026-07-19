@@ -11,3 +11,6 @@ Status: **design phase** — requirements and specifications live in [`docs/`](d
 - Requirements: [`docs/requirements/`](docs/requirements/)
 - Specifications & diagrams: [`docs/spec/`](docs/spec/)
 - Key decisions (toolchain, libraries, /dev/draw, 3-button mouse): [`docs/spec/adr/`](docs/spec/adr/)
+
+AI agents working in this repo: start with [`CLAUDE.md`](CLAUDE.md) (aliased as
+`AGENTS.md`), then read the cross-session memory at [`agents/HANDOFF.md`](agents/HANDOFF.md).
