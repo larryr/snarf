@@ -22,9 +22,20 @@ authorization for this file only). Prune freely — git keeps history.
   `application/wasm` + COOP/COEP + `Cache-Control: no-store`; `-Dport` (default 8017);
   rejects `..`, maps `/`→`/index.html`. Host-only dev tool, outside the editor module
   graph. Built on 0.16 `std.Io` (see learning below). Confirmed loads in a browser.
-- **Next planned work** (not started): flesh out real modules — ninep msg/client/server,
-  Buffer/piece-table, Text/Frame, then a first end-to-end draw path. Also outstanding:
-  CI (S-06 §5).
+- **Phase 1 (ninep) COMPLETE on branch `phase1-ninep` (`096e0a1`) — NOT yet merged to
+  `main`, awaiting user sign-off.** Full 9P2000 core: qid/msg codec (+wire cursor,
+  stat(5) codec), transport vtable, errors, chan (SPSC ring+Pipe), server (lib9p-shaped
+  Srv), client (sync + pump), mount (ordered prefix table). 84/84 tests incl. an
+  end-to-end acceptance test (client walks/opens/reads/writes a served tree over a Pipe,
+  mount resolve on top). Built by the phased agent pipeline (contract at
+  `agents/contracts/phase1-ninep.md` — read it before touching ninep; R-rulings 1-8
+  record as-built decisions incl. Ops.attach signature and R5 unsupported-msg handling).
+- **Agent-pipeline plan** (user-approved): Outline(fable) → Build(opus/sonnet, isolated
+  worktrees) → Inspect(orchestrator) per phase; plan file
+  `~/.claude/plans/sequential-dreaming-shell.md`. Phase 2 = rectangle on a headless
+  framebuffer (draw proto/Display/Image + devdraw headless backend, golden-image tests).
+- **Next planned work**: Phase 2-5 of the vertical slice (rect → glyph → text line →
+  browser), then input/editing breadth. Also outstanding: CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
   font licensing (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
@@ -91,6 +102,16 @@ authorization for this file only). Prune freely — git keeps history.
   custom headers) via `respond`'s `extra_headers: []const std.http.Header`. Pass build→exe
   constants with `b.addOptions()` + `.createModule()` imported as `build_options` (argv
   iterators also churned; addOptions sidesteps them).
+
+- **Agent-orchestration learnings (2026-07-19, phase 1):** (1) Worktrees spawn from a
+  possibly-stale ref — every build-agent prompt must include "verify file X exists, else
+  `git rebase <integration-branch>`" (all five agents needed it). (2) Each agent must add
+  its OWN re-export line to the namespace root or its tests are unreachable and the
+  in-worktree gate passes vacuously; orchestrator resolves the one-line conflicts.
+  (3) Type-only imports still serialize builds (mount needed client.zig to exist → B4
+  sequenced after B2). (4) Wave C catches real bugs: multi-chunk-walk fid leak (B2,
+  fixed as clunk-or-burn), infallible pump = hang-not-fail (B2), `catch unreachable` on
+  op-controlled data (B1 handleStat, patched + regression test).
 
 ## Session log (newest first)
 
