@@ -5,6 +5,8 @@ const std = @import("std");
 
 pub const draw = @import("draw.zig");
 pub const draw_backend = @import("draw_backend.zig");
+// PLACEHOLDER wiring — B1's real +1 line is identical; B1 wins at merge.
+pub const draw_canvas = @import("draw_canvas.zig");
 
 test {
     std.testing.refAllDecls(@This());
