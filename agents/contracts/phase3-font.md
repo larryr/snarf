@@ -39,6 +39,10 @@ sub-byte bit order MSB-first-leftmost; wire pixel order low-byte-first (RGBA32 =
 - **R-P3-7**: dirty-rect on 's' is per-glyph union — 's' tests must not pin `hb.dirty`.
 - **R-P3-8**: 'x'/'n'/'N'/ctl-writes/'Y' stay out of phase 3; repl tiling and repl
   non-solid masks stay Unsupported.
+- **R-P3-9 (amendment, during 3a)**: growing `draw_backend.Error` breaks dev/draw.zig's
+  exhaustive `opError` switch, so 3a/A2 ALSO carries exactly two arms in that switch
+  (`WriteOutside => WriteOutside`, `ShortData => BadWriteImage`). B1 (3b) will find
+  them present; the rest of §3 remains B1's.
 
 ## Sub-wave assignments
 
