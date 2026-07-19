@@ -1,0 +1,44 @@
+@startuml build-flow
+title Build & dev flow — Zig only, macOS or Linux (spec 06, ADR-0001)
+skinparam shadowing false
+
+rectangle "Developer host (macOS or Linux)" {
+  file "src/**/*.zig" as SRC
+  file "web/index.html\nweb/shim.js" as WEB
+  file "assets/fonts/*.subf" as FONTS
+  file "build.zig\nbuild.zig.zon\n.zigversion" as BZ
+
+  rectangle "zig build" as ZB
+  rectangle "zig build test\n(native host target)" as ZT
+  rectangle "zig build serve\n(dev HTTP server,\nCOOP/COEP headers)" as ZS
+}
+
+folder "zig-out/www (deployable static site)" {
+  file "snarf.wasm" as WASM
+  file "index.html\nshim.js" as OUTWEB
+  file "fonts/*" as OUTFONTS
+}
+
+cloud "Any static host\n(GitHub Pages, nginx, ...)" as HOST
+actor Browser
+
+SRC --> ZB
+BZ --> ZB
+WEB --> ZB : copied verbatim
+FONTS --> ZB : embedded or copied
+ZB --> WASM : target wasm32-freestanding\nReleaseSmall/ReleaseSafe
+ZB --> OUTWEB
+ZB --> OUTFONTS
+SRC --> ZT : same code, native target\n(core is browser-free, R-CON-02)
+ZS ..> Browser : http://localhost:8000
+WASM --> HOST
+OUTWEB --> HOST
+OUTFONTS --> HOST
+HOST --> Browser
+
+note bottom of ZB
+  Only required tool: pinned Zig.
+  No make/cmake/node/cc.
+  Identical commands on both OSes.
+end note
+@enduml

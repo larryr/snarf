@@ -1,0 +1,31 @@
+@startuml draw-pipeline
+title Draw pipeline — one frame of typing (spec 03)
+skinparam shadowing false
+
+participant "Editor core" as E
+participant "libdraw client" as L
+participant "/dev/draw server" as D
+participant "JS shim (worker side)" as W
+participant "OffscreenCanvas\n(Canvas2D)" as O
+participant "Main thread <canvas>" as MC
+
+E -> L : string(win, pt, font, "x")
+L -> L : compile draw ops into buffer
+L -> D : 9P Twrite /dev/draw/1/data\n[load subfont glyphs?, draw ops]
+D -> D : validate, update image state
+D -> W : hostcall draw_blit(imageId, rect, pixels*)\n(*or retained-canvas ops)
+W -> O : ctx.putImageData / drawImage
+D --> L : Rwrite count
+E -> L : flushimage(display)
+L -> D : Twrite [v]  ' flush
+D -> W : hostcall draw_flush(dirtyRects)
+W -> O : commit()
+O -> MC : transferToImageBitmap /\nplaceholder auto-present
+MC -> MC : browser composites next vsync
+
+note over D,W
+  The 9P layer carries the *protocol*;
+  pixels cross to JS once, at the backend
+  boundary, batched per flush.
+end note
+@enduml

@@ -1,0 +1,53 @@
+@startuml architecture
+title Snarf — layered architecture (spec 00)
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Browser main thread" {
+  [index.html + JS shim\n(canvas present, event capture,\nclipboard, FS Access, WebSocket)] as Shim
+  [Visible <canvas>] as Canvas
+}
+
+package "Web Worker — snarf.wasm (Zig, wasm32-freestanding)" {
+  package "Editor core (browser-agnostic)" {
+    [ACME editor\n(windows, columns, tags,\nEdit language, undo)] as Editor
+    [libdraw-like client] as Libdraw
+    [9P client + mount table\n(namespace)] as NS
+  }
+
+  package "Device layer (9P servers)" {
+    [/dev/draw server] as DevDraw
+    [/dev/mouse /dev/kbd server] as DevInput
+    [/dev/dom server] as DevDom
+    [/dev/snarf /dev/storage\n/dev/notify ... servers] as DevMisc
+    [/mnt/host server\n(FS Access API / OPFS)] as DevHost
+  }
+
+  [9P transport: in-memory channels] as Chan
+  [9P transport: WebSocket framing] as WS
+}
+
+cloud "Origin web server" {
+  [static assets] as Static
+  [optional 9P export\nwss://origin/9p] as Origin9P
+}
+
+Editor --> Libdraw
+Editor --> NS
+Libdraw --> NS : write /dev/draw/N/data
+NS --> Chan
+Chan --> DevDraw
+Chan --> DevInput
+Chan --> DevDom
+Chan --> DevMisc
+Chan --> DevHost
+NS --> WS : /mnt/origin
+WS --> Origin9P
+DevDraw ..> Shim : hostcall imports\n(pixels → OffscreenCanvas)
+DevInput ..> Shim : pointer/key events in
+DevDom ..> Shim : DOM ops
+DevMisc ..> Shim : clipboard, storage, notify
+DevHost ..> Shim : FS Access handles
+Shim --> Canvas
+Static ..> Shim : serves page
+@enduml

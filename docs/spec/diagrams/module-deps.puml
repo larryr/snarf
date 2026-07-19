@@ -1,0 +1,46 @@
+@startuml module-deps
+title Module dependency rules — allowed imports only (spec 07 §6)
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "src/core (editor, browser-free)" as core {
+  [Editor, Row, Column, Window,\nFile, Buffer, text/, exec/,\nedit/, look/, served/] as CORE
+}
+package "src/draw (client + frame)" as draw {
+  [Display, Image, Font, proto,\nframe/] as DRAW
+}
+package "src/ninep (9P2000)" as ninep {
+  [msg, qid] as MSG
+  [client, mount] as CLI
+  [server] as SRV
+  [chan, ws] as XPORT
+}
+package "src/dev (device servers)" as dev {
+  [draw, draw_backend, input,\nprofiles, dom, host,\nstorage, misc] as DEV
+}
+package "src/shim (WASM boundary)" as shim {
+  [abi, ring] as SHIM
+}
+
+CORE --> DRAW
+CORE --> CLI
+DRAW --> CLI
+CLI --> MSG
+SRV --> MSG
+XPORT --> MSG
+DEV --> SRV
+DEV --> SHIM
+CORE ..> SRV : served/ only\n(/mnt/snarf-self)
+
+note bottom of core
+  core NEVER imports dev or shim
+  (R-CON-02: natively testable).
+  ninep and shim import std only.
+end note
+
+note right of XPORT
+  transports bind client↔server
+  at runtime via the mount table;
+  no compile-time coupling.
+end note
+@enduml

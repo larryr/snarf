@@ -1,0 +1,51 @@
+@startuml mouse-chords
+title Input server — logical button/chord synthesis state machine (spec 04, ADR-0004)
+skinparam shadowing false
+
+[*] --> Idle
+
+state Idle {
+}
+state "B1 active\n(sweep in progress)" as B1 {
+}
+state "B1+B2 chord\n⇒ core sees Cut gesture" as Cut {
+}
+state "B1+B3 chord\n⇒ core sees Paste gesture" as Paste {
+}
+state "B2 active\n(execute sweep)" as B2 {
+}
+state "B2+B1 chord\n⇒ execute with argument" as Arg {
+}
+state "B3 active\n(look sweep)" as B3 {
+}
+
+Idle --> B1 : phys B1 down /\ntouch: finger 1 down
+Idle --> B2 : phys B2 down / Alt+B1 down /\ntouch: two-finger tap / chordbar 2
+Idle --> B3 : phys B3 down / Meta+B1 down /\ntouch: three-finger tap or long-press
+B1 --> Idle : B1 up (click or sweep done)
+B2 --> Idle : B2 up
+B3 --> Idle : B3 up
+
+B1 --> Cut : phys B2 down /\nAlt pressed mid-sweep /\ntouch: 2nd finger tap /\nchordbar 2 tapped
+B1 --> Paste : phys B3 down /\nMeta pressed mid-sweep /\ntouch: 2nd finger double-tap
+Cut --> B1 : chord button/modifier up\n(buttons=1 again)
+Paste --> B1 : chord button/modifier up
+Cut --> Paste : B3/Meta while chorded\n(snarf+paste idiom)
+
+B2 --> Arg : phys B1 down /\nmodifier released, B1 still down? see note
+Arg --> B2 : B1 up
+
+note right of Cut
+  Emitted on /dev/mouse as ordinary
+  Plan 9 events: buttons 1 → 3 → 1.
+  The core runs unmodified ACME logic;
+  it cannot tell emulation from hardware.
+end note
+
+note bottom of Arg
+  2-1 chord (execute with argument).
+  In the modifier profile: hold Alt, press
+  pointer button (=B2 sweep), release Alt
+  while holding (=B1 join).
+end note
+@enduml

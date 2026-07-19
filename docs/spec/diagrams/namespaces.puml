@@ -1,0 +1,38 @@
+@startmindmap namespaces
+title Snarf namespace — assembled mount table (spec 02)
+
+* /
+** dev
+*** draw — draw device (spec 03)
+**** new — open to allocate a client conn
+**** 1/ — per-client: ctl, data, refresh, colormap
+*** mouse — logical mouse events (spec 04)
+*** cursor — write to set cursor
+*** kbd — keyboard runes (spec 04)
+*** cons — console text I/O
+*** snarf — clipboard (read/write)
+*** storage/ — persistent files (IndexedDB-backed)
+*** notify — write "title\\nbody" to notify
+*** location — read URL / write to navigate
+*** title — read/write tab title
+*** log — write → browser console
+*** input/ctl — select profile (native/modifier/touch/chordbar)
+*** dom/ — the hosting page's DOM
+**** root/ — <html> element as a directory
+***** ctl — mutate: create/append/remove/listen
+***** attrs — one "name value" per line
+***** style — computed style, writable subset
+***** text — textContent
+***** html — innerHTML
+***** 0/ 1/ ... — child elements, in order
+**** events — stream of subscribed DOM events
+**** query — write CSS selector, read matches
+** mnt
+*** host/ — user-granted local dir (FS Access API)
+*** opfs/ — origin-private FS (always available)
+*** origin/ — origin server 9P export (if present)
+*** snarf-self/ — Snarf's own state, ACME-style
+**** index — list of windows
+**** new/ — open to create a window
+**** 1/ — per-window: addr, body, tag, data, event, ctl
+@endmindmap
