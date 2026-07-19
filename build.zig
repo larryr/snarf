@@ -97,6 +97,27 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run-native", "Run the native headless harness");
     run_step.dependOn(&run_native.step);
 
+    // --- zig build serve: std-only dev server over zig-out/www (S-06 §3),
+    //     setting application/wasm + COOP/COEP. Host tool, not in the editor
+    //     module graph. Port via -Dport (default 8017). ---
+    const port = b.option(u16, "port", "Port for `zig build serve` (default 8017)") orelse 8017;
+    const serve_opts = b.addOptions();
+    serve_opts.addOption([]const u8, "www_dir", b.getInstallPath(.prefix, "www"));
+    serve_opts.addOption(u16, "port", port);
+    const serve_exe = b.addExecutable(.{
+        .name = "snarf-serve",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/serve.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = serve_opts.createModule() }},
+        }),
+    });
+    const run_serve = b.addRunArtifact(serve_exe);
+    run_serve.step.dependOn(b.getInstallStep()); // assemble zig-out/www first
+    const serve_step = b.step("serve", "Serve zig-out/www over HTTP (application/wasm + COOP/COEP)");
+    serve_step.dependOn(&run_serve.step);
+
     // --- Tests: every module's colocated `test` blocks, run natively. core,
     //     draw and ninep are compiled with NO shim on the path (S-07 §6). ---
     const test_step = b.step("test", "Run unit tests (core+draw+ninep have no shim)");
@@ -112,6 +133,10 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, target, optimize, "src/dev/dev.zig", &.{
         .{ .name = "ninep", .module = ninep },
         .{ .name = "shim", .module = shim },
+    });
+    // The serve dev tool has its own tests (path resolution, content types).
+    addModuleTests(b, test_step, target, optimize, "tools/serve.zig", &.{
+        .{ .name = "build_options", .module = serve_opts.createModule() },
     });
 }
 
