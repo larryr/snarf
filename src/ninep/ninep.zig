@@ -10,6 +10,7 @@ pub const errors = @import("errors.zig");
 pub const chan = @import("chan.zig");
 pub const Client = @import("client.zig").Client;
 pub const server = @import("server.zig");
+pub const mount = @import("mount.zig");
 
 test {
     std.testing.refAllDecls(@This());
