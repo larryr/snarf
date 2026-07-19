@@ -6,23 +6,22 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## Current state (update in place)
 
-- **Repo**: design-docs phase merged to `main` (`7214ffe`). **Scaffold done, on branch
-  `scaffold-build` (pushed, `6793314`), NOT yet on `main`** — awaiting land (see below).
+- **Repo**: docs + **scaffold both merged to `main`** (scaffold merge `0c4ec78`, branch
+  `scaffold-build` deleted). `main` builds green.
 - **Docs**: 7 requirements + 8 specs (S-00..S-07) + 4 ADRs + 7 PlantUML diagrams under
   `docs/`. Entry point `docs/README.md`.
-- **Scaffold (branch `scaffold-build`)**: `build.zig` + `build.zig.zon` (empty deps) +
-  `.zigversion`, five module namespaces (core/draw/ninep/dev/shim) with stub type-files +
-  colocated tests, `main_wasm.zig`/`main_native.zig`, `web/{index.html,shim.js}` stubs.
+- **Scaffold (on `main`)**: `build.zig` + `build.zig.zon` (empty deps) + `.zigversion`,
+  five module namespaces (core/draw/ninep/dev/shim) with stub type-files + colocated
+  tests, `main_wasm.zig`/`main_native.zig`, `web/{index.html,shim.js}` stubs.
   All green on Zig 0.16.0: `zig build` → `zig-out/www/{snarf.wasm,index.html,shim.js}`
   (wasm instantiates + init/wake/tick callable, verified under node); `zig build test`
   11/11; `zig build run-native` runs the headless Editor; `zig fmt` clean. S-07 §6 import
   rules are enforced by the module graph (core→shim fails to compile — verified). Only
   representative stubs per namespace, NOT all ~55 files of S-07 §4. `zig build serve` not
   yet implemented (needs std.http wiring).
-- **To land scaffold**: PR API is blocked (see facts) — open the PR in the GitHub UI, or
-  land via `git merge` to `main` on user's say-so (last session's chosen path).
-- **Next planned work** (after landing): flesh out real modules — ninep msg/client/server,
-  Buffer/piece-table, Text/Frame, then a first end-to-end draw path.
+- **Next planned work** (not started): flesh out real modules — ninep msg/client/server,
+  Buffer/piece-table, Text/Frame, then a first end-to-end draw path. Also outstanding:
+  `zig build serve` (std.http + COOP/COEP headers, S-06 §3) and CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
   font licensing (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
