@@ -44,12 +44,16 @@ authorization for this file only). Prune freely — git keeps history.
   root src/accept.zig. 115/115. Contract: agents/contracts/phase2-draw.md (rulings
   R-P2-1..7; G1-G10 ground truth incl. draw wire = LITTLE-endian, sys/man/3/draw:111).
   Frozen goldens listed in the report; re-freeze needs orchestrator re-verification.
-- **Next planned work**: Phase 3 (glyph/string: draw/Font.zig + subfont asset + devdraw
-  'i'/'l'/'s' verbs, golden glyph) → Phase 4 (Buffer/Frame/text line) → Phase 5
-  (browser OffscreenCanvas backend + shim draw imports). Then input/editing breadth.
-  Also outstanding: CI (S-06 §5). Deferred-list per phase lives in each report.
-- **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
-  font licensing (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
+- **Phase 3 (fonts) MERGED to `main`** (agents/reports/phase3-font.md): text renders —
+  "hello, acme" end-to-end (embedded misc-fixed subfont, image(6) decompressor, verbs
+  i/l/s/y, general-mask CALC12 compositor). 148/148. **OQ-GFX-2 resolved**: fixed/ is
+  public domain (embedded, sha256-pinned); Lucida is ENCUMBERED — never embed; Go fonts
+  deferred (S-03 §4 amended w/ revision log). Contracts: phase3-font{,-client,-device}.md.
+- **Next planned work**: Phase 4 (Buffer/RuneIndex/File + draw/frame + a text line from
+  a real buffer) → Phase 5 (browser: draw_canvas.zig OffscreenCanvas backend + shim draw
+  imports). Then input/editing breadth. Also outstanding: CI (S-06 §5).
+- **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
+  open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
 ## Environment & account facts (verified 2026-07-19)
 
