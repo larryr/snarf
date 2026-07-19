@@ -34,6 +34,11 @@ authorization for this file only). Prune freely — git keeps history.
   worktrees) → Inspect(orchestrator) per phase; plan file
   `~/.claude/plans/sequential-dreaming-shell.md`. Phase 2 = rectangle on a headless
   framebuffer (draw proto/Display/Image + devdraw headless backend, golden-image tests).
+- **STANDING AUTHORIZATION (user, 2026-07-19)**: run phases autonomously — merge each
+  phase to `main` WITHOUT per-phase sign-off once orchestrator-inspected + suite green +
+  fmt clean + boundary check passes; leave a report per phase in `agents/reports/`
+  (committed with the phase; `--no-ff` merge = one revertable commit). Still stop and
+  ask for ADR-level changes or design forks the specs don't settle.
 - **Next planned work**: Phase 2-5 of the vertical slice (rect → glyph → text line →
   browser), then input/editing breadth. Also outstanding: CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
