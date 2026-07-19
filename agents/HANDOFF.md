@@ -54,10 +54,18 @@ authorization for this file only). Prune freely — git keeps history.
   File undo/redo (file.c-faithful, mod restoration), full libframe port
   (frame/{Frame,insert,draw,util}, tab rule, '\n' 5000px quirk preserved), Text.fill.
   192/192. Contracts: phase4-text{,-data,-frame}.md (rulings R-P4-1..7).
-- **Next planned work**: Phase 5 (browser: dev/draw_canvas.zig OffscreenCanvas backend +
-  web/shim.js draw imports + main_wasm boot wiring — the same FROZEN scenes appearing
-  on a real canvas) → then input/editing breadth (phases 6+: devinput, typing/select,
-  Window/Column/Row, Edit language). Also outstanding: CI (S-06 §5).
+- **Phase 5 (browser) MERGED to `main` — THE VERTICAL SLICE IS COMPLETE**
+  (agents/reports/phase5-browser.md): 921 KiB snarf.wasm boots the full stack in-module
+  and presents via one blit import; canvas backend is golden-identical BY CONSTRUCTION
+  (pinned by test); node smoke 13/13 against the real binary (tools/smoke_wasm.mjs,
+  manual tool). Main-thread v1 (Worker+SAB land with devinput — S-00 revision note);
+  ABI v2 runtime-checked. MANUAL STEP for Larry: `zig build serve` → 127.0.0.1:8017 →
+  see "hello, acme wraps"/"second line⇥tab" on the canvas (extension screenshot was
+  unavailable; node pixel checks stand in).
+- **Next planned work**: re-plan phase 6+ in detail per the approved plan (outline
+  waves against S-04/S-05): devinput (mouse/kbd, chord emulation, Worker+SAB move,
+  blocking reads + Tflush wait queues) → typing/selection → Window/Column/Row → Edit
+  language → served tree. Also outstanding: CI (S-06 §5).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
