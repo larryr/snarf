@@ -6,14 +6,25 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## Current state (update in place)
 
-- **Repo**: design-docs phase complete and merged to `main` (`7214ffe`). No code yet.
+- **Repo**: design-docs phase merged to `main` (`7214ffe`). **Scaffold done, on branch
+  `scaffold-build` (pushed, `6793314`), NOT yet on `main`** — awaiting land (see below).
 - **Docs**: 7 requirements + 8 specs (S-00..S-07) + 4 ADRs + 7 PlantUML diagrams under
   `docs/`. Entry point `docs/README.md`.
-- **Next planned work** (not started): scaffold `build.zig`, `.zigversion`,
-  `web/index.html` + `web/shim.js` stubs, and the `src/` skeleton per S-07 §4, with
-  `zig build` producing a loading `snarf.wasm` and `zig build test` green.
-- **Open questions** worth resolving early: Zig version pin (OQ-BLD-1), font licensing
-  check (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1).
+- **Scaffold (branch `scaffold-build`)**: `build.zig` + `build.zig.zon` (empty deps) +
+  `.zigversion`, five module namespaces (core/draw/ninep/dev/shim) with stub type-files +
+  colocated tests, `main_wasm.zig`/`main_native.zig`, `web/{index.html,shim.js}` stubs.
+  All green on Zig 0.16.0: `zig build` → `zig-out/www/{snarf.wasm,index.html,shim.js}`
+  (wasm instantiates + init/wake/tick callable, verified under node); `zig build test`
+  11/11; `zig build run-native` runs the headless Editor; `zig fmt` clean. S-07 §6 import
+  rules are enforced by the module graph (core→shim fails to compile — verified). Only
+  representative stubs per namespace, NOT all ~55 files of S-07 §4. `zig build serve` not
+  yet implemented (needs std.http wiring).
+- **To land scaffold**: PR API is blocked (see facts) — open the PR in the GitHub UI, or
+  land via `git merge` to `main` on user's say-so (last session's chosen path).
+- **Next planned work** (after landing): flesh out real modules — ninep msg/client/server,
+  Buffer/piece-table, Text/Frame, then a first end-to-end draw path.
+- **Open questions**: OQ-BLD-1 **resolved → Zig 0.16.0** (ADR-0001 log). Still open:
+  font licensing (OQ-GFX-2), touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
 ## Environment & account facts (verified 2026-07-19)
 
@@ -23,10 +34,13 @@ authorization for this file only). Prune freely — git keeps history.
   merges can be done by pushing a git merge commit (GitHub then flips an open PR to
   Merged). Re-test occasionally in case the grant lands.
 - **Local `gh` (larry's Mac) 2026-07-19**: `gh` 2.96.0, authed as `larryr` via keyring
-  (ssh git protocol), personal token scopes `repo`/`read:org`/`gist`/`admin:public_key`.
-  Unlike the remote App token, this has full `repo` scope, so PR create/list/merge work
-  locally. Note: `gh auth status` fails ("not logged in") when run in a sandbox without
-  keyring access — that's a sandbox artifact, not a real logout.
+  (ssh git protocol), token scopes `repo`/`read:org`/`gist`/`admin:public_key`. Git
+  push/fetch and read APIs (`gh api user`, `gh pr list`, `gh repo view`) work. **BUT
+  `gh pr create` STILL FAILS** — `GraphQL: larryr does not have the correct permissions to
+  execute CreatePullRequest`. So PR *creation* is blocked in **both** remote and local
+  contexts, despite the `repo` scope — treat "can't create PRs from here" as the standing
+  reality; the user opens PRs in the UI (or we land via `git merge`). `gh auth status`
+  reporting "not logged in" is a sandbox-without-keyring artifact, not a real logout.
 - **Self-approval**: GitHub forbids approving your own PR; don't promise an "approve" step.
 - **Remote-session repo scope**: sessions only reach repos attached at start or added via
   `add_repo`; `add_repo` is same-owner-only (v1) — third-party repos must be forked to
@@ -55,6 +69,14 @@ authorization for this file only). Prune freely — git keeps history.
   rendering of the namespace tree was the fix (see `namespaces.puml`).
 - WebFetch of `raw.githubusercontent.com` works for public files even when git-level
   access is scoped — useful for spot-reads without attaching a repo.
+- **Zig 0.16 build API** (learned wiring the scaffold): modules via
+  `b.addModule`/`b.createModule`; exe/test take `.root_module`. Leaf/imported modules
+  should carry NO `.target` — it's set only on the root module and inherited, so one
+  module object works for both the wasm exe and native test compilations. WASM exports:
+  set `exe.entry = .disabled` + `exe.rdynamic = true` and use `export fn`. `build.zig.zon`
+  needs `.name` as an enum literal (`.snarf`) and a `.fingerprint` (zig prints the correct
+  value in the error if wrong). `std.testing.refAllDeclsRecursive` is GONE — only
+  `refAllDecls` (non-recursive) exists, fine for one-level namespace roots.
 
 ## Session log (newest first)
 
