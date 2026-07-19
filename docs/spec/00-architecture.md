@@ -44,6 +44,12 @@ a worker gives us two options; we support both, chosen at startup:
 In both modes the **main thread only** captures input events and presents frames; all
 Snarf logic runs in the worker.
 
+
+> Revision log: 2026-07-19 — Phase-5 bring-up runs the module on the MAIN THREAD
+> (nothing exists to block on yet); the Worker + rings land with devinput. The shim
+> ABI is designed to survive that move unchanged (contract R-P5-2,
+> agents/contracts/phase5-browser.md).
+
 ## 3. Source tree
 
 The top-level shape (per-file layout, C→Zig mapping, and import rules are owned by

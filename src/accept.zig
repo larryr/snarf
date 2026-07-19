@@ -247,3 +247,54 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     // spot-check-verified render; re-freeze ONLY with orchestrator sign-off.
     try testing.expectEqual(@as(u64, 0x7f16941423defd73), hb.hash());
 }
+
+test "phase-5: canvas backend reproduces the frozen phase-2 scene and blits it" {
+    const alloc = testing.allocator;
+
+    // Same scene as phase-2, but through CanvasBackend: pixel-identity with the
+    // frozen hash is BY CONSTRUCTION (R-P5-1) — this test pins that claim.
+    const Rec = struct {
+        var calls: usize = 0;
+        var last_ptr: usize = 0;
+        fn blit(ptr: [*]const u8, fb_w: u32, fb_h: u32, x: u32, y: u32, w: u32, h: u32) void {
+            _ = fb_w;
+            _ = fb_h;
+            _ = x;
+            _ = y;
+            _ = w;
+            _ = h;
+            calls += 1;
+            last_ptr = @intFromPtr(ptr);
+        }
+    };
+    const shim = @import("shim");
+    Rec.calls = 0;
+    shim.abi.test_blit = Rec.blit;
+    defer shim.abi.test_blit = null;
+
+    var canvas = try dev.draw_canvas.CanvasBackend.init(alloc, 640, 480);
+    defer canvas.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, canvas.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+
+    try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &d.white, null, .{});
+    var red = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DRed);
+    try d.image.draw(draw.proto.Rect.make(100, 100, 300, 200), &red, null, .{});
+    try d.flush();
+
+    try testing.expectEqual(@as(usize, 1), Rec.calls);
+    try testing.expectEqual(@intFromPtr(canvas.headless.fb.ptr), Rec.last_ptr);
+    // The load-bearing assertion: byte-identical to the phase-2 frozen scene.
+    try testing.expectEqual(@as(u64, 0x1a99dc0d115ae2bf), canvas.headless.hash());
+}

@@ -155,6 +155,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "draw", .module = draw },
         .{ .name = "ninep", .module = ninep },
         .{ .name = "dev", .module = dev },
+        .{ .name = "shim", .module = shim }, // test_blit seam (phase-5); core's no-shim boundary is separately guarded
         .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
     });
 }

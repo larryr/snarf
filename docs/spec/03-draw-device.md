@@ -60,6 +60,12 @@ The server keeps every allocated image as pixels it owns:
 
 Diagram source: [diagrams/draw-pipeline.puml](diagrams/draw-pipeline.puml)
 
+> Revision log: 2026-07-19 — v1 presents via a software-composite canvas backend
+> (dev/draw_canvas.zig wraps the golden-verified compositor; one blit per flush).
+> The per-image OffscreenCanvas model in this section becomes a later performance
+> phase: canvas compositing cannot reproduce the integer-exact CALC11/12 rounding
+> the frozen goldens pin (contract R-P5-1).
+
 ## 4. Fonts (R-GFX-04)
 
 Plan 9 font/subfont model verbatim: a `.font` file lists ranges → subfont files; subfonts
