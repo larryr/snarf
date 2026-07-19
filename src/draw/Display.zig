@@ -130,7 +130,7 @@ pub fn init(allocator: std.mem.Allocator, client: *ninep.Client, draw_dir_fid: u
 
     // init.c:296-301: bufsize is the data iounit capped at 8000, +1 (we need
     // only one reserved byte for the bare 'v', not the plan9port 5).
-    const buf_size: usize = @min(@as(usize, client.msize) - ninep.msg.IOHDRSZ, 8000);
+    const buf_size: usize = @min(@as(usize, client.msize) - ninep.msg.IOHDRSZ - 1, 8000); // -1: flush()'s appended 'v' must stay within the msize write budget (Wave C patch)
     const buf = try allocator.alloc(u8, buf_size + 1);
     errdefer allocator.free(buf);
 
