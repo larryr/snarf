@@ -37,11 +37,12 @@ pub const FidInfo = struct { fid: u32, qid: Qid };
 
 /// Drives the peer when the transport would block. `run` is invoked on every
 /// transport `WouldBlock`, then the operation retries. With no pump a
-/// `WouldBlock` surfaces to the caller instead (S-01 §3.2). `run` handles its
-/// own errors; from the client's view pumping cannot fail.
+/// `WouldBlock` surfaces to the caller instead (S-01 §3.2). A pump failure
+/// surfaces as error.IoError (which stops the retry loop; a pump that keeps
+/// erroring must fail rather than spin forever).
 pub const Pump = struct {
     ctx: *anyopaque,
-    run: *const fn (ctx: *anyopaque) void,
+    run: *const fn (ctx: *anyopaque) anyerror!void,
 };
 
 /// The client error set: typed 9P op errors (mapped from Rerror), plus the
@@ -160,7 +161,7 @@ fn writeFrame(self: *Client, frame: []const u8) Error!void {
         self.tport.writeMsg(frame) catch |e| switch (e) {
             error.WouldBlock => {
                 if (self.pump) |p| {
-                    p.run(p.ctx);
+                    p.run(p.ctx) catch return error.IoError;
                     continue;
                 }
                 return error.WouldBlock;
@@ -179,7 +180,7 @@ fn readFrame(self: *Client) Error![]u8 {
         return self.tport.readMsg(self.rbuf) catch |e| switch (e) {
             error.WouldBlock => {
                 if (self.pump) |p| {
-                    p.run(p.ctx);
+                    p.run(p.ctx) catch return error.IoError;
                     continue;
                 }
                 return error.WouldBlock;
@@ -253,11 +254,18 @@ pub fn attach(self: *Client, uname: []const u8, aname: []const u8) Error!FidInfo
 /// Walk `names` from `fid` to a freshly allocated newfid (clone + walk). Names
 /// are sent in successive Twalks of at most MAXWELEM each (mnt.c chunking). The
 /// newfid is established only on FULL success; any short/partial Rwalk yields
-/// error.FileDoesNotExist and the newfid number is recycled. `names.len == 0`
-/// is a pure clone. [S-01 §4, `5/walk`]
+/// error.FileDoesNotExist. `names.len == 0` is a pure clone. [S-01 §4, `5/walk`]
+///
+/// Cleanup on failure (walkCleanup): a partial on the FIRST Twalk leaves newfid
+/// untouched server-side, so the number is simply recycled. But once any chunk
+/// fully succeeds the server holds newfid at an intermediate node; a later
+/// failure must release it with a best-effort Tclunk, and the number is only
+/// recycled if that clunk is acknowledged (otherwise it is burned, never handed
+/// out again, so a still-live server fid can never collide).
 pub fn walk(self: *Client, fid: u32, names: []const []const u8) Error!FidInfo {
     const newfid = self.allocFid();
-    errdefer self.freeFid(newfid);
+    var established = false; // has any Twalk chunk fully succeeded?
+    errdefer self.walkCleanup(newfid, established);
 
     var final_qid: Qid = self.fids.get(fid) orelse .{ .path = 0 };
     var clone_from = fid;
@@ -273,6 +281,7 @@ pub fn walk(self: *Client, fid: u32, names: []const []const u8) Error!FidInfo {
                 if (rw.nwqid != chunk_len) return error.FileDoesNotExist; // partial
                 final_qid = rw.wqid[chunk_len - 1];
                 clone_from = newfid; // later chunks walk newfid in place
+                established = true;
                 remaining = remaining[chunk_len..];
             },
             else => return error.ProtocolError,
@@ -290,6 +299,28 @@ pub fn walk(self: *Client, fid: u32, names: []const []const u8) Error!FidInfo {
     }
     try self.fids.put(self.allocator, newfid, final_qid);
     return .{ .fid = newfid, .qid = final_qid };
+}
+
+/// Release the tentative newfid of a failed walk. If it was never established
+/// server-side, just recycle the number. Otherwise send a best-effort Tclunk
+/// and recycle the number only if the server acknowledges — else burn it.
+fn walkCleanup(self: *Client, newfid: u32, established: bool) void {
+    if (!established) {
+        self.freeFid(newfid);
+        return;
+    }
+    if (self.clunkQuiet(newfid)) self.freeFid(newfid);
+    // clunk failed ⇒ the server may still hold newfid: burn the number.
+}
+
+/// Send Tclunk(fid) and report whether the server acknowledged it. Never frees
+/// the fid number (the caller decides based on the result) and never surfaces
+/// an error — used only for best-effort cleanup.
+fn clunkQuiet(self: *Client, fid: u32) bool {
+    const reply = self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .tclunk = .{ .fid = fid },
+    } }) catch return false;
+    return reply.body == .rclunk;
 }
 
 /// Open `fid` for `mode` (an OREAD/OWRITE/... constant). The server tracks the
@@ -552,6 +583,44 @@ test "client: partial walk recycles fid" {
     // newfid allocated here is 0 (next_fid started at 0).
     try testing.expectError(error.FileDoesNotExist, client.walk(5, &.{ "a", "b" }));
     // The newfid number was recycled and no fid was established locally.
+    try testing.expect(!client.fids.contains(0));
+    try testing.expectEqual(@as(u32, 0), client.allocFid());
+    // A first-Twalk partial leaves newfid untouched server-side: no Tclunk.
+    // Only the Tversion and the single Twalk were sent.
+    try testing.expectEqual(@as(usize, 2), st.sent.items.len);
+    try testing.expectEqual(msg.Kind.twalk, (try st.sentMsg(1)).body.kind());
+}
+
+test "client: walk: multi-chunk partial clunks established newfid" {
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    // 20 names ⇒ two Twalks: 16 (chunk 1) then 4 (chunk 2). No version call, so
+    // the first sent frame is the Twalk and newfid == 0.
+    const names: [20][]const u8 = @splat("x");
+
+    // Chunk 1 fully succeeds: newfid is now established server-side.
+    const full: [MAXWELEM]Qid = @splat(.{ .path = 7, .qtype = .{ .dir = true } });
+    try st.pushReply(.{ .tag = 0, .body = .{ .rwalk = Body.Rwalk.init(&full) } });
+    // Chunk 2 requests 4 but the server returns only 2 qids: a partial walk.
+    try st.pushReply(.{ .tag = 1, .body = .{ .rwalk = Body.Rwalk.init(&.{
+        Qid{ .path = 8, .qtype = .{ .dir = true } },
+        Qid{ .path = 9 },
+    }) } });
+    // The best-effort cleanup Tclunk(newfid) is acknowledged.
+    try st.pushReply(.{ .tag = 2, .body = .rclunk });
+
+    try testing.expectError(error.FileDoesNotExist, client.walk(3, &names));
+
+    // Three frames were sent: Twalk, Twalk, and the cleanup Tclunk. The third
+    // is a Tclunk for the newfid used in the walks (0).
+    try testing.expectEqual(@as(usize, 3), st.sent.items.len);
+    const clunk_msg = try st.sentMsg(2);
+    try testing.expectEqual(msg.Kind.tclunk, clunk_msg.body.kind());
+    try testing.expectEqual(@as(u32, 0), clunk_msg.body.tclunk.fid);
+    // Because the clunk succeeded, the number is recycled and handed out again.
     try testing.expect(!client.fids.contains(0));
     try testing.expectEqual(@as(u32, 0), client.allocFid());
 }
