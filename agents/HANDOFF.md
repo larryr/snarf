@@ -17,11 +17,16 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## Environment & account facts (verified 2026-07-19)
 
-- **GitHub App permissions**: the Claude integration token for `larryr` has Contents
-  (push, branches API) but **no Pull requests permission** — PR create/list/merge via API
-  fail 403/404. PRs must be opened by the user in the GitHub UI; merges can be done by
-  pushing a git merge commit (GitHub then flips an open PR to Merged). Re-test
-  occasionally in case the grant lands.
+- **GitHub App permissions (remote sessions)**: the Claude integration token for `larryr`
+  has Contents (push, branches API) but **no Pull requests permission** — PR
+  create/list/merge via API fail 403/404. PRs must be opened by the user in the GitHub UI;
+  merges can be done by pushing a git merge commit (GitHub then flips an open PR to
+  Merged). Re-test occasionally in case the grant lands.
+- **Local `gh` (larry's Mac) 2026-07-19**: `gh` 2.96.0, authed as `larryr` via keyring
+  (ssh git protocol), personal token scopes `repo`/`read:org`/`gist`/`admin:public_key`.
+  Unlike the remote App token, this has full `repo` scope, so PR create/list/merge work
+  locally. Note: `gh auth status` fails ("not logged in") when run in a sandbox without
+  keyring access — that's a sandbox artifact, not a real logout.
 - **Self-approval**: GitHub forbids approving your own PR; don't promise an "approve" step.
 - **Remote-session repo scope**: sessions only reach repos attached at start or added via
   `add_repo`; `add_repo` is same-owner-only (v1) — third-party repos must be forked to
