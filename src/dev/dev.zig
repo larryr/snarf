@@ -4,6 +4,7 @@
 const std = @import("std");
 
 pub const draw = @import("draw.zig");
+pub const draw_backend = @import("draw_backend.zig");
 
 test {
     std.testing.refAllDecls(@This());
