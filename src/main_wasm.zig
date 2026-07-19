@@ -108,7 +108,7 @@ fn boot() !void {
     // Scene: white ground, a black solid, the wrapped text through the frame.
     try a.display.image.draw(draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height)), &a.display.white, null, .{});
     a.black = try a.display.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    a.text = core.Text.init(&a.file, alloc, text_rect, &a.font, &a.display.image, .{ &a.display.white, &a.display.white, &a.black, &a.black, &a.black });
+    a.text = try core.Text.init(&a.file, alloc, text_rect, &a.font, &a.display.image, .{ &a.display.white, &a.display.white, &a.black, &a.black, &a.black });
     try a.text.fill();
     try a.display.flush();
 

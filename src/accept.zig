@@ -190,7 +190,7 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     // White ground, black text; frame rect 11 chars wide (fixed 9x18 metrics).
     try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &d.white, null, .{});
     var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    var text = core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
     defer text.deinit();
     try text.fill();
     try d.flush();
