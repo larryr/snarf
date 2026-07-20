@@ -1,10 +1,11 @@
 //! fsys — the `/mnt/snarf-self` directory server (acme's `fsys.c`), served over
 //! 9P. This is the DIRECTORY half of the served tree (wave 10a-A3): the qid
 //! scheme, the root + per-window dirtabs, and attach/walk/open/dir-read/stat.
-//! Per-file read/write DELEGATES to `served/xfid.zig` (wave 10b-B3) at the
-//! `// SEAM(B3)` markers below — this file implements only what its own tests
-//! need directly: the `w_ctl` read (via `Window.ctlPrint`) and the directory
-//! machinery.
+//! Per-file read/write DELEGATES to `served/xfid.zig` (wave 10b-B3): index
+//! reads, body/tag reads (xfidutfread) and ctl/body/tag writes all call into
+//! `xfid.zig`; this file implements only what its own tests need directly —
+//! the `w_ctl` read (via `Window.ctlPrint`) and the directory machinery. The
+//! remaining `// SEAM(O21)` marker (addr/data/xdata) is still deferred.
 //!
 //! Ported from larryr/plan9port@337c6ac acme/fsys.c; cite as `fsys.c:NN`.
 //! Qid packing is dat.h:481-483; the Q enum mirrors dat.h:1-26 (v1 serves only
@@ -26,6 +27,7 @@ const ninep = @import("ninep");
 const Editor = @import("../Editor.zig");
 const Window = @import("../Window.zig");
 const cmd_window = @import("../exec/cmd_window.zig");
+const xfid = @import("xfid.zig");
 
 const Server = ninep.server.Server;
 const Fid = ninep.server.Fid;
@@ -272,11 +274,7 @@ pub const Fsys = struct {
 
         // Windowless files (fsys.c:585-590, xfid.c:300-317).
         switch (q) {
-            .index => {
-                // SEAM(B3): xfid.indexRead(self.ed, offset, buf, self.allocator) —
-                // xfidindexread (xfid.c:1090-1147). Stubbed to EOF until wave B3.
-                return 0;
-            },
+            .index => return xfid.indexRead(self.ed, offset, buf, self.allocator), // xfid.c:1090-1147
             .new => return 0, // never a real fid (walk-to-new returns the window dir)
             else => {}, // per-window file
         }
@@ -295,9 +293,7 @@ pub const Fsys = struct {
                 @memcpy(buf[0..n], avail[0..n]);
                 return n;
             },
-            // SEAM(B3): xfid.read(self, w, q, offset, buf) — xfidutfread
-            // (xfid.c:934-996) for body/tag. Stubbed until wave B3.
-            .w_body, .w_tag => return error.FileDoesNotExist,
+            .w_body, .w_tag => return xfid.read(self, w, q, offset, buf), // xfid.c:934-996
             // SEAM(O21): needs address() — xfid.c:483-502 (addr/data/xdata reads).
             .w_addr, .w_data, .w_xdata => return error.FileDoesNotExist,
             else => return error.FileDoesNotExist,
@@ -344,22 +340,18 @@ pub const Fsys = struct {
 
     // -- write (xfid.c:447-620) --------------------------------------------
 
-    /// The write dispatch shape B3 fills in. The `w->col == nil` ⇒ Edel guard
-    /// (xfid.c:465-467) is applied here before delegating. v1 stubs every arm
-    /// (my tests delete via `Column.close`, not a ctl write — R-P10-H is B3's).
-    fn writeOp(ctx: *anyopaque, _: *Server, fid: *Fid, _: u64, _: []const u8) OpError!usize {
+    /// The write dispatch: `w->col == nil` ⇒ Edel guard (xfid.c:465-467) applied
+    /// here before delegating to `xfid.write` for the ctl/body/tag arms
+    /// (xfid.c:622-844, :577-608).
+    fn writeOp(ctx: *anyopaque, _: *Server, fid: *Fid, offset: u64, data: []const u8) OpError!usize {
         const self = fsysOf(ctx);
         const id = qwin(fid.qid.path);
         const q = qfile(fid.qid.path);
         if (q == .dir) return error.PermissionDenied;
         if (id == 0) return error.PermissionDenied; // index/new not writable in v1
-        _ = self.lookid(id) orelse return error.DeletedWindow; // xfid.c:465-467 Edel guard
+        const w = self.lookid(id) orelse return error.DeletedWindow; // xfid.c:465-467 Edel guard
         return switch (q) {
-            // SEAM(B3): xfid.ctlWrite (xfid.c:622-844) — R-P10-H commands. Until
-            // then any ctl write is ill-formed.
-            .w_ctl => error.BadCtl,
-            // SEAM(B3): xfid.write body/tag append (xfid.c:577-608).
-            .w_body, .w_tag => error.FileDoesNotExist,
+            .w_ctl, .w_body, .w_tag => xfid.write(self, w, q, offset, data),
             else => error.PermissionDenied,
         };
     }
