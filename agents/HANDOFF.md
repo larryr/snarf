@@ -71,8 +71,8 @@ authorization for this file only). Prune freely — git keeps history.
   keystroke end-to-end). Contracts: phase6-input{,-ninep,-devinput,-editing}.md.
   NOTE: .claude/ is now gitignored (a git add -A once staged agent worktrees).
 - **Next planned work — USER DIRECTIVE 2026-07-19: run phases 7→8→9→10 back-to-back,
-  no boundary pauses** (reports still per phase): P7 scroll + double-click + snarf/
-  chord-cut-paste (in flight on phase7-scroll-snarf); P8 windows & chrome (Window
+  no boundary pauses** (reports still per phase): P7 DONE+MERGED (agents/reports/phase7-scroll-snarf.md: scroll/double-click/snarf/
+  chords, 290/290); P8 windows & chrome (Window
   tag+body, Column, Row, scrollbar strip, multi-Text); P9 exec & look (B2 Exectab
   builtins Cut/Paste/Snarf/Undo/New/Del..., B3 look/plumb subset); P10 Edit language
   (regx/addr/parse/cmd) + served tree (/mnt/snarf-self) start. Later: Get/Put via

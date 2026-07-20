@@ -394,3 +394,80 @@ test "phase-6: click, type, sweep — editing through the full stack" {
     // future Text-observer hook), so pixels still match FROZEN-ACCEPT-6b.
     try testing.expectEqual(@as(u64, 0x89e8596ac03dd172), hb.hash());
 }
+
+test "phase-7: double-click, chord cut, chord paste — through the full stack" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+    var back = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, 0xFFFFEAFF);
+    var high = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, 0xEEEE9EFF);
+    var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
+    try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &back, null, .{});
+
+    var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
+    defer file.deinit();
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    defer text.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.text = &text;
+
+    // Type "cut me now"; double-click "me" (chars 4..6): click twice at (60,25)
+    // within 500ms — char 4 is 'm' (x cell [56,65)).
+    for ("cut me now") |ch| try ed.handleKey(ch);
+    try ed.handleMouse(.{ .x = 60, .y = 25, .buttons = 1, .msec = 100 });
+    try ed.handleMouse(.{ .x = 60, .y = 25, .buttons = 0, .msec = 120 });
+    try ed.handleMouse(.{ .x = 60, .y = 25, .buttons = 1, .msec = 300 });
+    try testing.expectEqual(@as(usize, 4), text.q0);
+    try testing.expectEqual(@as(usize, 6), text.q1);
+
+    // Chord: with B1 still down, join B2 -> cut "me" into snarf.
+    try ed.handleMouse(.{ .x = 60, .y = 25, .buttons = 1 | 2, .msec = 340 });
+    try ed.handleMouse(.{ .x = 60, .y = 25, .buttons = 0, .msec = 380 });
+    try ed.frameEnd(d);
+    var rbuf: [64]u8 = undefined;
+    try testing.expectEqualStrings("cut  now", file.buffer.read(0, file.buffer.len(), &rbuf));
+    try testing.expectEqualStrings("me", ed.snarf.items);
+
+    // Click at end of text (char 8 cell x [92,101)... end is q=8: click far right),
+    // then chord-paste: B1 down + B3 join.
+    try ed.handleMouse(.{ .x = 110, .y = 25, .buttons = 1, .msec = 1000 });
+    try ed.handleMouse(.{ .x = 110, .y = 25, .buttons = 1 | 4, .msec = 1040 });
+    try ed.handleMouse(.{ .x = 110, .y = 25, .buttons = 0, .msec = 1080 });
+    try ed.frameEnd(d);
+    try testing.expectEqualStrings("cut  nowme", file.buffer.read(0, file.buffer.len(), &rbuf));
+    // Pasted text ends selected (selectall=TRUE): q0/q1 cover "me".
+    try testing.expectEqual(@as(usize, 8), text.q0);
+    try testing.expectEqual(@as(usize, 10), text.q1);
+    // Selection highlight visible at the pasted cells (x [92,110), row 1).
+    try testing.expectEqual(@as(u32, 0xEEEE9EFF), hb.pixelAt(93, 22));
+
+    // Undo chain: paste, cut, typing run -> empty.
+    _ = try file.undo();
+    try testing.expectEqualStrings("cut  now", file.buffer.read(0, file.buffer.len(), &rbuf));
+    _ = try file.undo();
+    try testing.expectEqualStrings("cut me now", file.buffer.read(0, file.buffer.len(), &rbuf));
+    _ = try file.undo();
+    try testing.expectEqual(@as(usize, 0), file.buffer.len());
+
+    // FROZEN-ACCEPT-7: acme palette, "cut  nowme" with the pasted word
+    // selected. Frozen 2026-07-19 after spot-checks (R-P2-7).
+    try testing.expectEqual(@as(u64, 0x5b816c29a0ad026f), hb.hash());
+}
