@@ -154,6 +154,10 @@ fn boot() !void {
     // point-to-type, gestures pin to their Text, the wheel scrolls under-pointer.
     a.editor = core.Editor.init(alloc);
     a.editor.row = a.tree.row;
+    // Bind the B2/B3 colored-sweep solids from Chrome (acme.c:1084-1085); the core
+    // falls back to f.col(.high) when these are null (R-P9-12).
+    a.editor.but2col = a.tree.chrome.but2col;
+    a.editor.but3col = a.tree.chrome.but3col;
 
     // ---- input stack: devinput ← server ← client (the devdraw pattern) ----
     a.devinput = DevInput.init(alloc);
