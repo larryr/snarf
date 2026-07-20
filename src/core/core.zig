@@ -24,6 +24,19 @@ pub const served = struct {
     pub const fsys = @import("served/fsys.zig");
 };
 
+/// The Edit command language (phase 10, `src/core/edit/`). Seeded here so the
+/// module's colocated tests are collected by `zig build test`. Wave 10a-A2 lands
+/// `ast` + `parse`; wave 10a-A1 (Regx) and later waves (addr/cmd/loop/Elog) extend
+/// this namespace — the concurrent seeds are orchestrator-merged (like the Editor
+/// field merge, R-P10-5). FLAG: A1 and A2 both introduce `pub const edit`.
+pub const edit = struct {
+    pub const ast = @import("edit/ast.zig");
+    pub const parse = @import("edit/parse.zig");
+    test {
+        std.testing.refAllDecls(@This());
+    }
+};
+
 test {
     std.testing.refAllDecls(@This());
     // Pull the served-tree test blocks into this module's test binary (the
