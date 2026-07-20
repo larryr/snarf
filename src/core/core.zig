@@ -13,6 +13,7 @@ pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
+pub const exec = @import("exec/exec.zig");
 
 test {
     std.testing.refAllDecls(@This());
