@@ -32,6 +32,7 @@ pub const served = struct {
 pub const edit = struct {
     pub const ast = @import("edit/ast.zig");
     pub const parse = @import("edit/parse.zig");
+    pub const addr = @import("edit/addr.zig");
     test {
         std.testing.refAllDecls(@This());
     }
