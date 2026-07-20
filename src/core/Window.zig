@@ -18,6 +18,7 @@ const Chrome = @import("Chrome.zig");
 const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
+const Column = @import("Column.zig");
 
 const Window = @This();
 const Rect = draw.Rect;
@@ -34,10 +35,11 @@ r: Rect,
 /// First tag line, for the collapsed-tag hit region (dat.h:275; wind.c:38).
 tagtop: Rect,
 id: u32,
-/// The owning `Column`. TYPED `?*anyopaque` in wave 1 because `Column` is a
-/// wave-2 file; W2 retypes this to `?*Column` when it lands (it is a stored
-/// back-pointer only, untouched by any wave-1 method).
-col: ?*anyopaque = null,
+/// The owning `Column` (wave-2, retyped from the wave-1 `?*anyopaque`
+/// placeholder). A stored back-pointer only; `Column.add` sets it. The
+/// `Window`↔`Column` import cycle is intended and legal in Zig, the same
+/// precedent as the `Window`↔`Text` cycle above.
+col: ?*Column = null,
 /// Tag height in lines — fixed at 1 this phase (R-P8-1; `wintaglines` is later).
 taglines: i32 = 1,
 maxlines: usize = 0,
