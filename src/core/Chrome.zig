@@ -56,6 +56,10 @@ pub const palette = struct {
     pub const mod_blue: Color = 0x000099FF;
     /// DPurpleblue (acme.c:1082) — the column/row tag button.
     pub const col_button: Color = 0x8888CCFF;
+    /// but2col — the B2 sweep highlight, dark red (acme.c:1084).
+    pub const but2: Color = 0xAA0000FF;
+    /// but3col — the B3 sweep highlight, dark green (acme.c:1085).
+    pub const but3: Color = 0x006600FF;
 };
 
 allocator: std.mem.Allocator,
@@ -71,6 +75,8 @@ body_high_img: Image,
 body_bord_img: Image,
 mod_blue_img: Image,
 colbutton_img: Image,
+but2_img: Image,
+but3_img: Image,
 
 // Drawable handles (`*Image`, readable through a `*const Chrome`). TEXT/HTEXT and
 // window/column border fills are all display black (acme.c:1047-1055,1069).
@@ -80,6 +86,10 @@ white: *Image,
 mod_blue: *Image,
 /// Column/row tag button fill (acme.c:1082).
 colbutton: *Image,
+/// B2 sweep highlight — dark red (acme.c:1084, dat.c:25).
+but2col: *Image,
+/// B3 sweep highlight — dark green (acme.c:1085, dat.c:26).
+but3col: *Image,
 
 /// Color slots for a tag/columntag/rowtag frame (`Frame.ColorSlot` order:
 /// back, high, bord, text, htext) — acme `tagcols` (acme.c:1044-1048).
@@ -106,8 +116,12 @@ pub fn init(allocator: std.mem.Allocator, display: *Display, font: *Font) Displa
     c.body_bord_img = try solid(display, chan, palette.body_bord);
     c.mod_blue_img = try solid(display, chan, palette.mod_blue);
     c.colbutton_img = try solid(display, chan, palette.col_button);
+    c.but2_img = try solid(display, chan, palette.but2);
+    c.but3_img = try solid(display, chan, palette.but3);
     c.mod_blue = &c.mod_blue_img;
     c.colbutton = &c.colbutton_img;
+    c.but2col = &c.but2_img;
+    c.but3col = &c.but3_img;
     c.tag_cols = .{ &c.tag_back_img, &c.tag_high_img, &c.tag_bord_img, c.black, c.black };
     c.body_cols = .{ &c.body_back_img, &c.body_high_img, &c.body_bord_img, c.black, c.black };
     return c;
@@ -123,6 +137,8 @@ pub fn deinit(c: *Chrome) void {
     c.body_bord_img.free() catch {};
     c.mod_blue_img.free() catch {};
     c.colbutton_img.free() catch {};
+    c.but2_img.free() catch {};
+    c.but3_img.free() catch {};
     c.allocator.destroy(c);
 }
 
@@ -199,4 +215,19 @@ test "chrome: init builds the color slots and button rect" {
 
     // buttonRect is Scrollwid × (height+1) for the 9x18 font (acme.c:1058).
     try testing.expectEqual(draw.proto.Rect.make(0, 0, 12, 19), c.buttonRect());
+}
+
+test "chrome: but2/but3 sweep colors match iconinit" {
+    // dark red / dark green, allocimage'd in iconinit (acme.c:1084-1085).
+    try testing.expectEqual(@as(u32, 0xAA0000FF), palette.but2);
+    try testing.expectEqual(@as(u32, 0x006600FF), palette.but3);
+
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    const c = try Chrome.init(testing.allocator, fx.disp, fx.font);
+    defer c.deinit();
+
+    // The handles point at the owned solids (dat.c:25-26 extern into iconinit).
+    try testing.expectEqual(&c.but2_img, c.but2col);
+    try testing.expectEqual(&c.but3_img, c.but3col);
 }
