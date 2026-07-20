@@ -48,7 +48,12 @@ fn rowOf(et: *Text) ?*Row {
 /// hand it to the Column (which takes ownership, `owns_body`, R-P9-5), set the
 /// name, compose the tag (`setTag1`), park the caret at the tag end, and fill both
 /// frames. This is the seam the namespace phase's `openfile` replaces.
-fn makeWindow(c: *Column, name: []const u8) Text.Error!*Window {
+///
+/// `pub` per ruling R-P10-I (agents/contracts/phase10-served.md): the served
+/// tree's walk-to-`new` (`served/fsys.zig`) calls this directly — there is no
+/// `cnewwindow` channel, so a 9P walk mints a window through the same helper New
+/// uses (column chosen by the caller: `ed.seltext`'s, else the first column).
+pub fn makeWindow(c: *Column, name: []const u8) Text.Error!*Window {
     const a = c.chrome.allocator;
     const f = try a.create(File);
     var transferred = false;

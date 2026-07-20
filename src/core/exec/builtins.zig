@@ -20,6 +20,7 @@ const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
 const cmd_edit = @import("cmd_edit.zig");
 const cmd_window = @import("cmd_window.zig");
+const edit = @import("../edit/edit.zig");
 
 /// One `exectab` row (exec.c:59-67). `fn_` is the C's `void (*fn)(Text*, Text*,
 /// Text*, int, int, Rune*, int)` reshaped to the port's call convention: `ed` is
@@ -53,6 +54,9 @@ pub const exectab = [_]Entry{
     .{ .name = "Del", .fn_ = cmd_window.del, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:102 (flag2 XXX unused)
     .{ .name = "Delcol", .fn_ = cmd_window.delcol, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:103 (flag1/flag2 XXX unused)
     .{ .name = "Delete", .fn_ = cmd_window.del, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:104 (flag2 XXX unused; free twin of Del)
+    // exec.c:106 — Edit manages its own transaction (seq++ in the builtin,
+    // File.mark lazily in the first Elog.apply), so mark=FALSE (R-P10-8).
+    .{ .name = "Edit", .fn_ = edit.builtin, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:106
     .{ .name = "New", .fn_ = cmd_window.new, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:117 (flag1/flag2 XXX unused)
     .{ .name = "Newcol", .fn_ = cmd_window.newcol, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:118 (flag1/flag2 XXX unused)
     // exec.c:119 — flag2 is the C's XXX==2, TRUTHY (dat.h:488-493): tobody=TRUE is
@@ -65,17 +69,20 @@ pub const exectab = [_]Entry{
 
 test "builtins: table shape and flags match exec.c" {
     const testing = std.testing;
-    try testing.expectEqual(@as(usize, 10), exectab.len);
-    // Alphabetical order (exec.c:98-130 subset).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "New", "Newcol", "Paste", "Redo", "Snarf", "Undo" };
+    // Grew by one row (R-P10-8): Edit sits alphabetically between Delete and New.
+    try testing.expectEqual(@as(usize, 11), exectab.len);
+    // Alphabetical order (exec.c:98-130 subset + Edit at :106).
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Edit", "New", "Newcol", "Paste", "Redo", "Snarf", "Undo" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
     // Cut marks + snarfs + cuts; Snarf marks NOT, snarfs, does not cut.
     try testing.expect(exectab[0].mark and exectab[0].flag1 and exectab[0].flag2); // Cut
-    try testing.expect(!exectab[8].mark and exectab[8].flag1 and !exectab[8].flag2); // Snarf
+    try testing.expect(!exectab[9].mark and exectab[9].flag1 and !exectab[9].flag2); // Snarf
     // Paste's flag2 (tobody) is the truthy XXX.
-    try testing.expect(exectab[6].mark and exectab[6].flag1 and exectab[6].flag2); // Paste
+    try testing.expect(exectab[7].mark and exectab[7].flag1 and exectab[7].flag2); // Paste
     // Undo/Redo differ only in flag1 (isundo).
-    try testing.expect(exectab[9].flag1 and !exectab[7].flag1); // Undo vs Redo
+    try testing.expect(exectab[10].flag1 and !exectab[8].flag1); // Undo vs Redo
     // Delete = Del with flag1 (skip-clean twin).
     try testing.expect(exectab[3].flag1 and !exectab[1].flag1);
+    // Edit manages its own seq, so it never marks (R-P10-8).
+    try testing.expect(!exectab[4].mark and std.mem.eql(u8, exectab[4].name, "Edit"));
 }

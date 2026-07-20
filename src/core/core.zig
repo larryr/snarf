@@ -14,7 +14,40 @@ pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const exec = @import("exec/exec.zig");
+// Edit language (phase 10). One public type per line, matching the flat style
+// above; later 10x waves add ast/parse/addr/Elog/cmd here.
+pub const Regx = @import("edit/Regx.zig");
+
+/// The `/mnt/snarf-self` served tree (S-07 §4). `fsys` is the directory server
+/// half (wave 10a-A3); `xfid` (the per-file read/write half) joins in wave 10b-B3.
+pub const served = struct {
+    pub const fsys = @import("served/fsys.zig");
+};
+
+/// The Edit command language (phase 10, `src/core/edit/`). Seeded here so the
+/// module's colocated tests are collected by `zig build test`. Wave 10a-A2 lands
+/// `ast` + `parse`; wave 10a-A1 (Regx) and later waves (addr/cmd/loop/Elog) extend
+/// this namespace — the concurrent seeds are orchestrator-merged (like the Editor
+/// field merge, R-P10-5). FLAG: A1 and A2 both introduce `pub const edit`.
+pub const edit = struct {
+    pub const ast = @import("edit/ast.zig");
+    pub const parse = @import("edit/parse.zig");
+    pub const addr = @import("edit/addr.zig");
+    pub const Elog = @import("edit/Elog.zig");
+    pub const cmd = @import("edit/cmd.zig");
+    pub const loop = @import("edit/loop.zig");
+    // The entry point (edit.c's `editcmd`/`edit` builtin, wave 10c). Named `entry`
+    // so it doesn't collide with the enclosing `edit` namespace.
+    pub const entry = @import("edit/edit.zig");
+    test {
+        std.testing.refAllDecls(@This());
+    }
+};
 
 test {
     std.testing.refAllDecls(@This());
+    // Pull the served-tree test blocks into this module's test binary (the
+    // exec.zig / Text.zig convention — refAllDecls does not recurse into the
+    // `served` namespace struct's imports).
+    _ = @import("served/fsys.zig");
 }

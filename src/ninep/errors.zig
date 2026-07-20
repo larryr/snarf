@@ -38,6 +38,15 @@ pub const OpError = error{
     BadIndex,
     WriteOutside,
     BadWriteImage,
+    // Served-tree (acme fsys) errors (S-07 §4; ruling R-P10-B in
+    // agents/contracts/phase10-served.md). [ref: acme/xfid.c:20-21]
+    DeletedWindow,
+    BadCtl,
+    // ctl `del` on a dirty window (wave 10b-B3 amendment, agents/contracts/
+    // phase10-served.md R-P10-H): the two-strike clean refusal message, kept
+    // distinct from the generic `BadCtl` since it is not an ill-formed
+    // message. [ref: acme/xfid.c:764]
+    FileDirty,
     Other,
 };
 
@@ -66,6 +75,9 @@ pub fn errorString(e: OpError) []const u8 {
         error.BadIndex => "character index out of range",
         error.WriteOutside => "writeimage outside image",
         error.BadWriteImage => "bad writeimage call",
+        error.DeletedWindow => "deleted window",
+        error.BadCtl => "ill-formed control message",
+        error.FileDirty => "file dirty",
         error.Other => "i/o error",
     };
 }
@@ -96,6 +108,9 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "character index out of range")) return error.BadIndex;
     if (eq(u8, s, "writeimage outside image")) return error.WriteOutside;
     if (eq(u8, s, "bad writeimage call")) return error.BadWriteImage;
+    if (eq(u8, s, "deleted window")) return error.DeletedWindow;
+    if (eq(u8, s, "ill-formed control message")) return error.BadCtl;
+    if (eq(u8, s, "file dirty")) return error.FileDirty;
     return error.Other;
 }
 
@@ -124,6 +139,9 @@ test "errors: round-trip every member" {
         error.BadIndex,
         error.WriteOutside,
         error.BadWriteImage,
+        error.DeletedWindow,
+        error.BadCtl,
+        error.FileDirty,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));

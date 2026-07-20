@@ -180,7 +180,7 @@ assets/fonts/                subfont assets (S-03 §4)
 | C file | → Zig | Notes |
 |--------|-------|-------|
 | `acme.c` | `core/boot.zig`, `core/Editor.zig`, `dev/input.zig` | mouse/keyboard threads become devinput; waitthread has no equivalent (no processes) |
-| `addr.c` | `core/edit/addr.zig` | |
+| `addr.c` | `core/edit/addr.zig` | the file NAME maps here, but phase 10 fills addr.zig with `ecmd.c`'s address-evaluation half (`cmdaddress`/`lineaddr`/`charaddr`/`nextmatch`); acme's `addr.c` proper is the xfid/B3 incremental string evaluator and joins in the external-clients phase |
 | `buff.c` | `core/Buffer.zig` | piece table replaces block cache (S-05 §1) |
 | `cols.c` | `core/Column.zig` | |
 | `dat.c` | `core/Editor.zig` | globals → context fields (P-3) |
@@ -212,7 +212,9 @@ assets/fonts/                subfont assets (S-03 §4)
 
 Allowed imports (anything not listed is a review error; no cycles by construction):
 
-- `core/*` → `draw/*`, `ninep/client|mount|msg`, `std`
+- `core/*` → `draw/*`, `ninep/client|mount|msg`, `std`; additionally
+  `core/served/*` → `ninep/server` (§4 and §5 always planned `core/served/fsys.zig`
+  riding `ninep/server.zig`; its omission from this list was an oversight)
 - `draw/*` → `ninep/client|msg`, `std`
 - `ninep/*` → `std` only
 - `dev/*` → `ninep/server|msg`, `shim/*`, `std`
@@ -237,3 +239,8 @@ Diagram source: [diagrams/module-deps.puml](diagrams/module-deps.puml)
 | §3 P-1..P-10 | R-CON-01 (std-only), R-CON-02 (native testability), R-OV-03 (boundary) |
 | §4–§5 tree & mapping | S-00 §3 (owns the detail now) |
 | §6 dependency rules | R-OV-03, R-CON-02 |
+
+> Revision log: 2026-07-20 — §5 `addr.c` mapping note (phase 10 fills `addr.zig`
+> from ecmd.c's cmdaddress family; acme's addr.c proper comes with external
+> clients) and §6 `core/served/* → ninep/server` line added (both per phase-10
+> contract R-P10-9, agents/contracts/phase10-edit.md).
