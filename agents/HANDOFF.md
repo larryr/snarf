@@ -70,14 +70,25 @@ authorization for this file only). Prune freely — git keeps history.
   T-1 run-scoped undo grouping; the Editor loop. 259/259 + smoke 14/14 (injected
   keystroke end-to-end). Contracts: phase6-input{,-ninep,-devinput,-editing}.md.
   NOTE: .claude/ is now gitignored (a git add -A once staged agent worktrees).
-- **Next planned work — USER DIRECTIVE 2026-07-19: run phases 7→8→9→10 back-to-back,
-  no boundary pauses** (reports still per phase): P7 DONE+MERGED (agents/reports/phase7-scroll-snarf.md: scroll/double-click/snarf/
-  chords, 290/290); P8 DONE+MERGED (agents/reports/phase8-windows.md: full chrome, point-to-type per
-  acme default — R-P8-9, 317/317); P9 exec & look (B2 Exectab
-  builtins Cut/Paste/Snarf/Undo/New/Del..., B3 look/plumb subset); P10 Edit language
-  (regx/addr/parse/cmd) + served tree (/mnt/snarf-self) start. Later: Get/Put via
-  namespace, Dump/Load, Worker+SAB, touch profile, /dev/snarf clipboard. Also
-  outstanding: CI (S-06 §5); wasm size watch (1.08 MiB).
+- **Phase 9 (exec & look) MERGED to `main` (2150b11)**
+  (agents/reports/phase9-exec-look.md): B2 executes the 10-builtin Exectab
+  (Cut/Del/Delcol/Delete/New/Newcol/Paste/Redo/Snarf/Undo; et/seltext routing,
+  2-1 argument chord), B3 literal search w/ wraparound (core/look.zig), shared
+  xselect colored sweeps (B2 red/B3 green), live tags (frameEnd sweep, R-P9-4),
+  two-strike Del, colclose/rowclose regrowth. 369/369 + smoke 14/14.
+  Contracts: phase9-{exec-look,exec,look}.md (R-P9-1..13; R-P9-13 = Row.close
+  takes `ed` for dropTextRefs — B1-agent-flagged contract defect, patched).
+  FROZEN-ACCEPT-8 re-frozen 0x9816211a7aca91d7 (live-tag Undo); FROZEN-ACCEPT-9
+  = 0xb52b86b54d50d100. Debt: Editor.zig ~1743 lines (carve gesture machine out
+  next structural pass); getArg raw-bytes until namespace `expand`.
+- **Next planned work — USER DIRECTIVE 2026-07-19/20: run phases back-to-back to
+  P10 completion, no boundary pauses** (reports still per phase): P7 DONE+MERGED
+  (290/290); P8 DONE+MERGED (point-to-type per acme default — R-P8-9, 317/317);
+  P9 DONE+MERGED (above); **P10 IN PROGRESS**: Edit language (regx/addr/parse/cmd
+  per S-05 §5) + served tree (/mnt/snarf-self) start. Later: Get/Put via
+  namespace, Dump/Load, Worker+SAB, touch profile, /dev/snarf clipboard, Zerox
+  (multi-Text-per-File), Sort, Exit, Shift-B3 reverse look wiring. Also
+  outstanding: CI (S-06 §5); wasm size watch (1258.5 KiB after P9).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
