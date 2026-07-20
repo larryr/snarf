@@ -15,6 +15,16 @@ pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const exec = @import("exec/exec.zig");
 
+/// The `/mnt/snarf-self` served tree (S-07 §4). `fsys` is the directory server
+/// half (wave 10a-A3); `xfid` (the per-file read/write half) joins in wave 10b-B3.
+pub const served = struct {
+    pub const fsys = @import("served/fsys.zig");
+};
+
 test {
     std.testing.refAllDecls(@This());
+    // Pull the served-tree test blocks into this module's test binary (the
+    // exec.zig / Text.zig convention — refAllDecls does not recurse into the
+    // `served` namespace struct's imports).
+    _ = @import("served/fsys.zig");
 }
