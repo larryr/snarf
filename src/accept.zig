@@ -728,3 +728,102 @@ test "phase-9: B3 look scene — click cycles occurrences with wraparound" {
     try testing.expect(t.q0 >= t.org and t.q0 < t.org + t.fr.nchars);
     try ed.frameEnd(d);
 }
+
+test "phase-10: served tree scene" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const draw_pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer draw_pipe.deinit();
+    var draw_srv = try ninep.server.Server.init(alloc, draw_pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer draw_srv.deinit();
+    var draw_cl = try ninep.Client.init(alloc, draw_pipe.clientEnd(), 8192);
+    defer draw_cl.deinit();
+    draw_cl.pump = .{ .ctx = &draw_srv, .run = pumpServer };
+    _ = try draw_cl.version(8192);
+    const droot = try draw_cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &draw_cl, droot.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    // The window tree this session's served fsys exposes — a single "one"
+    // window, exactly the phase10-served side contract's shape.
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "hello\n",
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    // A SECOND pipe/server/client pair serves `/mnt/snarf-self` (R-P10-E: no
+    // runtime mount in v1 — this acceptance IS the client, through
+    // Client + Namespace, per side contract §3.2).
+    var fsys = core.served.fsys.Fsys.init(&ed);
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &core.served.fsys.Fsys.ops, &fsys, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+
+    var ns = ninep.mount.Namespace.init(alloc);
+    defer ns.deinit();
+    try ns.mount("/mnt/snarf-self", &cl, root.fid);
+
+    // Resolve + walk to "index", read it, and confirm the one booted window
+    // shows up with its live tag.
+    const rindex = try ns.resolve("/mnt/snarf-self/index");
+    try testing.expectEqualStrings("index", rindex.remainder);
+    const idx = try cl.walk(rindex.entry.target.root_fid, &.{rindex.remainder});
+    _ = try cl.open(idx.fid, ninep.msg.OREAD);
+    var ibuf: [512]u8 = undefined;
+    const in = try cl.read(idx.fid, 0, &ibuf);
+    try cl.clunk(idx.fid);
+
+    const w = tree.row.col.items[0].w.items[0];
+    try testing.expectEqual(@as(u32, 1), w.id);
+    var idcol: [16]u8 = undefined;
+    const idprefix = try std.fmt.bufPrint(&idcol, "{d:>11} ", .{w.id});
+    try testing.expect(std.mem.startsWith(u8, ibuf[0..in], idprefix));
+    try testing.expect(std.mem.indexOf(u8, ibuf[0..in], "one Del Snarf") != null);
+
+    // Walk to <id>/ctl and <id>/body, read both.
+    var idbuf: [16]u8 = undefined;
+    const idname = try std.fmt.bufPrint(&idbuf, "{d}", .{w.id});
+    const rctl = try ns.resolve("/mnt/snarf-self");
+    const ctl = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "ctl" });
+    _ = try cl.open(ctl.fid, ninep.msg.ORDWR);
+    var cbuf: [128]u8 = undefined;
+    const cn = try cl.read(ctl.fid, 0, &cbuf);
+    try testing.expect(std.mem.startsWith(u8, cbuf[0..cn], idprefix));
+
+    const body = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "body" });
+    _ = try cl.open(body.fid, ninep.msg.OREAD);
+    var bbuf: [64]u8 = undefined;
+    const bn = try cl.read(body.fid, 0, &bbuf);
+    try testing.expectEqualStrings("hello\n", bbuf[0..bn]);
+    try cl.clunk(body.fid);
+
+    // Dirty the body directly (a recorded edit), then write ctl "clean" and
+    // watch the SERVED tree's own file mutate: dirty/mod flags clear.
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "X", true);
+    try testing.expect(w.dirty);
+
+    const wn = try cl.write(ctl.fid, 0, "clean\n");
+    try testing.expectEqual(@as(usize, 6), wn);
+    try testing.expect(!w.dirty);
+    try testing.expect(!w.body.file.mod);
+    try cl.clunk(ctl.fid);
+}
