@@ -66,11 +66,22 @@ text: ?*Text = null,
 /// When non-null, `hitTest` walks the real Row/Column/Window chrome; when null,
 /// it falls back to `text` (above). Bound by the adapter after `boot`.
 row: ?*Row = null,
-/// The Text the pointer last selected/focused — acme's `argtext`/`seltext`
-/// bookkeeping (acme.c:648-651), NOT the key-routing target (R-P8-9 routes keys
-/// by the pointer, not focus). Used only as `handleKey`'s fallback when the
-/// pointer is over no Text.
+/// `handleKey`'s keyboard fallback ONLY: the Text keys go to when the pointer is
+/// over no Text (R-P8-9 types by the pointer, not focus). This is NOT acme's
+/// `argtext`/`seltext` — those are the distinct fields below (R-P9-3) and diverge
+/// from `focus` (Snarf reassigns `argtext`, exec.c:1013; a B3 search hit sets
+/// `seltext`, look.c:375/427).
 focus: ?*Text = null,
+/// acme's `seltext` (acme.c:657; look.c:96): the last B1-selected Text — the
+/// command's default target that `execute` marks and routes to (exec.c:236-244);
+/// a search hit also sets it (look.c:375/427). Written by the B1 press (9d),
+/// cleared by `dropTextRefs` (9b) when its window dies.
+seltext: ?*Text = null,
+/// acme's `argtext` (acme.c:656; exec.c:1013): the 2-1 chord's argument source —
+/// the last B1-selected Text, except Snarf reassigns it to its own target. Read
+/// by `getArg` (9c); written by the B1 press (9d) and Snarf; cleared by
+/// `dropTextRefs`.
+argtext: ?*Text = null,
 /// The Text a mouse gesture is PINNED to, captured at B1-down and held until all
 /// buttons release (R-P8-11). While non-null every mouse sample routes here
 /// unconditionally, so a chord that drifts off the window still edits the Text it
@@ -88,6 +99,11 @@ scroll_but: u8 = 0,
 /// The snarf buffer: Editor-owned UTF-8 (R-P7-5, vs the C's Rune `snarfbuf`).
 /// Captured via chunked `Buffer.read` so U+FFFD semantics match `captureText`.
 snarf: std.ArrayList(u8) = .empty,
+/// v1 warning sink (R-P9-6): `warning()` appends formatted lines here. acme's
+/// `warning()` writes the `+Errors` window (util.c:259+) via `flushwarnings` —
+/// that needs the served namespace, so v1 buffers on the Editor. FLAG: rewire to
+/// +Errors in the served-tree phase.
+warnings: std.ArrayList(u8) = .empty,
 /// Mouse gesture state (`textselect`, text.c:1001-1099):
 ///   * `idle`          — between gestures.
 ///   * `sweeping_b1`   — B1 down, extending a selection (frselect loop body).
@@ -119,7 +135,18 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 
 pub fn deinit(self: *Editor) void {
     self.snarf.deinit(self.allocator);
+    self.warnings.deinit(self.allocator);
     self.* = undefined;
+}
+
+/// `warning` (util.c:259+), v1 sink (R-P9-6): append a formatted line to
+/// `ed.warnings`. A warning must NEVER fail a command — OOM silently drops the
+/// message (the two-strike Del works regardless: the strike is `w.dirty=false`,
+/// not the message). The +Errors window / `flushwarnings` path is deferred.
+pub fn warning(ed: *Editor, comptime fmt: []const u8, args: anytype) void {
+    const line = std.fmt.allocPrint(ed.allocator, fmt, args) catch return;
+    defer ed.allocator.free(line);
+    ed.warnings.appendSlice(ed.allocator, line) catch {};
 }
 
 /// True when device point `(x,y)` lies inside the half-open rect `r`.

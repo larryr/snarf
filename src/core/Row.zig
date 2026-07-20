@@ -38,6 +38,10 @@ tag_file: File,
 /// The columns, left to right. Heap-created pointers (stability §7-8), owned by
 /// the Row (freed by `deinit`).
 col: std.ArrayList(*Column) = .empty,
+/// Running window id — the C's global `winid`, moved here (R-P9-5) so it is
+/// reachable from the Editor via `ed.row`, letting New/Newcol mint ids
+/// mid-session. `Column.add` pre-increments it (the C's `++winid`).
+winid: u32 = 0,
 chrome: *const Chrome,
 
 /// `rowinit` (rows.c:25-48): white fill, a `rowtag` `Text` over the top
@@ -52,6 +56,7 @@ pub fn init(row: *Row, chrome: *const Chrome, r: Rect) Error!void {
     row.chrome = chrome;
     row.r = r; // rows.c:32
     row.col = .empty; // rows.c:33-34 row->col = nil / row->ncol = 0
+    row.winid = 0; // the C's global winid seed (field default doesn't apply to create()+init)
 
     try screen.draw(r, chrome.white, null, .{}); // rows.c:31 white fill
 
