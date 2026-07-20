@@ -76,9 +76,9 @@ pub fn setSelect(t: *Text, q0: usize, q1: usize) Text.Error!void {
     f.p1 = p1;
 }
 
-/// `textselect` setup (text.c:1017-1037, minus double-click + scroll): drop the
-/// anchor at `mp` and begin a live sweep. Double-click word/line expansion is a
-/// deferred SEAM (phase 7 — `Text.last_click_*`).
+/// `textselect` setup (text.c:1017-1037, minus scroll): drop the anchor at `mp`
+/// and begin a live sweep. Double-click word/line expansion is driven at
+/// press-time by the Editor via `doubleClick` (below) keyed on `Text.last_click`.
 pub fn selectBegin(t: *Text, mp: Point) Text.Error!void {
     t.sel = try t.fr.selectBegin(mp);
 }
@@ -98,6 +98,97 @@ pub fn selectEnd(t: *Text, mp: Point) Text.Error!void {
         t.q1 = t.org + t.fr.p1;
         t.sel = null;
     }
+}
+
+// ==========================================================================
+// Double-click expansion (textdoubleclick/textclickmatch, text.c:1386-1482).
+// Word / bracket-pair / quote-pair / line selection from a caret click.
+// ==========================================================================
+
+// The bracket, newline and quote match tables (text.c:1386-1404). Index i pairs
+// `left_tab[i][k]` with `right_tab[i][k]`: brackets open↔close, and newline and
+// each quote character self-match.
+const left1 = [_]u21{ '{', '[', '(', '<', 0xAB };
+const right1 = [_]u21{ '}', ']', ')', '>', 0xBB };
+const left2 = [_]u21{'\n'};
+const left3 = [_]u21{ '\'', '"', '`' };
+const left_tab = [_][]const u21{ &left1, &left2, &left3 };
+const right_tab = [_][]const u21{ &right1, &left2, &left3 };
+
+fn indexOf(set: []const u21, c: u21) ?usize {
+    for (set, 0..) |s, i| if (s == c) return i;
+    return null;
+}
+
+/// `textdoubleclick` (text.c:1407-1454), MINUS `textclickhtmlmatch` (p9p-only,
+/// R-P7-7). Expand the caret `[*q0,*q1)` (q0==q1 on entry) to the enclosing
+/// bracket/quote interior, the whole line, or the surrounding alphanumeric word.
+pub fn doubleClick(t: *Text, q0: *usize, q1: *usize) void {
+    // text.c:1413-1414 textclickhtmlmatch — DEFERRED (p9p-only, R-P7-7).
+    const nc = t.file.buffer.len();
+    for (left_tab, right_tab) |l, r| { // text.c:1416
+        var q = q0.*; // text.c:1417
+        // try matching the character to the left, looking right (text.c:1420-1430).
+        const cl: u21 = if (q == 0) '\n' else t.file.buffer.runeAt(q - 1); // text.c:1421-1424
+        if (indexOf(l, cl)) |idx| { // text.c:1425-1426
+            if (clickMatch(t, cl, r[idx], 1, &q))
+                q1.* = q - @intFromBool(cl != '\n'); // text.c:1427-1428
+            return; // text.c:1429
+        }
+        // try matching the character to the right, looking left (text.c:1431-1445).
+        const cr: u21 = if (q == nc) '\n' else t.file.buffer.runeAt(q); // text.c:1432-1435
+        if (indexOf(r, cr)) |idx| { // text.c:1436-1437
+            if (clickMatch(t, cr, l[idx], -1, &q)) {
+                q1.* = q0.* + @intFromBool(q0.* < nc and cr == '\n'); // text.c:1439
+                q0.* = q; // text.c:1440
+                if (cr != '\n' or q != 0 or t.file.buffer.runeAt(0) == '\n')
+                    q0.* += 1; // text.c:1441-1442
+            }
+            return; // text.c:1444
+        }
+    }
+    // fill out the word to the right, then to the left (text.c:1448-1453).
+    while (q1.* < nc and isAlnum(t.file.buffer.runeAt(q1.*))) q1.* += 1;
+    while (q0.* > 0 and isAlnum(t.file.buffer.runeAt(q0.* - 1))) q0.* -= 1;
+}
+
+/// `textclickmatch` (text.c:1457-1482): scan from `*q` in `dir` counting nesting
+/// of `cl`/`cr`, stopping when the count returns to zero on `cr`. Runs off the
+/// buffer end return true only for the newline (line-select) case.
+fn clickMatch(t: *Text, cl: u21, cr: u21, dir: i8, q: *usize) bool {
+    const nc = t.file.buffer.len();
+    var nest: i32 = 1; // text.c:1462
+    while (true) { // text.c:1463
+        var c: u21 = undefined;
+        if (dir > 0) { // text.c:1464-1468
+            if (q.* == nc) break;
+            c = t.file.buffer.runeAt(q.*);
+            q.* += 1;
+        } else { // text.c:1469-1473
+            if (q.* == 0) break;
+            q.* -= 1;
+            c = t.file.buffer.runeAt(q.*);
+        }
+        if (c == cr) { // text.c:1475-1477
+            nest -= 1;
+            if (nest == 0) return true;
+        } else if (c == cl) { // text.c:1478-1479
+            nest += 1;
+        }
+    }
+    return cl == '\n' and nest == 1; // text.c:1481
+}
+
+/// `isalnum` (util.c:328-342): permissive word-character test — everything above
+/// the Latin-1 controls counts, so ALL runes >= 0xA1 are word chars. (This is the
+/// full-rune port; `Text.bsWidth`'s ASCII-only `isalnum` is a separate, narrower
+/// helper and is left as-is.)
+fn isAlnum(c: u21) bool {
+    if (c <= ' ') return false; // util.c:335-336
+    if (0x7F <= c and c <= 0xA0) return false; // util.c:337-338
+    const punct = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"; // util.c:339
+    for (punct) |p| if (@as(u21, p) == c) return false;
+    return true; // util.c:341
 }
 
 // ==========================================================================
@@ -262,4 +353,86 @@ test "select: sweep sets q0/q1 with org" {
     try testing.expectEqual(@as(usize, 4), t.fr.p1);
     try testing.expectEqual(@as(usize, 18), t.q0); // 18 + 0
     try testing.expectEqual(@as(usize, 22), t.q1); // 18 + 4
+}
+
+test "select: double-click selects a word" {
+    // ASCII: "foo bar" — a click inside "bar" fills the alnum word both ways.
+    {
+        const h = try Harness.init("foo bar", 0);
+        defer h.deinit();
+        var q0: usize = 5; // inside "bar"
+        var q1: usize = 5;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 4), q0);
+        try testing.expectEqual(@as(usize, 7), q1);
+    }
+    // Non-ASCII: "café x" is c a f é(U+00E9) sp x — 'é' (>= 0xA1) is a word char,
+    // so the word spans all four runes (util.c's permissive isalnum).
+    {
+        const h = try Harness.init("café x", 0);
+        defer h.deinit();
+        var q0: usize = 1; // inside "café"
+        var q1: usize = 1;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 0), q0);
+        try testing.expectEqual(@as(usize, 4), q1); // c,a,f,é
+    }
+}
+
+test "select: double-click on bracket pairs selects the nested interior" {
+    // Brackets: "a(bcd)e" — a click just past '(' matches ')' and selects "bcd".
+    {
+        const h = try Harness.init("a(bcd)e", 0);
+        defer h.deinit();
+        var q0: usize = 2; // just inside '('
+        var q1: usize = 2;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 2), q0);
+        try testing.expectEqual(@as(usize, 5), q1); // ')' is at 5, interior [2,5)
+    }
+    // Nesting: "((x))" — from just past the outer '(' the match skips the inner pair.
+    {
+        const h = try Harness.init("((x))", 0);
+        defer h.deinit();
+        var q0: usize = 1; // just past the outer '('
+        var q1: usize = 1;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 1), q0);
+        try testing.expectEqual(@as(usize, 4), q1); // interior "(x)"
+    }
+    // Quotes: `x"hi"y` — a click just past the opening quote selects "hi".
+    {
+        const h = try Harness.init("x\"hi\"y", 0);
+        defer h.deinit();
+        var q0: usize = 2; // just past the opening quote
+        var q1: usize = 2;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 2), q0);
+        try testing.expectEqual(@as(usize, 4), q1); // interior "hi"
+    }
+}
+
+test "select: double-click at line boundaries selects the line" {
+    // "ab\ncd\nef": a0 b1 \n2 c3 d4 \n5 e6 f7.
+    const h = try Harness.init("ab\ncd\nef", 0);
+    defer h.deinit();
+
+    // At a line START (char to the left is '\n'): look right to the next '\n',
+    // keeping it — the whole line "cd\n" = [3,6).
+    {
+        var q0: usize = 3;
+        var q1: usize = 3;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 3), q0);
+        try testing.expectEqual(@as(usize, 6), q1);
+    }
+    // At a line END (char AT q is '\n'): the backward mirror selects the same
+    // line "cd\n" = [3,6).
+    {
+        var q0: usize = 5;
+        var q1: usize = 5;
+        h.text.doubleClick(&q0, &q1);
+        try testing.expectEqual(@as(usize, 3), q0);
+        try testing.expectEqual(@as(usize, 6), q1);
+    }
 }
