@@ -45,10 +45,19 @@ In both modes the **main thread only** captures input events and presents frames
 Snarf logic runs in the worker.
 
 
-> Revision log: 2026-07-19 — Phase-5 bring-up runs the module on the MAIN THREAD
-> (nothing exists to block on yet); the Worker + rings land with devinput. The shim
-> ABI is designed to survive that move unchanged (contract R-P5-2,
-> agents/contracts/phase5-browser.md).
+> Revision log: 2026-07-19 (phase 6, supersedes the phase-5 note) — R-9P-13 ships as
+> **async mode with tickets, on the main thread**: the server framework parks blocking
+> Treads in a wait queue (S-01 §4) and devices complete them; the 9P client holds
+> multiple outstanding read tickets (beginRead/checkRead/cancelRead); the editor loop
+> keeps standing tickets on /dev/mouse and /dev/kbd. "SAB mode" is REDEFINED: the
+> Worker move, when it lands, relocates the module and adds ONE blocking point —
+> Atomics.wait on the inbound event ring at the top of the editor loop when nothing is
+> completable. Per-file Atomics.wait inside a device read is ruled out permanently:
+> the module is single-threaded and must select over mouse+kbd; blocking any single
+> read would wedge it (this CORRECTS this section's original "a blocking Tread becomes
+> Atomics.wait" sentence). The ticket machinery is identical in both modes; the Worker
+> move is a transport swap (chan Ring -> SAB-backed atomics) plus shim/blit relocation.
+> (Contract R-P6-1, agents/contracts/phase6-input.md.)
 
 ## 3. Source tree
 

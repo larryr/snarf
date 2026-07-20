@@ -19,7 +19,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const WASM_PATH = fileURLToPath(new URL("../zig-out/www/snarf.wasm", import.meta.url));
-const EXPECT_ABI = 2; // R-P5-4: 1 -> 2 this phase.
+const EXPECT_ABI = 3; // R-P6-10: 2 -> 3 (input EventKind surface).
 const FB_W = 640;
 const FB_H = 480; // R-P5-3.
 
@@ -131,27 +131,35 @@ check("dirty rect within framebuffer bounds", () =>
     ? last.x >= 0 && last.y >= 0 && last.x + last.w <= last.fbW && last.y + last.h <= last.fbH
     : "pending");
 
-// R-P5-8: the two rendered lines occupy y[20,56); text starts at x=20 and the
-// frame extends to x=620, so the damage must cover (20,20)..(620,56).
-check("dirty rect covers (20,20)..(620,56)", () =>
+// Phase 6: the boot scene is the acme-ivory ground fill over the whole
+// display (empty buffer) — the initial damage covers the full surface.
+check("dirty rect covers the full display", () =>
   last
-    ? last.x <= 20 && last.y <= 20 && last.x + last.w >= 620 && last.y + last.h >= 56
+    ? last.x === 0 && last.y === 0 && last.w === 640 && last.h === 480
     : "pending");
 
 check("blit ptr + fbW*fbH*4 <= memory size", () =>
   last ? last.ptr + last.fbW * last.fbH * 4 <= memory.buffer.byteLength : "pending");
 
-check("pixel (0,0) is white", () => {
+check("pixel (0,0) is acme ivory (0xFFFFEA)", () => {
   if (!last) return "pending";
   const p = pixelAt(last.ptr, last.fbW, 0, 0);
-  return p.r === 255 && p.g === 255 && p.b === 255;
+  return p.r === 255 && p.g === 255 && p.b === 234;
 });
 
-check("'h' cell (20..29,20..38) has a black pixel", () => {
-  if (!last) return "pending";
+// Phase 6 end-to-end: inject a typed 'h' through the real input path
+// (pushEvent -> devinput -> parked 9P read -> Editor -> Text -> frame -> blit)
+// and watch ink appear in the first cell.
+const blitsBefore = blits.length;
+ex.pushEvent(5 /* key */, 0x68 /* 'h' */, 0, 0, 1000);
+ex.tick(16);
+check("typed key produced a new blit", () => blits.length > blitsBefore);
+check("'h' cell (20..29,20..38) has a black pixel after typing", () => {
+  const b = blits[blits.length - 1];
+  if (!b) return "pending";
   for (let y = 20; y < 38; y++) {
     for (let x = 20; x < 29; x++) {
-      const p = pixelAt(last.ptr, last.fbW, x, y);
+      const p = pixelAt(b.ptr, b.fbW, x, y);
       if (p.r === 0 && p.g === 0 && p.b === 0) return true;
     }
   }

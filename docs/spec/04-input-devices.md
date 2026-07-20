@@ -103,3 +103,9 @@ Shim (main thread) → SAB ring or postMessage (S-00 §2) → `devinput` state m
 per-file wait queues → blocked `Tread`s complete. Coalescing: consecutive `move` events
 with identical buttons collapse to the newest when the reader is behind (ACME only wants
 the latest position), but button *transitions* are never dropped.
+
+> Revision log: 2026-07-19 (phase 6) — native + modifier profiles shipped;
+> touch/chordbar deferred (R-05's all-four-in-v1 tracked). Kdown pinned to 0xF800 per
+> the 4e tree (plan9port's 0x80 is a noted p9p divergence). §5 implemented: coalescing
+> in devinput's queue, transitions never dropped (diverges from the kernel's
+> qfull-discard, justified by R-IN-02). IME and Keyboard Lock deferred.
