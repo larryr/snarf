@@ -28,6 +28,8 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Row = @import("Row.zig");
 const Window = @import("Window.zig");
+const exec = @import("exec/exec.zig");
+const look = @import("look.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -105,6 +107,29 @@ snarf: std.ArrayList(u8) = .empty,
 /// that needs the served namespace, so v1 buffers on the Editor. FLAG: rewire to
 /// +Errors in the served-tree phase.
 warnings: std.ArrayList(u8) = .empty,
+/// The live colored B2/B3 sweep (`xselect`, text.c:1260-1341), non-null only while
+/// `mouse_state` is `.sweeping_b2`/`.sweeping_b3`. Paints a TEMPORARY colored
+/// overlay (never touches the frame's real `p0`/`p1`) that `select23End` fully
+/// restores. R-P9-1.
+sel23: ?draw.Frame.Select23State = null,
+/// The button set frozen at the FIRST button-set change during a B2/B3 sweep
+/// (`buts`, textselect23 text.c:1350). 0 while the sweep is still pure; captured
+/// once at the change and NOT updated again while `.draining` (the C's
+/// `while(buttons) readmouse` discards further edges). Drives the dispatch
+/// commit/cancel masks (textselect2/3, text.c:1368-1384). R-P9-2.
+sel23_buts: u8 = 0,
+/// Which button opened the current B2/B3 sweep (`B2` or `B3`) — dispatch after
+/// `.draining` needs it once the state name is gone. R-P9-2.
+sel23_button: u8 = 0,
+/// The absolute rune range yielded by `select23End` (frame range + `t.org`),
+/// captured at the button-set change and dispatched at all-buttons-up. R-P9-2.
+sel23_range: struct { q0: usize = 0, q1: usize = 0 } = .{},
+/// The B2 sweep-highlight solid (`but2col`, acme.c:1084), bound from Chrome at
+/// boot. null (headless harness / pre-Chrome) ⇒ `select23Begin` falls back to
+/// `t.fr.col(.high)` so the gesture mechanics stay testable. R-P9-12.
+but2col: ?*draw.Image = null,
+/// The B3 sweep-highlight solid (`but3col`, acme.c:1085); same null fallback.
+but3col: ?*draw.Image = null,
 /// Mouse gesture state (`textselect`, text.c:1001-1099):
 ///   * `idle`          — between gestures.
 ///   * `sweeping_b1`   — B1 down, extending a selection (frselect loop body).
@@ -112,7 +137,11 @@ warnings: std.ArrayList(u8) = .empty,
 ///                       opens a chord, a >=3px B1 drag reverts to a sweep.
 ///   * `chording`      — B1+B2/B3 held; Cut/Paste ops run edge-triggered until
 ///                       every button releases.
-mouse_state: enum { idle, sweeping_b1, double_clicked, chording } = .idle,
+///   * `sweeping_b2`   — B2 down, painting the red command sweep (xselect).
+///   * `sweeping_b3`   — B3 down, painting the green look sweep (xselect).
+///   * `draining`      — a B2/B3 sweep ended at a button-set change; wait for all
+///                       buttons up before dispatching (text.c:1355-1357).
+mouse_state: enum { idle, sweeping_b1, double_clicked, chording, sweeping_b2, sweeping_b3, draining } = .idle,
 /// What the current chord has done, so a toggle can undo it (text.c:1007,1063
 /// `enum{None,Cut,Paste}`). Reset to `.none` at each chord's start and after a
 /// toggle-undo (re-arming the next op's seq/mark, R-P7-6).
@@ -313,11 +342,19 @@ pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
         return;
     }
 
-    // (6) B1-down in a tag/body begins a gesture: pin focus + gesture_text to this
-    // Text (acme.c:648-651 argtext/seltext), then run the sweep/double-click/chord
-    // machine against it. B2/B3-only presses are FLAG-ignored (phase 9).
+    // (6) A button press begins a gesture pinned to this Text (acme.c:648-668, in
+    // the C's dispatch order). B1 also records `argtext`/`seltext` — the last
+    // B1-selected Text — the command target a later B2 execute / 2-1 chord reads
+    // (acme.c:656-657). B2/B3 open the colored execute/look sweep (acme.c:661-668);
+    // they are valid in tags, columntags, rowtags AND bodies (no region guard — the
+    // scrollbar strip was already routed at step 5).
     if (b == B1) {
         ed.focus = t;
+        ed.gesture_text = t;
+        ed.argtext = t; // acme.c:656
+        ed.seltext = t; // acme.c:657
+        try ed.runGesture(t, ev);
+    } else if (b == B2 or b == B3) {
         ed.gesture_text = t;
         try ed.runGesture(t, ev);
     }
@@ -362,9 +399,29 @@ fn runGesture(ed: *Editor, t: *Text, ev: MouseEvent) !void {
                     ed.needs_flush = true;
                 }
                 // FLAG: B1 press outside fr.r ignored — no sub-frame target (R-P7-1).
+            } else if (b == B2 or b == B3) {
+                // A B2/B3 press opens the colored execute/look sweep (`xselect`,
+                // text.c:1268-1279). Begin only inside the frame; a mouse gesture
+                // ends any typing run (R-P6-8). The sweep paints `but2col`/`but3col`
+                // (or `t.fr.col(.high)` headless, R-P9-12) as a temporary overlay —
+                // never `f.p0`/`f.p1`.
+                if (ptInRect(t.fr.r, ev.x, ev.y)) {
+                    ed.in_typing_run = false;
+                    const is_b2 = (b == B2);
+                    const col = if (is_b2)
+                        (ed.but2col orelse t.fr.col(.high))
+                    else
+                        (ed.but3col orelse t.fr.col(.high));
+                    ed.sel23 = try draw.Frame.select23Begin(&t.fr, pt, col, ev.msec);
+                    ed.sel23_buts = 0; // still pure (textselect23:1350)
+                    ed.sel23_button = b;
+                    ed.mouse_state = if (is_b2) .sweeping_b2 else .sweeping_b3;
+                    ed.needs_flush = true;
+                }
+                // FLAG: B2/B3 press outside fr.r ignored (mirrors B1).
             }
-            // FLAG: wheel notches and B2/B3 execute/look are handled (or deferred)
-            // by handleMouse before the gesture machine is ever entered.
+            // FLAG: wheel notches are handled by handleMouse before the gesture
+            // machine is ever entered.
         },
         .sweeping_b1 => {
             if ((b & B1) != 0 and (b & (B2 | B3)) != 0) {
@@ -420,6 +477,63 @@ fn runGesture(ed: *Editor, t: *Text, ev: MouseEvent) !void {
             }
         },
         .chording => try ed.chordStep(t, ev),
+        .sweeping_b2, .sweeping_b3 => {
+            // The colored sweep body (`xselect`, text.c:1280-1357). While the SAME
+            // button is still down alone, extend the live overlay. Any button-set
+            // change folds the final sample in, ends the sweep (restoring paint),
+            // and freezes `buts` — the C's `buts = mousectl->m.buttons` read right
+            // after xselect returns (text.c:1348-1350).
+            const only_b: u8 = if (ed.mouse_state == .sweeping_b2) B2 else B3;
+            if (b == only_b) {
+                try draw.Frame.select23Update(&ed.sel23.?, pt); // text.c:1281-1313
+            } else {
+                const r = try draw.Frame.select23End(&ed.sel23.?, pt, ev.msec);
+                ed.sel23_range = .{ .q0 = t.org + r.p0, .q1 = t.org + r.p1 };
+                ed.sel23_buts = b; // freeze at the FIRST change (textselect23:1350)
+                ed.sel23 = null;
+                if (b == 0) {
+                    // Direct release: dispatch now (buts == 0). text.c:1355 loop
+                    // never runs.
+                    ed.mouse_state = .idle;
+                    try ed.dispatchSel23(t);
+                } else {
+                    // A button joined: wait for all-up before dispatching
+                    // (text.c:1355-1357 `while(buttons) readmouse`).
+                    ed.mouse_state = .draining;
+                }
+            }
+        },
+        .draining => {
+            // text.c:1355-1357: swallow every sample until all buttons release;
+            // further button-set changes do NOT re-freeze `sel23_buts`. Then
+            // dispatch with the frozen mask.
+            if (b == 0) {
+                ed.mouse_state = .idle;
+                try ed.dispatchSel23(t);
+            }
+        },
+    }
+}
+
+/// Commit or cancel a finished B2/B3 sweep (textselect2/textselect3 +
+/// mousethread, text.c:1361-1384 / acme.c:661-668). `t` is the gesture's Text.
+/// B2: a B3-join cancels (`buts & 4`, text.c:1368-1369); a B1-join passes
+/// `ed.argtext` as the command argument (`buts & 1`, text.c:1370-1373); otherwise
+/// no argument. B3: a B1- OR B2-join cancels (`buts & (1|2)`, text.c:1382).
+/// CRITICAL (R-P9-2): after a committed B2 `execute`, the window may be gone
+/// (Del/Delcol ran `dropTextRefs`, nilling the Editor's Text pointers) — this is
+/// the LAST use of `t`; the caller must not touch it afterward.
+fn dispatchSel23(ed: *Editor, t: *Text) Text.Error!void {
+    const buts = ed.sel23_buts;
+    const q0 = ed.sel23_range.q0;
+    const q1 = ed.sel23_range.q1;
+    if (ed.sel23_button == B2) {
+        if (buts & B3 != 0) return; // text.c:1368-1369 B3-join cancels
+        const argt: ?*Text = if (buts & B1 != 0) ed.argtext else null; // text.c:1370-1373
+        try exec.execute(ed, t, q0, q1, argt); // acme.c:662
+    } else {
+        if (buts & (B1 | B2) != 0) return; // text.c:1382 B1/B2-join cancels
+        try look.look(ed, t, q0, q1, false); // acme.c:666
     }
 }
 
@@ -485,9 +599,35 @@ pub fn handleKey(ed: *Editor, r: u21) !void {
     ed.needs_flush = true;
 }
 
-/// End-of-tick: flush the display AT MOST ONCE, only if a handler painted this
-/// tick. Clears the flag so a tick with no input does no I/O.
+/// End-of-tick: refresh live tags, then flush the display AT MOST ONCE (only if a
+/// handler — or the tag refresh — painted this tick).
+///
+/// The tag sweep (R-P9-4) is the single site the C's 29 scattered `winsettag`
+/// calls collapse to: walk `ed.row` (cols × windows), recompute each window's
+/// `{undo, redo, mod}` tuple from its body File, and when it differs from the
+/// cached `w.tag_state`, recompose the tag (`setTag1`, wind.c:497-536) and update
+/// the cache. This gives live " Undo"/" Redo" tag words after every edit/command/
+/// undo without a per-frame tag rewrite. `setTag1`'s minimal-splice guard keeps a
+/// change cheap; the cache keeps an idle frame free of tag reads/allocs.
 pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
+    if (ed.row) |row| {
+        for (row.col.items) |c| {
+            for (c.w.items) |w| {
+                const f = w.body.file;
+                const undo = f.undoSeq() != 0;
+                const redo = f.redoSeq() != 0;
+                const mod = f.mod;
+                if (undo != w.tag_state.undo or
+                    redo != w.tag_state.redo or
+                    mod != w.tag_state.mod)
+                {
+                    try w.setTag1(); // wind.c:497-536 recompose Undo/Redo/mod words
+                    w.tag_state = .{ .undo = undo, .redo = redo, .mod = mod };
+                    ed.needs_flush = true;
+                }
+            }
+        }
+    }
     if (!ed.needs_flush) return;
     try display.flush();
     ed.needs_flush = false;
@@ -1176,4 +1316,428 @@ test "editor: dropTextRefs nils dangling text pointers" {
     ed.focus = &h.w2.body;
     ed.dropTextRefs(h.w1);
     try testing.expectEqual(&h.w2.body, ed.focus.?);
+}
+
+// ===========================================================================
+// Phase 9 (9d): B2 execute / B3 look gestures + the frameEnd tag sweep.
+// Drives the full mouse machine (press/release edges) against a booted scene,
+// mirroring the phase-6/7/8 gesture-test style. B1=1, B2=2, B3=4.
+// ===========================================================================
+
+/// A booted single-window scene with the router bound. Unlike `TwoWin` (fixed
+/// genLines bodies) the name/body are caller-controlled for the exec/look tests.
+const OneWin = struct {
+    fx: Frame.TestFixture,
+    tree: boot.Tree,
+    ed: Editor,
+
+    fn init(name: []const u8, body: []const u8) !*OneWin {
+        const a = testing.allocator;
+        const h = try a.create(OneWin);
+        errdefer a.destroy(h);
+        h.fx = try Frame.TestFixture.init();
+        h.tree = try boot.boot(a, h.fx.disp, h.fx.font, proto.Rect.make(0, 0, 600, 460), .{
+            .win_name = name,
+            .body = body,
+        });
+        h.ed = Editor.init(a);
+        h.ed.row = h.tree.row;
+        return h;
+    }
+    fn deinit(h: *OneWin) void {
+        h.ed.deinit();
+        h.tree.deinit();
+        h.fx.deinit();
+        testing.allocator.destroy(h);
+    }
+    fn win(h: *OneWin) *Window {
+        return h.tree.row.col.items[0].w.items[0];
+    }
+};
+
+/// A mouse sample at the device point of char `p` in Text `t`, carrying `msec`.
+fn evAtT(t: *Text, p: usize, buttons: u8, msec: u32) MouseEvent {
+    const pt = t.fr.ptOfChar(p);
+    return .{ .x = pt.x, .y = pt.y, .buttons = buttons, .msec = msec };
+}
+
+/// The `n`th (0-based) rune index of ASCII `word` in `t`'s buffer (runes == bytes
+/// for ASCII).
+fn nthWord(t: *Text, word: []const u8, n: usize) usize {
+    const nc = t.file.buffer.len();
+    var count: usize = 0;
+    var i: usize = 0;
+    outer: while (i + word.len <= nc) : (i += 1) {
+        for (word, 0..) |ch, j| {
+            if (t.file.buffer.runeAt(i + j) != ch) continue :outer;
+        }
+        if (count == n) return i;
+        count += 1;
+    }
+    unreachable;
+}
+
+fn findWord(t: *Text, word: []const u8) usize {
+    return nthWord(t, word, 0);
+}
+
+/// A B2/B3 CLICK: press + release at the same char and time. With no motion the
+/// sweep stays a caret, so `execute`/`look` word-expand at that point.
+fn clickBut(ed: *Editor, t: *Text, p: usize, but: u8) !void {
+    try ed.handleMouse(evAtT(t, p, but, 100));
+    try ed.handleMouse(evAtT(t, p, 0, 100));
+}
+
+fn bodyEql(w: *Window, want: []const u8) !void {
+    const n = w.body.file.buffer.len();
+    const dest = try testing.allocator.alloc(u8, @max(1, n) * Buffer.max_bytes_per_rune);
+    defer testing.allocator.free(dest);
+    try testing.expectEqualStrings(want, w.body.file.buffer.read(0, n, dest));
+}
+
+fn tagHas(w: *Window, needle: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    const n = w.tag.file.buffer.len();
+    return std.mem.indexOf(u8, w.tag.file.buffer.read(0, n, &buf), needle) != null;
+}
+
+test "exec: B2 click on tag word executes Snarf against the body selection" {
+    const h = try OneWin.init("scratch", "hello world");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // A body selection is the command's default target (the B1-select's seltext).
+    try w.body.setSelect(0, 5); // "hello"
+    ed.seltext = &w.body;
+    const seq0 = ed.seq;
+
+    // B2-click "Snarf" in the window tag. Snarf copies the body selection into the
+    // snarf buffer; Snarf.mark == false so `seq` is NOT bumped (the exec.c:236-240
+    // pin), and Snarf reassigns argtext to its target.
+    try clickBut(ed, &w.tag, findWord(&w.tag, "Snarf") + 2, B2);
+    try testing.expect(ed.mouse_state == .idle);
+    try testing.expectEqualStrings("hello", ed.snarf.items);
+    try testing.expectEqual(seq0, ed.seq);
+    try testing.expectEqual(&w.body, ed.argtext.?); // Snarf set argtext (exec.c:1013)
+}
+
+test "exec: B2 click executes Cut/Paste/Undo/Redo" {
+    const h = try OneWin.init("scratch", "hello world");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // Append the command words to the tag so a click can hit each. No frameEnd runs
+    // here, so the tag layout (and these offsets) stay put.
+    const tn = w.tag.file.buffer.len();
+    try w.tag.insertAt(tn, " Cut Paste Undo Redo", true);
+
+    try w.body.setSelect(0, 5); // "hello"
+    ed.seltext = &w.body;
+    const seq0 = ed.seq;
+
+    // Cut: marks once (seq++), snarfs "hello", deletes it from the body.
+    try clickBut(ed, &w.tag, findWord(&w.tag, "Cut") + 1, B2);
+    try testing.expectEqual(seq0 + 1, ed.seq);
+    try testing.expectEqualStrings("hello", ed.snarf.items);
+    try bodyEql(w, " world");
+
+    // Paste (tobody, the truthy XXX): lands in the BODY at its caret ⇒ restored.
+    try clickBut(ed, &w.tag, findWord(&w.tag, "Paste") + 1, B2);
+    try bodyEql(w, "hello world");
+
+    // Undo reverses the paste; Redo re-applies it — a clean round-trip.
+    try clickBut(ed, &w.tag, findWord(&w.tag, "Undo") + 1, B2);
+    try bodyEql(w, " world");
+    try clickBut(ed, &w.tag, findWord(&w.tag, "Redo") + 1, B2);
+    try bodyEql(w, "hello world");
+}
+
+test "exec: 2-1 chord passes argtext to New" {
+    const h = try OneWin.init("one", "alpha beta\n");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    const c = h.tree.row.col.items[0];
+    const ctag = &c.tag;
+    const before = c.w.items.len;
+
+    // B1-select "alpha" [0,5) in the body: the B1 press records argtext = body.
+    const a0 = w.body.fr.ptOfChar(0);
+    const a5 = w.body.fr.ptOfChar(5);
+    try ed.handleMouse(mev(a0.x, a0.y, B1));
+    try ed.handleMouse(mev(a5.x, a5.y, B1));
+    try ed.handleMouse(mev(a5.x, a5.y, 0));
+    try testing.expectEqual(&w.body, ed.argtext.?);
+    try testing.expectEqual(@as(usize, 0), w.body.q0);
+    try testing.expectEqual(@as(usize, 5), w.body.q1);
+
+    // B2-down on "New" in the columntag; B1 joins (2-1 chord); all release.
+    const np = ctag.fr.ptOfChar(findWord(ctag, "New") + 1);
+    try ed.handleMouse(mev(np.x, np.y, B2));
+    try testing.expect(ed.mouse_state == .sweeping_b2);
+    try ed.handleMouse(mev(np.x, np.y, B1 | B2));
+    try testing.expect(ed.mouse_state == .draining);
+    try ed.handleMouse(mev(np.x, np.y, 0));
+    try testing.expect(ed.mouse_state == .idle);
+
+    // New made one window named after the argt selection, with an empty body.
+    try testing.expectEqual(before + 1, c.w.items.len);
+    const nw = c.w.items[c.w.items.len - 1];
+    try testing.expectEqualStrings("alpha", nw.body.file.name.items);
+    try testing.expectEqual(@as(usize, 0), nw.body.file.buffer.len());
+}
+
+test "exec: B3 joining a B2 sweep cancels" {
+    const h = try OneWin.init("scratch", "Cut junk");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    const seq0 = ed.seq;
+
+    // B2-down in the body, then B3 joins ⇒ textselect2 cancels (buts & 4).
+    const p = w.body.fr.ptOfChar(1);
+    try ed.handleMouse(mev(p.x, p.y, B2));
+    try testing.expect(ed.mouse_state == .sweeping_b2);
+    try ed.handleMouse(mev(p.x, p.y, B2 | B3));
+    try testing.expect(ed.mouse_state == .draining);
+    try ed.handleMouse(mev(p.x, p.y, 0));
+
+    // Nothing executed: idle, snarf empty, no seq bump, body intact.
+    try testing.expect(ed.mouse_state == .idle);
+    try testing.expectEqual(seq0, ed.seq);
+    try testing.expectEqual(@as(usize, 0), ed.snarf.items.len);
+    try bodyEql(w, "Cut junk");
+}
+
+test "exec: Del clean closes and the neighbor grows back" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c = h.tree.row.col.items[0];
+    try testing.expectEqual(@as(usize, 2), c.w.items.len);
+
+    const topY = h.w1.r.min.y;
+    const botY = h.w2.r.max.y;
+    const w2 = h.w2;
+
+    // B2-click "Del" in the clean top window's tag ⇒ it closes and window 2 grows
+    // up to cover the whole window region (colclose extend-next-up).
+    try clickBut(ed, &h.w1.tag, findWord(&h.w1.tag, "Del") + 1, B2);
+    try testing.expectEqual(@as(usize, 1), c.w.items.len);
+    try testing.expectEqual(w2, c.w.items[0]);
+    try testing.expectEqual(topY, w2.r.min.y);
+    try testing.expectEqual(botY, w2.r.max.y);
+    // The gesture never touches the freed window after dispatch (dropTextRefs).
+    try testing.expect(ed.gesture_text == null);
+}
+
+test "exec: Del dirty two-strikes" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c = h.tree.row.col.items[0];
+    const w1 = h.w1;
+
+    // Name + dirty window 1 (a named dirty window warns on Del).
+    try w1.body.file.setName("one");
+    ed.seq += 1;
+    w1.body.file.mark(ed.seq);
+    try w1.body.insertAt(0, "X", true);
+    try testing.expect(w1.dirty);
+
+    // Strike 1: survives, warns, dirty cleared, but file.mod stays true (dot stays).
+    try clickBut(ed, &w1.tag, findWord(&w1.tag, "Del") + 1, B2);
+    try testing.expectEqual(@as(usize, 2), c.w.items.len);
+    try testing.expect(!w1.dirty);
+    try testing.expect(w1.body.file.mod);
+    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "one modified") != null);
+
+    // An edit between strikes re-arms dirty (text.c:378 hook).
+    ed.seq += 1;
+    w1.body.file.mark(ed.seq);
+    try w1.body.insertAt(0, "Y", true);
+    try testing.expect(w1.dirty);
+
+    // Strike 2 (re-armed): warns again, survives.
+    try clickBut(ed, &w1.tag, findWord(&w1.tag, "Del") + 1, B2);
+    try testing.expectEqual(@as(usize, 2), c.w.items.len);
+    try testing.expect(!w1.dirty);
+
+    // Strike 3 (now clean): gone.
+    try clickBut(ed, &w1.tag, findWord(&w1.tag, "Del") + 1, B2);
+    try testing.expectEqual(@as(usize, 1), c.w.items.len);
+}
+
+test "editor: frameEnd refreshes tags after an edit" {
+    const h = try OneWin.init("scratch", "");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // Type into the body (pointer over it) ⇒ the body File becomes undoable.
+    ed.mouse_pt = center(w.body.fr.r);
+    try ed.handleKey('a');
+    try testing.expect(!tagHas(w, " Undo")); // tag not yet swept
+
+    try ed.frameEnd(h.fx.disp);
+    try testing.expect(tagHas(w, " Undo")); // live Undo word (R-P9-4)
+    try testing.expect(w.tag_state.undo);
+
+    // A second frameEnd with no change is a no-op: the tag_state cache blocks the
+    // rewrite, so no further device writes are produced.
+    const before = h.fx.tree.writes.items.len;
+    try ed.frameEnd(h.fx.disp);
+    try testing.expectEqual(before, h.fx.tree.writes.items.len);
+}
+
+test "editor: b3 click on word finds next occurrence and scrolls it visible" {
+    var seed: std.ArrayList(u8) = .empty;
+    defer seed.deinit(testing.allocator);
+    try seed.appendSlice(testing.allocator, "needle\n");
+    var i: usize = 0;
+    while (i < 60) : (i += 1) try seed.appendSlice(testing.allocator, "filler\n");
+    try seed.appendSlice(testing.allocator, "needle\n");
+
+    const h = try OneWin.init("scratch", seed.items);
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    const second = nthWord(&w.body, "needle", 1);
+
+    // B3-click the first "needle" (chars 0..6): expand ⇒ collapse ⇒ forward search.
+    try clickBut(ed, &w.body, 2, B3);
+    try testing.expect(ed.mouse_state == .idle);
+    try testing.expectEqual(second, w.body.q0);
+    try testing.expectEqual(second + 6, w.body.q1);
+    try testing.expect(w.body.org > 0); // scrolled the hit into view
+    try testing.expect(w.body.org <= second);
+    try testing.expectEqual(&w.body, ed.seltext.?);
+}
+
+test "editor: b3 sweep searches the swept literal" {
+    const h = try OneWin.init("scratch", "one TARGET two TARGET three");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // Sweep the non-word literal "ARGE" inside the first TARGET ([5,9)).
+    try ed.handleMouse(evAtT(&w.body, 5, B3, 0));
+    try testing.expect(ed.mouse_state == .sweeping_b3);
+    try ed.handleMouse(evAtT(&w.body, 9, B3, 5)); // motion ⇒ a real sweep
+    try ed.handleMouse(evAtT(&w.body, 9, 0, 5)); // release ⇒ look the literal
+    try testing.expect(ed.mouse_state == .idle);
+
+    const second = nthWord(&w.body, "ARGE", 1);
+    try testing.expectEqual(second, w.body.q0);
+    try testing.expectEqual(second + 4, w.body.q1);
+    try testing.expectEqual(&w.body, ed.seltext.?);
+}
+
+test "editor: repeated b3 cycles matches and wraps" {
+    const h = try OneWin.init("scratch", "foo a foo b foo");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    try w.body.setSelect(0, 0); // "foo" at [0,3),[6,9),[12,15)
+
+    try clickBut(ed, &w.body, 1, B3); // first ⇒ second
+    try testing.expectEqual(@as(usize, 6), w.body.q0);
+    try testing.expectEqual(@as(usize, 9), w.body.q1);
+
+    try clickBut(ed, &w.body, 7, B3); // (inside second) ⇒ third
+    try testing.expectEqual(@as(usize, 12), w.body.q0);
+    try testing.expectEqual(@as(usize, 15), w.body.q1);
+
+    try clickBut(ed, &w.body, 13, B3); // (inside third) ⇒ wraps to first
+    try testing.expectEqual(@as(usize, 0), w.body.q0);
+    try testing.expectEqual(@as(usize, 3), w.body.q1);
+}
+
+test "editor: b3 not-found leaves the caret at word end" {
+    // The clicked word occurs exactly once, so the wraparound search finds no OTHER
+    // match and re-finds the same word (look.c:432-435 sole-occurrence rule): the
+    // selection settles ON it, ending at the word end, and neither the buffer nor
+    // org (single visible line) changes. A genuine absent-needle miss is covered by
+    // look.zig's direct "search not-found" test; a body click can never produce an
+    // absent needle (the needle is read from the body itself), so this is the
+    // faithful "nothing new found" realization of the collapse-to-word-end setup.
+    const h = try OneWin.init("scratch", "solitary word");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    try w.body.setSelect(0, 0);
+
+    try clickBut(ed, &w.body, 3, B3); // inside "solitary" [0,8)
+    try testing.expectEqual(@as(usize, 0), w.body.q0);
+    try testing.expectEqual(@as(usize, 8), w.body.q1); // active end at word end
+    try testing.expectEqual(@as(usize, 0), w.body.org); // buffer/org untouched
+}
+
+test "editor: b1 or b2 during a b3 sweep cancels the look" {
+    const h = try OneWin.init("scratch", "foo bar foo");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+    try w.body.setSelect(0, 0);
+
+    // B3-down, then B1 joins ⇒ textselect3 cancels (buts & (1|2)).
+    try ed.handleMouse(evAtT(&w.body, 1, B3, 0));
+    try testing.expect(ed.mouse_state == .sweeping_b3);
+    try ed.handleMouse(evAtT(&w.body, 1, B1 | B3, 0));
+    try testing.expect(ed.mouse_state == .draining);
+    try ed.handleMouse(evAtT(&w.body, 1, 0, 0));
+    try testing.expect(ed.mouse_state == .idle);
+
+    // No search ran: selection unchanged, no target recorded.
+    try testing.expectEqual(@as(usize, 0), w.body.q0);
+    try testing.expectEqual(@as(usize, 0), w.body.q1);
+    try testing.expect(ed.seltext == null);
+}
+
+test "editor: b3 in the tag searches the body" {
+    const h = try OneWin.init("scratch", "alpha needle beta");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // Append "needle" to the tag; B3-click it (t == tag, ct == body).
+    const tn = w.tag.file.buffer.len();
+    try w.tag.insertAt(tn, " needle", true);
+    const tagQ0 = w.tag.q0;
+    const tagQ1 = w.tag.q1;
+    const nstart = findWord(&w.body, "needle");
+
+    try clickBut(ed, &w.tag, findWord(&w.tag, "needle") + 1, B3);
+
+    // The body selection jumped to its "needle"; the tag's own selection untouched
+    // (t != ct ⇒ no collapse, look.c:205/208).
+    try testing.expectEqual(nstart, w.body.q0);
+    try testing.expectEqual(nstart + 6, w.body.q1);
+    try testing.expectEqual(&w.body, ed.seltext.?);
+    try testing.expectEqual(tagQ0, w.tag.q0);
+    try testing.expectEqual(tagQ1, w.tag.q1);
+}
+
+test "editor: b3 press updates no argtext, b1 press updates seltext+argtext" {
+    const h = try OneWin.init("scratch", "foo needle foo");
+    defer h.deinit();
+    const ed = &h.ed;
+    const w = h.win();
+
+    // A B1 press records BOTH argtext and seltext (acme.c:656-657).
+    const p0 = w.body.fr.ptOfChar(0);
+    try ed.handleMouse(mev(p0.x, p0.y, B1));
+    try testing.expectEqual(&w.body, ed.argtext.?);
+    try testing.expectEqual(&w.body, ed.seltext.?);
+    try ed.handleMouse(mev(p0.x, p0.y, 0));
+
+    // A B3 gesture must NOT touch argtext; only a search hit sets seltext
+    // (look.c:427). Clear both, then B3-click "needle".
+    ed.argtext = null;
+    ed.seltext = null;
+    try clickBut(ed, &w.body, findWord(&w.body, "needle") + 1, B3);
+    try testing.expect(ed.argtext == null);
+    try testing.expectEqual(&w.body, ed.seltext.?);
 }

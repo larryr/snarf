@@ -533,8 +533,18 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     try testing.expectEqual(@as(u21, 'A'), w1.body.file.buffer.runeAt(0));
     try testing.expectEqualStrings("B", win2.body.file.buffer.read(0, win2.body.file.buffer.len(), &rbuf));
 
+    // R-P9-4 live tags: the final frameEnd's tag sweep saw w1's body dirtied by
+    // the point-to-type edit and recomposed its tag with the live " Undo" word.
+    // (w2 shares the SAME global typing run started in w1, so only w1's File was
+    // filemark'd — R-P6-8 — leaving w2 undirtied and its tag unchanged.)
+    var tgbuf: [128]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, w1.tag.file.buffer.read(0, w1.tag.file.buffer.len(), &tgbuf), " Undo") != null);
+    try testing.expect(std.mem.indexOf(u8, win2.tag.file.buffer.read(0, win2.tag.file.buffer.len(), &tgbuf), " Undo") == null);
+
     // FROZEN-ACCEPT-8: full acme chrome — row tag, column tag+button, two
     // windows with tags/buttons/scrollbars, point-to-type edits in both.
-    // Frozen 2026-07-20 after spot-checks (R-P2-7).
-    try testing.expectEqual(@as(u64, 0x12a80ccd9fd03239), hb.hash());
+    // Re-frozen 2026-07-20 (phase 9d): the frameEnd tag sweep (R-P9-4) now adds
+    // the live " Undo" word to each edited window's tag, changing the write
+    // stream from the phase-8 freeze. Spot-checks above still hold (R-P2-7).
+    try testing.expectEqual(@as(u64, 0x9816211a7aca91d7), hb.hash());
 }
