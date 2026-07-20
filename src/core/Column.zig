@@ -24,6 +24,7 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Row = @import("Row.zig");
+const Editor = @import("Editor.zig");
 
 const Column = @This();
 const Rect = draw.Rect;
@@ -177,6 +178,70 @@ pub fn add(c: *Column, winid: *u32, body_file: *File, y_in: i32) Error!*Window {
     if (buggered) try c.resize(c.r);
 
     return w;
+}
+
+/// `colclose` (cols.c:161-209), the `!c->safe` colgrow arm dropped (:167-168 —
+/// our port's `safe` is always true, doc note only): find `w`'s index (assert
+/// found, cols.c:172-176); capture `r = w.r`; when `dofree`, drop dangling
+/// Editor text refs (`ed.dropTextRefs`, text.c:109/113) and destroy the window
+/// (its owned body `File` cascades via `Window.deinit`, R-P9-5); splice `w` out.
+/// An emptied column white-fills and returns (:184-187); otherwise the LAST
+/// window extends DOWN over the freed rect or the NEXT window extends UP
+/// (:189-198), the freed rect is filled with the body BACK color, and the
+/// neighbor is resized into it (:199-207 — the showdel/movetodel mouse-warp
+/// arms are R-P8-7-dropped).
+pub fn close(c: *Column, ed: *Editor, w: *Window, dofree: bool) Error!void {
+    const a = c.chrome.allocator;
+    const screen = &c.chrome.display.image;
+
+    const i = blk: {
+        for (c.w.items, 0..) |it, idx| {
+            if (it == w) break :blk idx;
+        }
+        unreachable; // cols.c:176 error("can't find window")
+    };
+
+    var r = w.r; // cols.c:177
+
+    if (dofree) {
+        ed.dropTextRefs(w); // text.c:109/113, called before destruction (R-P9-3)
+        w.deinit(); // cascades the owned body File (R-P9-5)
+        a.destroy(w);
+    }
+
+    _ = c.w.orderedRemove(i); // cols.c:182-183
+
+    const nw = c.w.items.len;
+    if (nw == 0) {
+        try screen.draw(r, c.chrome.white, null, .{}); // cols.c:184-187
+        return;
+    }
+
+    var neighbor: *Window = undefined;
+    if (i == nw) {
+        // extend the last (previous) window down (cols.c:189-192).
+        neighbor = c.w.items[i - 1];
+        r.min.y = neighbor.r.min.y;
+        r.max.y = c.r.max.y;
+    } else {
+        // extend the next window up (cols.c:193-196).
+        neighbor = c.w.items[i];
+        r.max.y = neighbor.r.max.y;
+    }
+
+    try screen.draw(r, c.chrome.body_cols[@intFromEnum(draw.Frame.ColorSlot.back)], null, .{}); // cols.c:199
+    _ = try neighbor.resize(r, false, true); // cols.c:206
+}
+
+/// `colclean` (cols.c:582-590): AND `w.clean(ed, true)` over every window with NO
+/// short-circuit — every dirty window is warned and takes its two-strike in one
+/// pass, so a second Delcol on the same column succeeds outright.
+pub fn clean(c: *Column, ed: *Editor) bool {
+    var clean_ = true;
+    for (c.w.items) |w| {
+        clean_ = w.clean(ed, true) and clean_;
+    }
+    return clean_;
 }
 
 /// `colresize` (cols.c:235-272): relayout the tag strip + colbutton + black band,
@@ -417,4 +482,89 @@ test "column: which routes tag vs body vs partial-line" {
     try testing.expect(c.which(.{ .x = 100, .y = 390 }) == null);
     // Outside the column entirely.
     try testing.expect(c.which(.{ .x = 100, .y = 500 }) == null);
+}
+
+// --- close/clean (cols.c:161-209, :582-590) -----------------------------------
+
+test "column: close removes a window and the neighbor grows back" {
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+
+    // Close the TOP window: the bottom window extends UP to cover the whole
+    // column body (cols.c:193-198).
+    {
+        const h = try ColHarness.init(proto.Rect.make(0, 0, 200, 400));
+        defer h.deinit();
+        const c = h.col;
+        const top = try h.addWin(40, 20); // A: 20..219
+        const bot = try h.addWin(40, 0); // B: 221..400
+
+        try c.close(&ed, top, true);
+        try testing.expectEqual(@as(usize, 1), c.w.items.len);
+        try testing.expectEqual(bot, c.w.items[0]);
+        try testing.expectEqual(proto.Rect.make(0, 20, 200, 400), c.w.items[0].r);
+    }
+
+    // Rebuild, close the BOTTOM window: the top extends DOWN to c.r.max.y
+    // (cols.c:189-192).
+    {
+        const h = try ColHarness.init(proto.Rect.make(0, 0, 200, 400));
+        defer h.deinit();
+        const c = h.col;
+        const top = try h.addWin(40, 20); // A: 20..219
+        const bot = try h.addWin(40, 0); // B: 221..400
+
+        try c.close(&ed, bot, true);
+        try testing.expectEqual(@as(usize, 1), c.w.items.len);
+        try testing.expectEqual(top, c.w.items[0]);
+        try testing.expectEqual(proto.Rect.make(0, 20, 200, 400), c.w.items[0].r);
+    }
+}
+
+test "column: close last window white-fills" {
+    const h = try ColHarness.init(proto.Rect.make(0, 0, 200, 400));
+    defer h.deinit();
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    const c = h.col;
+    const w = try h.addWin(40, 20);
+
+    try c.close(&ed, w, true);
+    try testing.expectEqual(@as(usize, 0), c.w.items.len);
+
+    // The column survives (no crash); it can still be resized/added to.
+    _ = try h.addWin(40, 20);
+    try testing.expectEqual(@as(usize, 1), c.w.items.len);
+}
+
+test "column: clean strikes all dirty windows in one pass" {
+    const h = try ColHarness.init(proto.Rect.make(0, 0, 200, 400));
+    defer h.deinit();
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    const c = h.col;
+
+    const w1 = try h.addWin(40, 20);
+    const w2 = try h.addWin(40, 0);
+    try w1.body.file.setName("one");
+    try w2.body.file.setName("two");
+
+    ed.seq += 1;
+    w1.body.file.mark(ed.seq);
+    try w1.body.insertAt(0, "X", true);
+    ed.seq += 1;
+    w2.body.file.mark(ed.seq);
+    try w2.body.insertAt(0, "Y", true);
+    try testing.expect(w1.dirty);
+    try testing.expect(w2.dirty);
+
+    // Both windows are struck in ONE pass — no short-circuit.
+    try testing.expect(!c.clean(&ed));
+    try testing.expect(!w1.dirty);
+    try testing.expect(!w2.dirty);
+    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "one modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "two modified") != null);
+
+    // The second call passes: both dirty flags already cleared.
+    try testing.expect(c.clean(&ed));
 }

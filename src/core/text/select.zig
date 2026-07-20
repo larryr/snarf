@@ -183,7 +183,7 @@ fn clickMatch(t: *Text, cl: u21, cr: u21, dir: i8, q: *usize) bool {
 /// the Latin-1 controls counts, so ALL runes >= 0xA1 are word chars. (This is the
 /// full-rune port; `Text.bsWidth`'s ASCII-only `isalnum` is a separate, narrower
 /// helper and is left as-is.)
-fn isAlnum(c: u21) bool {
+pub fn isAlnum(c: u21) bool {
     if (c <= ' ') return false; // util.c:335-336
     if (0x7F <= c and c <= 0xA0) return false; // util.c:337-338
     const punct = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"; // util.c:339

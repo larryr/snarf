@@ -56,6 +56,10 @@ delta: std.ArrayList(Delta) = .empty, // undo stack
 epsilon: std.ArrayList(Delta) = .empty, // redo stack
 seq: u32 = 0, // 0 ⇒ transparent (records nothing)
 mod: bool = false,
+/// The file's name (file.c `name`/`nname`), UTF-8. Empty for an unnamed window.
+/// Read by `Window.setTag1` to compose the tag's left (name) half (wind.c:490,
+/// :500-502); set via `setName`.
+name: std.ArrayList(u8) = .empty,
 
 pub fn init(allocator: std.mem.Allocator, buffer: Buffer) File {
     return .{ .allocator = allocator, .buffer = buffer };
@@ -66,8 +70,16 @@ pub fn deinit(self: *File) void {
     self.delta.deinit(self.allocator);
     self.freeTexts(&self.epsilon);
     self.epsilon.deinit(self.allocator);
+    self.name.deinit(self.allocator);
     self.buffer.deinit();
     self.* = undefined;
+}
+
+/// `filesetname` (file.c) minus the undo record (v1): replace the file's name.
+/// The C records a name-change `Undo`; that is deferred with Put-seq bookkeeping.
+pub fn setName(f: *File, new_name: []const u8) error{OutOfMemory}!void {
+    f.name.clearRetainingCapacity();
+    try f.name.appendSlice(f.allocator, new_name);
 }
 
 /// Free the owned text of every `.delete` record in `stack` (leaves it intact).

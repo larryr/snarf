@@ -20,6 +20,7 @@ const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Column = @import("Column.zig");
+const Editor = @import("Editor.zig");
 
 const Row = @This();
 const Rect = draw.Rect;
@@ -38,6 +39,10 @@ tag_file: File,
 /// The columns, left to right. Heap-created pointers (stability §7-8), owned by
 /// the Row (freed by `deinit`).
 col: std.ArrayList(*Column) = .empty,
+/// Running window id — the C's global `winid`, moved here (R-P9-5) so it is
+/// reachable from the Editor via `ed.row`, letting New/Newcol mint ids
+/// mid-session. `Column.add` pre-increments it (the C's `++winid`).
+winid: u32 = 0,
 chrome: *const Chrome,
 
 /// `rowinit` (rows.c:25-48): white fill, a `rowtag` `Text` over the top
@@ -52,6 +57,7 @@ pub fn init(row: *Row, chrome: *const Chrome, r: Rect) Error!void {
     row.chrome = chrome;
     row.r = r; // rows.c:32
     row.col = .empty; // rows.c:33-34 row->col = nil / row->ncol = 0
+    row.winid = 0; // the C's global winid seed (field default doesn't apply to create()+init)
 
     try screen.draw(r, chrome.white, null, .{}); // rows.c:31 white fill
 
@@ -142,6 +148,59 @@ pub fn add(row: *Row, x_in: i32) Error!?*Column {
     // splice at index i (rows.c:95-98).
     try row.col.insert(a, i, c);
     return c;
+}
+
+/// `rowclose` (rows.c:208-239), the x-axis mirror of `Column.close`: find `c`'s
+/// index (assert found); capture `r = c.r`; `dofree` drops the Editor's text
+/// refs into EVERY window of the column (R-P9-13 — the C's textclose nils fire
+/// per window inside colcloseall's winclose cascade, text.c:109/113) and then
+/// destroys the whole column (`colcloseall`, cols.c:211-227 — `Column.deinit`
+/// already cascades to every owned window/File); splice `c` out. An emptied row
+/// white-fills and returns; otherwise the LAST column extends RIGHT or the NEXT
+/// column extends LEFT, the freed rect is white-filled (rows.c uses
+/// `display->white` here, not the body BACK color), and the neighbor is resized
+/// into it.
+pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
+    const a = row.chrome.allocator;
+    const screen = &row.chrome.display.image;
+
+    const i = blk: {
+        for (row.col.items, 0..) |it, idx| {
+            if (it == c) break :blk idx;
+        }
+        unreachable; // rows.c:215 error("can't find column")
+    };
+
+    var r = c.r; // rows.c:216
+
+    if (dofree) {
+        for (c.w.items) |w| ed.dropTextRefs(w); // R-P9-13; text.c:109/113
+        c.deinit(); // colcloseall (cols.c:211-227): cascades tag + every window
+        a.destroy(c);
+    }
+
+    _ = row.col.orderedRemove(i); // rows.c:220-221
+
+    const ncol = row.col.items.len;
+    if (ncol == 0) {
+        try screen.draw(r, row.chrome.white, null, .{}); // rows.c:223-225
+        return;
+    }
+
+    var neighbor: *Column = undefined;
+    if (i == ncol) {
+        // extend the last (previous) column right (rows.c:227-230).
+        neighbor = row.col.items[i - 1];
+        r.min.x = neighbor.r.min.x;
+        r.max.x = row.r.max.x;
+    } else {
+        // extend the next column left (rows.c:231-233).
+        neighbor = row.col.items[i];
+        r.max.x = neighbor.r.max.x;
+    }
+
+    try screen.draw(r, row.chrome.white, null, .{}); // rows.c:235
+    try neighbor.resize(r); // rows.c:236
 }
 
 /// `rowresize` (rows.c:103-138): relayout the tag strip + black band, then scale
@@ -362,4 +421,51 @@ test "row: which finds rowtag/columntag/tag/body" {
     try testing.expectEqual(&win.body, row.which(.{ .x = 100, .y = 200 }).?);
     // outside every column and the row tag.
     try testing.expect(row.which(.{ .x = 100, .y = 500 }) == null);
+}
+
+// --- close (rows.c:208-239) ----------------------------------------------------
+
+test "row: close removes a column and the neighbor grows back" {
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+
+    // Close the LEFT column: the right column extends LEFT to cover the whole
+    // row body (rows.c:231-235, the "extend next window left" arm mirrored in x).
+    {
+        const h = try RowHarness.init(proto.Rect.make(0, 0, 600, 400));
+        defer h.deinit();
+        const row = h.row;
+        const c0 = (try row.add(0)).?; // 0..600
+        const c1 = (try row.add(-1)).?; // split at 360: c0 0..358, c1 360..600
+
+        try row.close(&ed, c0, true);
+        try testing.expectEqual(@as(usize, 1), row.col.items.len);
+        try testing.expectEqual(c1, row.col.items[0]);
+        try testing.expectEqual(proto.Rect.make(0, 20, 600, 400), row.col.items[0].r);
+    }
+
+    // Mirror: close the RIGHT (last) column — the left column extends RIGHT to
+    // `row.r.max.x` (rows.c:227-230). Editor refs into the dying column's
+    // windows are dropped (R-P9-13, the C's per-window textclose nils).
+    {
+        const h = try RowHarness.init(proto.Rect.make(0, 0, 600, 400));
+        defer h.deinit();
+        const row = h.row;
+        const c0 = (try row.add(0)).?;
+        const c1 = (try row.add(-1)).?;
+
+        const f = try testing.allocator.create(File);
+        f.* = File.init(testing.allocator, try Buffer.initFromBytes(testing.allocator, "x"));
+        const w = try c1.add(&row.winid, f, -1);
+        w.owns_body = true;
+        ed.seltext = &w.body;
+        ed.argtext = &w.tag;
+
+        try row.close(&ed, c1, true);
+        try testing.expect(ed.seltext == null); // dropped, not dangling
+        try testing.expect(ed.argtext == null);
+        try testing.expectEqual(@as(usize, 1), row.col.items.len);
+        try testing.expectEqual(c0, row.col.items[0]);
+        try testing.expectEqual(proto.Rect.make(0, 20, 600, 400), row.col.items[0].r);
+    }
 }
