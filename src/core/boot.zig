@@ -45,50 +45,47 @@ pub const Options = struct {
     body: []const u8 = "",
 };
 
-/// The assembled window tree. Owns the `Chrome`, the heap `Row` (which owns its
-/// columns → windows → tags), and every heap body `File` (the Row/Column/Window
-/// deinit chain frees tags but leaves body Files to their caller — here, us).
+/// The assembled window tree. Owns the `Chrome` and the heap `Row` (which owns
+/// its columns → windows → tags). Body `File`s are now owned by their Windows
+/// (`owns_body`, R-P9-5) and freed by the Row/Column/Window deinit chain; the
+/// window-id counter lives on the `Row` (reachable from the Editor).
 pub const Tree = struct {
     allocator: std.mem.Allocator,
     chrome: *Chrome,
     row: *Row,
-    /// Heap body `File`s handed to windows, freed by `deinit` (Window/Column own
-    /// only their tag Files).
-    bodies: std.ArrayList(*File) = .empty,
-    /// Running window id, pre-incremented by `coladd` (the C's `++winid`).
-    winid: u32 = 0,
 
     pub fn deinit(tree: *Tree) void {
         const a = tree.allocator;
-        tree.row.deinit();
+        tree.row.deinit(); // frees columns → windows → owned body Files + tags
         a.destroy(tree.row);
-        for (tree.bodies.items) |f| {
-            f.deinit();
-            a.destroy(f);
-        }
-        tree.bodies.deinit(a);
         tree.chrome.deinit();
         tree.* = undefined;
     }
 
     /// Add a window carrying a fresh heap body `File` over `body` into `c`,
     /// stealing space per `coladd` (`y_in = -1` ⇒ split the last window / fill an
-    /// empty column). Writes the fresh-window tag `name ++ tag_suffix`, parks the
-    /// tag caret at its end, and fills both frames (the W2 precondition above).
+    /// empty column). The body `File` is heap-allocated and handed to the Window,
+    /// which takes ownership (`owns_body`, R-P9-5). The tag is composed by
+    /// `File.setName` + `Window.setTag1` (byte-identical to the old
+    /// `name ++ tag_suffix` literal, wind.c:497-536); the caret parks at the tag
+    /// end and both frames are filled (the W2 precondition above).
     fn addWinTo(tree: *Tree, c: *Column, name: []const u8, body: []const u8) !*Window {
         const a = tree.allocator;
         const f = try a.create(File);
-        errdefer a.destroy(f);
+        var transferred = false;
+        errdefer if (!transferred) a.destroy(f);
         f.* = File.init(a, try Buffer.initFromBytes(a, body));
-        errdefer f.deinit();
-        try tree.bodies.append(a, f);
+        errdefer if (!transferred) f.deinit();
 
-        const w = try c.add(&tree.winid, f, -1); // coladd (steal / fill)
+        const w = try c.add(&tree.row.winid, f, -1); // coladd (steal / fill)
+        w.owns_body = true; // the Window now owns and frees this body File
+        transferred = true; // f is reachable from the tree; the tree frees it now
 
-        // Fresh window tag: `name` then the fixed command suffix, caret at end
-        // (winsettag composition, wind.c:475-534).
-        try w.tag.insertAt(0, name, true);
-        try w.tag.insertAt(w.tag.file.buffer.len(), tag_suffix, true);
+        // Fresh window tag via the winsettag composition (wind.c:497-536): set the
+        // file name, compose, then park the caret at the tag end (the C leaves it
+        // at 0, but Snarf's chrome parks it at the end — see the byte-identity pin).
+        try w.body.file.setName(name);
+        try w.setTag1();
         const nc = w.tag.file.buffer.len();
         try w.tag.setSelect(nc, nc);
 
@@ -132,7 +129,6 @@ pub fn boot(
     const c = (try row.add(-1)) orelse return error.ColumnTooNarrow;
 
     var tree = Tree{ .allocator = a, .chrome = chrome, .row = row };
-    errdefer tree.bodies.deinit(a);
     _ = try tree.addWinTo(c, opts.win_name, opts.body);
     return tree;
 }
@@ -189,10 +185,10 @@ test "boot: tree shape and default tag strings" {
     // The window tag caret parks at the end (wind.c winsettag tail).
     try testing.expectEqual(w.tag.file.buffer.len(), w.tag.q1);
 
-    // The body carries the seed text and the window got id 1 (++winid).
+    // The body carries the seed text and the window got id 1 (++winid, now on Row).
     try expectTag(&w.body, "hello\nworld\n");
     try testing.expectEqual(@as(u32, 1), w.id);
-    try testing.expectEqual(@as(u32, 1), tree.winid);
+    try testing.expectEqual(@as(u32, 1), tree.row.winid);
 
     // Rect tiling sanity: rowtag over the top strip, the column below its band,
     // the window filling the column region below the columntag.
@@ -226,4 +222,26 @@ test "boot: addWindow stacks a second window in the column" {
     const w1 = c.w.items[0];
     try testing.expect(w1.r.max.y <= w2.r.min.y);
     try testing.expect(w2.r.max.y <= c.r.max.y);
+}
+
+test "boot: setTag1 fresh tag is byte-identical to name ++ tag_suffix" {
+    // R-P9-4 pin: the winsettag1 composition (name + " Del Snarf" + " |" +
+    // " Look ", wind.c:497-536 for a fresh window with no pipe and seq==0) must be
+    // byte-for-byte the old literal `name ++ tag_suffix`. `tag_suffix` survives
+    // only as this test constant now that boot composes via setName + setTag1.
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var tree = try boot(testing.allocator, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "scratch",
+        .body = "",
+    });
+    defer tree.deinit();
+
+    const w = tree.row.col.items[0].w.items[0];
+    try expectTag(&w.tag, "scratch" ++ tag_suffix);
+    // The caret parks at the tag end (Snarf chrome convention).
+    try testing.expectEqual(w.tag.file.buffer.len(), w.tag.q1);
+    // The body File is owned by the Window (R-P9-5).
+    try testing.expect(w.owns_body);
 }

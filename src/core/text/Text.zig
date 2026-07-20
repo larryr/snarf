@@ -251,6 +251,11 @@ pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!v
     const n = std.unicode.utf8CountCodepoints(bytes) catch unreachable; // valid by contract
     if (n == 0) return; // text.c:373-374
     if (tofile) try self.file.insert(q0, bytes); // text.c:376 fileinsert
+    // A recorded BODY edit dirties the window (text.c:378 `w->dirty = TRUE`); the
+    // tag-sweep (frameEnd, 9d) and `Window.clean` read it. Tag edits never dirty.
+    if (tofile and self.what == .body) if (self.w) |w| {
+        w.dirty = true;
+    };
     if (q0 < self.iq1) self.iq1 += n; // text.c:393-394
     if (q0 < self.q1) self.q1 += n; // text.c:395-396
     if (q0 < self.q0) self.q0 += n; // text.c:397-398
@@ -273,6 +278,9 @@ pub fn deleteRange(self: *Text, q0: usize, q1: usize, tofile: bool) Error!void {
     const n = q1 - q0; // text.c:468
     if (n == 0) return; // text.c:469-470
     if (tofile) try self.file.delete(q0, n); // text.c:472 filedelete
+    if (tofile and self.what == .body) if (self.w) |w| {
+        w.dirty = true; // text.c:474 `w->dirty = TRUE` (BODY edits only)
+    };
     if (q0 < self.iq1) self.iq1 -= @min(n, self.iq1 - q0); // text.c:488-489
     if (q0 < self.q0) self.q0 -= @min(n, self.q0 - q0); // text.c:490-491
     if (q0 < self.q1) self.q1 -= @min(n, self.q1 - q0); // text.c:492-493

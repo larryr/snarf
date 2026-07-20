@@ -19,6 +19,7 @@ const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Column = @import("Column.zig");
+const Editor = @import("Editor.zig");
 
 const Window = @This();
 const Rect = draw.Rect;
@@ -43,6 +44,19 @@ col: ?*Column = null,
 /// Tag height in lines — fixed at 1 this phase (R-P8-1; `wintaglines` is later).
 taglines: i32 = 1,
 maxlines: usize = 0,
+/// `w->dirty` (dat.h:187): set true by a recorded BODY edit (Text.insertAt/
+/// deleteRange, text.c:378/474); read by `clean` (the Del two-strike) and, once
+/// 9d lands, the `frameEnd` tag sweep. Distinct from `file.mod` (which survives a
+/// clean strike so the mod dot stays).
+dirty: bool = false,
+/// Cached tag-presence tuple for the `frameEnd` sweep (R-P9-4/§3f): the last
+/// `{undoSeq()!=0, redoSeq()!=0, file.mod}` `setTag1` was called for. The field
+/// only — the sweep that reads/updates it is wave 9d.
+tag_state: struct { undo: bool = false, redo: bool = false, mod: bool = false } = .{},
+/// True when this Window owns its body `File` and must free it in `deinit`
+/// (R-P9-5). Set by the creator (`boot.addWinTo`, and later New/Newcol). When
+/// false the body `File` is borrowed (caller-owned), as in the wave-1 harnesses.
+owns_body: bool = false,
 chrome: *const Chrome,
 
 /// `wininit` (wind.c:17-90), no-clone: lay out the tag over the top strip and the
@@ -93,11 +107,19 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     w.maxlines = w.body.fr.maxlines; // wind.c:82
 }
 
-/// Free the two Texts and the tag's File. The body's File is caller-owned.
+/// Free the two Texts and the tag's File. The body's File is freed here only when
+/// `owns_body` (R-P9-5 — Del must destroy a window+file with no external
+/// registry); otherwise it is caller-owned.
 pub fn deinit(w: *Window) void {
+    const owned_body: ?*File = if (w.owns_body) w.body.file else null;
     w.body.deinit();
     w.tag.deinit();
     w.tag_file.deinit();
+    if (owned_body) |bf| {
+        const a = w.chrome.allocator;
+        bf.deinit();
+        a.destroy(bf);
+    }
 }
 
 /// `winresize` (wind.c:179-250), taglines==1, no mouse warp: relayout the tag
@@ -183,6 +205,210 @@ fn border(img: *Image, r: Rect, i: i32, color: *Image) Error!void {
 /// `insetrect` (rectclip.c): shrink `r` by `n` on every side.
 fn insetRect(r: Rect, n: i32) Rect {
     return .{ .min = .{ .x = r.min.x + n, .y = r.min.y + n }, .max = .{ .x = r.max.x - n, .y = r.max.y - n } };
+}
+
+// ===========================================================================
+// Tag lifecycle (wind.c:437-593, :666-685). The C works in Rune arrays; this
+// port decodes the tag to `[]u21`, does all strstr/compare/splice-index math in
+// runes (so the `Text` splice offsets are correct for non-ASCII names), then
+// issues `insertAt`/`deleteRange` with rune offsets + UTF-8 byte slices.
+// ===========================================================================
+
+/// `parsetag` boundary: the rune index where the file-name ends (wind.c:450-465).
+const del_snarf_runes = [_]u21{ ' ', 'D', 'e', 'l', ' ', 'S', 'n', 'a', 'r', 'f' };
+
+/// Decode the tag Text's whole buffer to an owned rune slice (caller frees).
+fn tagRunes(w: *Window, a: std.mem.Allocator) error{OutOfMemory}![]u21 {
+    const nc = w.tag.file.buffer.len();
+    const r = try a.alloc(u21, nc);
+    var i: usize = 0;
+    while (i < nc) : (i += 1) r[i] = w.tag.file.buffer.runeAt(i);
+    return r;
+}
+
+/// Encode a rune slice to owned UTF-8 (caller frees). Runes come from `runeAt`
+/// (never surrogates), so encoding cannot fail; a stray invalid rune degrades to
+/// U+FFFD rather than erroring.
+fn runesToUtf8(a: std.mem.Allocator, runes: []const u21) error{OutOfMemory}![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(a);
+    var tmp: [4]u8 = undefined;
+    for (runes) |r| {
+        const n = std.unicode.utf8Encode(r, &tmp) catch std.unicode.utf8Encode(0xFFFD, &tmp) catch unreachable;
+        try buf.appendSlice(a, tmp[0..n]);
+    }
+    return buf.toOwnedSlice(a);
+}
+
+fn appendAsciiRunes(list: *std.ArrayList(u21), a: std.mem.Allocator, s: []const u8) error{OutOfMemory}!void {
+    for (s) |c| try list.append(a, c);
+}
+
+fn appendUtf8AsRunes(list: *std.ArrayList(u21), a: std.mem.Allocator, s: []const u8) error{OutOfMemory}!void {
+    const view = std.unicode.Utf8View.init(s) catch {
+        for (s) |_| try list.append(a, 0xFFFD);
+        return;
+    };
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| try list.append(a, cp);
+}
+
+fn indexOfRune(hay: []const u21, needle: u21) ?usize {
+    for (hay, 0..) |r, i| if (r == needle) return i;
+    return null;
+}
+
+fn indexOfRunes(hay: []const u21, needle: []const u21) ?usize {
+    if (needle.len == 0) return 0;
+    if (hay.len < needle.len) return null;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (std.mem.eql(u21, hay[i..][0..needle.len], needle)) return i;
+    }
+    return null;
+}
+
+/// The earliest " |" or "\t|" — the left-half terminator (wind.c:455-457).
+fn pipeDelim(runes: []const u21) ?usize {
+    const sp = indexOfRunes(runes, &[_]u21{ ' ', '|' });
+    const tb = indexOfRunes(runes, &[_]u21{ '\t', '|' });
+    if (sp) |s| return if (tb) |t| @min(s, t) else s;
+    return tb;
+}
+
+/// `parsetag`'s name-end computation (wind.c:450-465), rune index.
+fn nameEndRune(runes: []const u21) usize {
+    const pipe = pipeDelim(runes);
+    if (indexOfRunes(runes, &del_snarf_runes)) |ds| {
+        if (pipe == null or ds < pipe.?) return ds;
+    }
+    var i: usize = 0;
+    while (i < runes.len) : (i += 1) {
+        if (runes[i] == ' ' or runes[i] == '\t') return i;
+    }
+    return runes.len;
+}
+
+/// `parsetag` (wind.c:437-467): return the whole tag as UTF-8 plus the name-end
+/// index. NOTE: `name_len` is a RUNE index (the C's `*len`), equal to the byte
+/// index for the ASCII tags of v1. Caller frees `text`.
+pub fn parseTag(w: *Window, a: std.mem.Allocator) error{OutOfMemory}!struct { text: []u8, name_len: usize } {
+    const runes = try w.tagRunes(a);
+    defer a.free(runes);
+    const nl = nameEndRune(runes);
+    const text = try runesToUtf8(a, runes);
+    return .{ .text = text, .name_len = nl };
+}
+
+/// `winsettag1` (wind.c:469-577), ported per exec contract §3c. No tag cache, so
+/// the C's ncache/wincommit sync (wind.c:484-486) and `needundo` dance are n/a;
+/// Put/Get arms are FLAG-deferred (no putseq/isdir yet). taglines==1 ⇒ the final
+/// `winresize` arm (wind.c:573-576) is dead, but `drawButton` (wind.c:572) is not.
+pub fn setTag1(w: *Window) Error!void {
+    const a = w.chrome.allocator;
+
+    // old = current tag runes; name-splice if the tag's name half differs from
+    // body.file.name (wind.c:487-495).
+    var old = try w.tagRunes(a);
+    defer a.free(old);
+    {
+        const i = nameEndRune(old);
+        const old_name = try runesToUtf8(a, old[0..i]);
+        defer a.free(old_name);
+        if (!std.mem.eql(u8, old_name, w.body.file.name.items)) {
+            try w.tag.deleteRange(0, i, true); // wind.c:489 textdelete
+            try w.tag.insertAt(0, w.body.file.name.items, true); // wind.c:490 textinsert
+            const fresh = try w.tagRunes(a); // wind.c:492-494 re-read
+            a.free(old);
+            old = fresh;
+        }
+    }
+
+    // Compose `new` (wind.c:497-536).
+    var new: std.ArrayList(u21) = .empty;
+    defer new.deinit(a);
+    try appendUtf8AsRunes(&new, a, w.body.file.name.items); // wind.c:500-502 name
+    try appendAsciiRunes(&new, a, " Del Snarf"); // wind.c:503
+    // filemenu is true for a normal window in v1 (no dir/scratch windows yet):
+    if (w.body.file.undoSeq() != 0) try appendAsciiRunes(&new, a, " Undo"); // wind.c:506-508
+    if (w.body.file.redoSeq() != 0) try appendAsciiRunes(&new, a, " Redo"); // wind.c:510-512
+    // Put (wind.c:514-518) / Get (wind.c:520-522) FLAG-deferred: no putseq/isdir.
+    try appendAsciiRunes(&new, a, " |"); // wind.c:524
+    // user-suffix preservation: k = just past the old '|'; else append " Look "
+    // for a fresh window (wind.c:526-535).
+    var k: usize = undefined;
+    if (indexOfRune(old, '|')) |bar| {
+        k = bar + 1;
+    } else {
+        k = old.len;
+        if (w.body.file.seq == 0) try appendAsciiRunes(&new, a, " Look "); // wind.c:531-534
+    }
+    const i_new = new.items.len;
+
+    // Replace [j,k) from the first differing rune if new != old[0..k]
+    // (wind.c:538-562).
+    if (!std.mem.eql(u21, new.items, old[0..k])) {
+        const n = @min(k, i_new);
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            if (old[j] != new.items[j]) break;
+        }
+        const q0 = w.tag.q0;
+        const q1 = w.tag.q1;
+        try w.tag.deleteRange(j, k, true); // wind.c:550
+        const ins = try runesToUtf8(a, new.items[j..i_new]);
+        defer a.free(ins);
+        try w.tag.insertAt(j, ins, true); // wind.c:551
+        // Preserve the user's tag selection past the bar (wind.c:552-561).
+        if (indexOfRune(old, '|')) |bar_old| {
+            if (q0 > bar_old) {
+                const bar_new = indexOfRune(new.items, '|').?;
+                const shift = @as(isize, @intCast(bar_new)) - @as(isize, @intCast(bar_old));
+                w.tag.q0 = shiftClamp(q0, shift);
+                w.tag.q1 = shiftClamp(q1, shift);
+            }
+        }
+    }
+
+    // Clear the tag file's mod flag, clamp + reselect, redraw the button
+    // (wind.c:565-572). No ncache ⇒ n is just the tag length.
+    w.tag_file.mod = false;
+    const n_total = w.tag.file.buffer.len();
+    if (w.tag.q0 > n_total) w.tag.q0 = n_total;
+    if (w.tag.q1 > n_total) w.tag.q1 = n_total;
+    try w.tag.setSelect(w.tag.q0, w.tag.q1);
+    try w.drawButton();
+}
+
+fn shiftClamp(v: usize, shift: isize) usize {
+    const r = @as(isize, @intCast(v)) + shift;
+    return if (r < 0) 0 else @intCast(r);
+}
+
+/// `winsettag` (wind.c:577-593): the `file->ntext` fan-out collapses to one
+/// `setTag1` (a single Text per File in v1).
+pub fn setTag(w: *Window) Error!void {
+    try w.setTag1();
+}
+
+/// `winclean` (wind.c:666-685) — THE TWO-STRIKE. isscratch/isdir/nopen arms are
+/// n/a in v1 (`conservative` unused). A dirty window warns ONCE and clears
+/// `dirty` (while `file.mod` stays true so the mod dot remains), returning false;
+/// the second call sees `dirty==false` and returns true. A later body edit
+/// re-arms `dirty` (Text.insertAt/deleteRange). Small unnamed files pass silently.
+pub fn clean(w: *Window, ed: *Editor, conservative: bool) bool {
+    _ = conservative;
+    if (w.dirty) {
+        if (w.body.file.name.items.len != 0) {
+            ed.warning("{s} modified\n", .{w.body.file.name.items}); // wind.c:675
+        } else {
+            if (w.body.file.buffer.len() < 100) return true; // wind.c:677-678 too small: pass
+            ed.warning("unnamed file modified\n", .{}); // wind.c:679
+        }
+        w.dirty = false; // wind.c:681
+        return false; // wind.c:682
+    }
+    return true;
 }
 
 // ===========================================================================
@@ -319,4 +545,129 @@ test "window: drawButton reflects file.mod" {
     try w.drawButton();
     try h.fx.disp.flush();
     try testing.expectEqual(@as(usize, 6), countDraws(h.fx.tree.writes.items[base]));
+}
+
+// --- Tag lifecycle (wind.c:437-593, :666-685) ---------------------------------
+
+const win_rect = proto.Rect.make(0, 20, 300, 380);
+
+test "window: parsetag finds the name end" {
+    const a = testing.allocator;
+
+    // " Del Snarf" (before the " |" pipe) ends the name.
+    {
+        const h = try WinHarness.init("body\n", win_rect);
+        defer h.deinit();
+        try h.w.tag.insertAt(0, "foo Del Snarf | Look ", true);
+        const pt = try h.w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqual(@as(usize, 3), pt.name_len); // "foo"
+        try testing.expectEqualStrings("foo Del Snarf | Look ", pt.text);
+    }
+
+    // "\t|" is a valid pipe terminator; a " Del Snarf" AFTER the pipe is ignored,
+    // so the name ends at the first blank.
+    {
+        const h = try WinHarness.init("body\n", win_rect);
+        defer h.deinit();
+        try h.w.tag.insertAt(0, "a b\t| Del Snarf", true);
+        const pt = try h.w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqual(@as(usize, 1), pt.name_len); // "a"
+    }
+
+    // A name with no blanks and no pipe: the whole tag is the name.
+    {
+        const h = try WinHarness.init("body\n", win_rect);
+        defer h.deinit();
+        try h.w.tag.insertAt(0, "foobar", true);
+        const pt = try h.w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqual(@as(usize, 6), pt.name_len);
+    }
+}
+
+test "window: setTag1 recomposition" {
+    const a = testing.allocator;
+    const h = try WinHarness.init("hello\n", win_rect);
+    defer h.deinit();
+    const w = &h.w;
+    try h.body_file.setName("f");
+
+    // Fresh window (seq==0, no undo/redo): the composed tag is byte-exact.
+    try w.setTag1();
+    {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqualStrings("f Del Snarf | Look ", pt.text);
+    }
+
+    // A user types a suffix after the '|'.
+    try w.tag.insertAt(w.tag.file.buffer.len(), "xyz", true); // "f Del Snarf | Look xyz"
+
+    // Select the user suffix "xyz" (both ends are past the bar).
+    try w.tag.setSelect(19, 22);
+
+    // A recorded body edit ⇒ undoSeq()!=0 ⇒ " Undo" appears before the pipe; the
+    // user suffix after '|' survives verbatim, and the selection shifts by the
+    // bar displacement (+5 for " Undo", wind.c:554-562).
+    h.body_file.mark(1);
+    try w.body.insertAt(0, "X", true);
+    try w.setTag1();
+    {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqualStrings("f Del Snarf Undo | Look xyz", pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Undo") != null);
+    }
+    try testing.expectEqual(@as(usize, 24), w.tag.q0); // 19 + 5
+    try testing.expectEqual(@as(usize, 27), w.tag.q1); // 22 + 5
+
+    // Undo the body edit ⇒ redoSeq()!=0, undoSeq()==0 ⇒ " Redo" replaces " Undo".
+    _ = try h.body_file.undo();
+    try w.setTag1();
+    {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expectEqualStrings("f Del Snarf Redo | Look xyz", pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Undo") == null);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Redo") != null);
+        // The user suffix after the pipe is still there.
+        try testing.expect(std.mem.endsWith(u8, pt.text, " Look xyz"));
+    }
+}
+
+test "window: clean two-strikes on dirty" {
+    const a = testing.allocator;
+    const h = try WinHarness.init("hello\n", win_rect);
+    defer h.deinit();
+    const w = &h.w;
+    try h.body_file.setName("f");
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+
+    // A recorded body edit arms `dirty` (and `file.mod`) via the text.c:378 hook.
+    h.body_file.mark(1);
+    try w.body.insertAt(0, "X", true);
+    try testing.expect(w.dirty);
+    try testing.expect(w.body.file.mod);
+
+    // First strike: warn once, clear dirty (mod stays), refuse.
+    try testing.expect(!w.clean(&ed, false));
+    try testing.expect(!w.dirty);
+    try testing.expect(w.body.file.mod); // the mod dot remains
+    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "f modified") != null);
+
+    // Second strike passes (dirty already cleared).
+    try testing.expect(w.clean(&ed, false));
+
+    // A later body edit re-arms dirty, so the next Del warns again.
+    const warn_len = ed.warnings.items.len;
+    h.body_file.mark(2);
+    try w.body.insertAt(0, "Y", true);
+    try testing.expect(w.dirty);
+    try testing.expect(!w.clean(&ed, false));
+    try testing.expect(!w.dirty);
+    try testing.expect(ed.warnings.items.len > warn_len); // warned again
 }
