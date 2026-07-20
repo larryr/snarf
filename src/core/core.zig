@@ -11,6 +11,7 @@ pub const Window = @import("Window.zig");
 pub const Chrome = @import("Chrome.zig");
 pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
+pub const boot = @import("boot.zig");
 
 test {
     std.testing.refAllDecls(@This());
