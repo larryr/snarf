@@ -138,7 +138,8 @@ pub fn insert(f: *Frame, s: []const u8, p0: usize) Frame.Error!void {
         util.ckLineWrap0(f, &ppt1, &f.boxes.items[n0]);
     }
     f.modified = true;
-    // (f->p0==f->p1) tick — no-op in P4.
+    // (f->p0==f->p1) lift the tick before the surgery (frinsert.c:132-133).
+    if (f.p0 == f.p1) try drawmod.tick(f, util.ptOfChar(f, f.p0), false);
 
     // Forward pass (frinsert.c:142-168): find where old (pt0) and new (pt1) pen
     // positions realign, splitting boxes to fit and recording point pairs. The
@@ -261,7 +262,8 @@ pub fn insert(f: *Frame, s: []const u8, p0: usize) Frame.Error!void {
     if (f.p0 > f.nchars) f.p0 = f.nchars;
     if (f.p1 >= p0) f.p1 += scratch.nchars;
     if (f.p1 > f.nchars) f.p1 = f.nchars;
-    // (f->p0==f->p1) tick — no-op in P4.
+    // (f->p0==f->p1) restore the tick after the p0/p1 adjustment (frinsert.c:289-290).
+    if (f.p0 == f.p1) try drawmod.tick(f, util.ptOfChar(f, f.p0), true);
 }
 
 // ==========================================================================

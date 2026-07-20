@@ -79,6 +79,11 @@ sequence diagram below shows the common walk/open/read flow against `/mnt/host`:
 
 Diagram source: [diagrams/9p-session.puml](diagrams/9p-session.puml)
 
+> Revision log: 2026-07-19 — §4 implemented (phase 6): framework-level parked-read
+> FIFO with re-run completion (Server.completeReads), Tflush answering the parked tag
+> Rerror "interrupted" BEFORE Rflush, clunk/version sweeps. Devices signal parking
+> via error.WouldBlockRead (never a wire string).
+
 ## 5. Errors (canonical strings)
 
 `"file does not exist"`, `"permission denied"`, `"fid in use"`, `"i/o error"`,

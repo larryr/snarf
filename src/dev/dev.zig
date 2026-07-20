@@ -6,6 +6,8 @@ const std = @import("std");
 pub const draw = @import("draw.zig");
 pub const draw_backend = @import("draw_backend.zig");
 pub const draw_canvas = @import("draw_canvas.zig");
+pub const profiles = @import("profiles.zig");
+pub const input = @import("input.zig");
 
 test {
     std.testing.refAllDecls(@This());

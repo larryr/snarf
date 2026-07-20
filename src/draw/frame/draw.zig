@@ -129,11 +129,15 @@ pub fn drawSel0(f: *Frame, pt0: Point, p0: usize, p1: usize, back: *Image, text:
     return pt;
 }
 
-/// `frdrawsel` (frdraw.c:33-55): the selection-shape entry. Phase-4 callers pass
-/// `issel = false`; a zero-length range routes to the no-op tick.
+/// `frdrawsel` (frdraw.c:33-55): the selection-shape entry. Prologue: if a tick
+/// is showing, lift it first (frdraw.c:38) so the repaint below is not corrupted
+/// by stale caret pixels. A zero-length range routes to the tick (on/off by
+/// `issel`); otherwise the range is painted with the (HIGH,HTEXT) or (BACK,TEXT)
+/// pair.
 pub fn drawSel(f: *Frame, pt: Point, p0: usize, p1: usize, issel: bool) Frame.Error!void {
+    if (f.ticked) try tick(f, util.ptOfChar(f, f.p0), false); // frdraw.c:38
     if (p0 == p1) {
-        tick(f, pt, issel);
+        try tick(f, pt, issel);
         return;
     }
     const back = if (issel) f.col(.high) else f.col(.back);
@@ -141,11 +145,15 @@ pub fn drawSel(f: *Frame, pt: Point, p0: usize, p1: usize, issel: bool) Frame.Er
     _ = try drawSel0(f, pt, p0, p1, back, text);
 }
 
-/// `frredraw` (frdraw.c:121-141): repaint the frame. Phase-4 exercises the
-/// `p0==p1` arm — a full-frame `drawSel0` with (back, text).
+/// `frredraw` (frdraw.c:121-141): repaint the frame. The `p0==p1` arm lifts the
+/// tick around the full-frame repaint and restores it after (frdraw.c:125-133);
+/// the selection arm paints the three (BACK, HIGH, BACK) spans.
 pub fn redraw(f: *Frame) Frame.Error!void {
     if (f.p0 == f.p1) {
+        const ticked = f.ticked; // frdraw.c:127-128
+        if (ticked) try tick(f, util.ptOfChar(f, f.p0), false);
         _ = try drawSel0(f, util.ptOfChar(f, 0), 0, f.nchars, f.col(.back), f.col(.text));
+        if (ticked) try tick(f, util.ptOfChar(f, f.p0), true); // frdraw.c:132-133
         return;
     }
     var pt = util.ptOfChar(f, 0);
@@ -177,12 +185,37 @@ pub fn selectPaint(f: *Frame, p0: Point, p1: Point, col: *Image) Frame.Error!voi
     }
 }
 
-/// `frtick` (frdraw.c:163-172): typing-tick — a no-op stub in phase 4 (tick
-/// images are deferred to phase 6, R-P4-6).
-pub fn tick(f: *Frame, pt: Point, ticked: bool) void {
-    _ = f;
-    _ = pt;
-    _ = ticked;
+/// `_frtick` (frdraw.c:143-161): paint (`ticked=true`) or lift (`false`) the
+/// caret at `pt`. No-op if already in that state, if there is no tick image, or
+/// if `pt` lies outside `f.r` (frdraw.c:148). The tick sits one pixel left of
+/// `pt` (tickscale==1, frdraw.c:150) and is `frtick_w` px wide, clamped at the
+/// right edge but allowed into the left border (frdraw.c:153-154). On: save the
+/// screen pixels under the tick into `tickback`, then blit `tick`. Off: restore
+/// `tickback`.
+fn tickDraw(f: *Frame, pt0: Point, ticked: bool) Frame.Error!void {
+    if (f.ticked == ticked or f.tick == null or !util.ptInRect(pt0, f.r)) return; // frdraw.c:148
+    const h = util.fontHeight(f);
+    var pt = pt0;
+    pt.x -= 1; // tickscale==1 (F-4); frdraw.c:150 "just left of where requested"
+    var r = Rect.make(pt.x, pt.y, pt.x + Frame.frtick_w, pt.y + h); // frdraw.c:151
+    if (r.max.x > f.r.max.x) r.max.x = f.r.max.x; // frdraw.c:153-154
+    if (ticked) {
+        // Save screen under the tick, then blit the tick glyph (frdraw.c:156-157).
+        try f.tickback.?.draw(f.tickback.?.r, f.b, null, pt);
+        try f.b.draw(r, &f.tick.?, null, .{});
+    } else {
+        // Restore the saved pixels (frdraw.c:159).
+        try f.b.draw(r, &f.tickback.?, null, .{});
+    }
+    f.ticked = ticked; // frdraw.c:160
+}
+
+/// `frtick` (frdraw.c:163-172): the tick entry. DIVERGENCE F-4: `tickscale` is
+/// fixed at 1, so the `tickscale != scalesize(1)` re-init branch (frdraw.c:166-170)
+/// is dead and dropped — this reduces to `_frtick`. Fallible (it draws), so all
+/// call sites (`drawSel`, `redraw`, delete/select/insert) `try` it.
+pub fn tick(f: *Frame, pt: Point, ticked: bool) Frame.Error!void {
+    try tickDraw(f, pt, ticked);
 }
 
 // ==========================================================================
@@ -241,4 +274,77 @@ test "frame: drawtext write stream" {
     try testing.expectEqual(@as(usize, 2), f.nchars);
     try testing.expectEqual(@as(usize, 1), f.nlines);
     try testing.expectEqual(false, f.lastlinefull);
+}
+
+test "frame: tick on/off restores pixels" {
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var f = fx.makeFrame(proto.Rect.make(20, 20, 119, 470));
+    defer f.clear(true);
+    try f.initTick();
+
+    const tid = f.tick.?.id;
+    const tbid = f.tickback.?.id;
+    const white = fx.disp.white.id;
+
+    try fx.disp.flush(); // drain the initTick draws so `base` is a clean baseline
+    const base = fx.tree.writes.items.len;
+    // ON at the empty-frame caret ptOfChar(0)==(20,20); the tick sits 1px left
+    // (pt=(19,20)) and is 3px wide ⇒ blit rect (19,20)-(22,38).
+    try tick(&f, f.ptOfChar(0), true);
+    try testing.expect(f.ticked);
+    // OFF restores the saved pixels over the same rect.
+    try tick(&f, f.ptOfChar(0), false);
+    try testing.expect(!f.ticked);
+    try fx.disp.flush();
+
+    const w = fx.tree.writes.items[base];
+    var exp: [45]u8 = undefined;
+    // [0] save: dst=tickback, src=screen(0), r=tickback.r=(0,0,3,18), sp=mp=(19,20).
+    _ = try proto.encode(.{ .draw = .{
+        .dstid = tbid,
+        .srcid = 0,
+        .maskid = white,
+        .r = proto.Rect.make(0, 0, 3, 18),
+        .sp = .{ .x = 19, .y = 20 },
+        .mp = .{ .x = 19, .y = 20 },
+    } }, exp[0..45]);
+    try testing.expectEqualSlices(u8, &exp, w[0..45]);
+    // [45] blit: dst=screen(0), src=tick, r=(19,20,22,38).
+    _ = try proto.encode(.{ .draw = .{ .dstid = 0, .srcid = tid, .maskid = white, .r = proto.Rect.make(19, 20, 22, 38) } }, exp[0..45]);
+    try testing.expectEqualSlices(u8, &exp, w[45..90]);
+    // [90] restore: dst=screen(0), src=tickback, same rect.
+    _ = try proto.encode(.{ .draw = .{ .dstid = 0, .srcid = tbid, .maskid = white, .r = proto.Rect.make(19, 20, 22, 38) } }, exp[0..45]);
+    try testing.expectEqualSlices(u8, &exp, w[90..135]);
+    try testing.expectEqual(@as(u8, 'v'), w[135]);
+}
+
+test "frame: redraw preserves tick" {
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var f = fx.makeFrame(proto.Rect.make(20, 20, 119, 470));
+    defer f.clear(true);
+    try f.insert("ab", 0); // caret at 2 (p0==p1)
+    try f.initTick();
+    try tick(&f, f.ptOfChar(2), true); // tick on at (38,20) ⇒ rect (37,20,40,38)
+    try testing.expect(f.ticked);
+
+    try fx.disp.flush(); // drain the insert/initTick/tick-on draws
+    const base = fx.tree.writes.items.len;
+    try f.redraw();
+    try fx.disp.flush();
+    try testing.expect(f.ticked); // survives the full-frame repaint
+
+    const w = fx.tree.writes.items[base];
+    const tid = f.tick.?.id;
+    const tbid = f.tickback.?.id;
+    const white = fx.disp.white.id;
+    var exp: [45]u8 = undefined;
+    // First op: lift the tick (restore tickback) at (37,20)-(40,38).
+    _ = try proto.encode(.{ .draw = .{ .dstid = 0, .srcid = tbid, .maskid = white, .r = proto.Rect.make(37, 20, 40, 38) } }, exp[0..45]);
+    try testing.expectEqualSlices(u8, &exp, w[0..45]);
+    // Last op (before 'v'): re-blit the tick from the tick image at the same rect.
+    _ = try proto.encode(.{ .draw = .{ .dstid = 0, .srcid = tid, .maskid = white, .r = proto.Rect.make(37, 20, 40, 38) } }, exp[0..45]);
+    try testing.expectEqualSlices(u8, &exp, w[w.len - 46 .. w.len - 1]);
+    try testing.expectEqual(@as(u8, 'v'), w[w.len - 1]);
 }

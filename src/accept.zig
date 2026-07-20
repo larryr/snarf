@@ -190,7 +190,7 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     // White ground, black text; frame rect 11 chars wide (fixed 9x18 metrics).
     try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &d.white, null, .{});
     var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    var text = core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
     defer text.deinit();
     try text.fill();
     try d.flush();
@@ -297,4 +297,100 @@ test "phase-5: canvas backend reproduces the frozen phase-2 scene and blits it" 
     try testing.expectEqual(@intFromPtr(canvas.headless.fb.ptr), Rec.last_ptr);
     // The load-bearing assertion: byte-identical to the phase-2 frozen scene.
     try testing.expectEqual(@as(u64, 0x1a99dc0d115ae2bf), canvas.headless.hash());
+}
+
+test "phase-6: click, type, sweep — editing through the full stack" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    // Acme palette (R-P6-9/F-10), empty buffer, 11-col frame.
+    var back = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, 0xFFFFEAFF);
+    var high = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, 0xEEEE9EFF);
+    var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
+    try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &back, null, .{});
+
+    var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
+    defer file.deinit();
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    defer text.deinit();
+
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.text = &text;
+
+    // (1) Type "ab\ncd" — one typing run, one transaction.
+    for ([_]u21{ 'a', 'b', '\n', 'c', 'd' }) |r| try ed.handleKey(r);
+    try ed.frameEnd(d);
+    try testing.expectEqual(@as(usize, 5), file.buffer.len());
+    try testing.expectEqual(@as(usize, 5), text.q0);
+    try testing.expectEqual(@as(usize, 5), text.q1);
+
+    // (2) B1 sweep from 'b' (char 1) down to line-2 char 4.
+    try ed.handleMouse(.{ .x = 33, .y = 25, .buttons = 1, .msec = 100 });
+    try ed.handleMouse(.{ .x = 33, .y = 43, .buttons = 1, .msec = 120 });
+    try ed.handleMouse(.{ .x = 33, .y = 43, .buttons = 0, .msec = 140 });
+    try ed.frameEnd(d);
+    try testing.expectEqual(@as(usize, 1), text.q0);
+    try testing.expectEqual(@as(usize, 4), text.q1);
+    // Spot checks: 'b' cell highlighted, 'd' cell plain, no tick when p0!=p1.
+    try testing.expectEqual(@as(u32, 0xEEEE9EFF), hb.pixelAt(31, 22)); // 'b' cell bg (avoid glyph ink)
+    try testing.expectEqual(@as(u32, 0xEEEE9EFF), hb.pixelAt(24, 40)); // 'c' cell bg (L2)
+    try testing.expectEqual(@as(u32, 0xFFFFEAFF), hb.pixelAt(31, 40)); // 'd' cell bg — outside selection
+    // FROZEN-ACCEPT-6a: 640x480, acme palette, "ab\ncd" typed, B1 sweep [1,4)
+    // highlighted. Frozen 2026-07-19 after spot-checks; re-freeze only with
+    // orchestrator sign-off (R-P2-7).
+    try testing.expectEqual(@as(u64, 0x722dca39c32500b2), hb.hash());
+
+    // (3) Type 'X' over the selection; (4) backspace.
+    try ed.handleKey('X');
+    try ed.handleKey(0x08); // Kbs
+    try ed.frameEnd(d);
+    var rbuf: [32]u8 = undefined;
+    try testing.expectEqualStrings("ad", file.buffer.read(0, file.buffer.len(), &rbuf));
+
+    // (5) B1 click past end of L1 -> caret at end (char 2).
+    try ed.handleMouse(.{ .x = 50, .y = 25, .buttons = 1, .msec = 200 });
+    try ed.handleMouse(.{ .x = 50, .y = 25, .buttons = 0, .msec = 220 });
+    try ed.frameEnd(d);
+    try testing.expectEqual(@as(usize, 2), text.q0);
+    try testing.expectEqual(@as(usize, 2), text.q1);
+    // Tick pins at ptOfChar(2) = (38,20): vertical line x=38, boxes at top/bottom.
+    try testing.expectEqual(@as(u32, 0x000000FF), hb.pixelAt(38, 28)); // vertical line
+    try testing.expectEqual(@as(u32, 0x000000FF), hb.pixelAt(37, 21)); // top box
+    try testing.expectEqual(@as(u32, 0x000000FF), hb.pixelAt(39, 36)); // bottom box
+    try testing.expectEqual(@as(u32, 0xFFFFEAFF), hb.pixelAt(41, 28)); // right of tick
+    // FROZEN-ACCEPT-6b: after type-over + backspace ("ad") and a B1 click, the
+    // typing tick visible at char 2. Frozen 2026-07-19 after the tick-pixel
+    // pins passed (R-P2-7).
+    try testing.expectEqual(@as(u64, 0x89e8596ac03dd172), hb.hash());
+
+    // (6) Undo/redo round-trip: two typing runs = two transactions.
+    _ = try file.undo();
+    try testing.expectEqualStrings("ab\ncd", file.buffer.read(0, file.buffer.len(), &rbuf));
+    _ = try file.undo();
+    try testing.expectEqual(@as(usize, 0), file.buffer.len());
+    _ = try file.redo();
+    _ = try file.redo();
+    try testing.expectEqualStrings("ad", file.buffer.read(0, file.buffer.len(), &rbuf));
+    // Undo/redo mutate the FILE only — frame resync on undo is deferred (the
+    // future Text-observer hook), so pixels still match FROZEN-ACCEPT-6b.
+    try testing.expectEqual(@as(u64, 0x89e8596ac03dd172), hb.hash());
 }

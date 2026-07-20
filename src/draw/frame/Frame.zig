@@ -38,6 +38,12 @@ pub const run_byte_cap: usize = 256;
 /// NCOL (frame.h:12-19): number of color slots.
 pub const ncol: usize = 5;
 
+/// FRTICKW (frame.h:21): the typing-tick width in pixels (a fixed 3). `tickscale`
+/// is omitted from the struct — it is always 1 (F-4, frinit.c:36 `scalesize(1)`),
+/// so the tick is exactly `frtick_w` px wide and `frtick_w/2 == 1` px is the
+/// vertical-line offset.
+pub const frtick_w: i32 = 3;
+
 /// The color-slot order (frame.h:12-19). P4 callers pass
 /// `.{ white, white, black, black, black }`.
 pub const ColorSlot = enum(usize) { back, high, bord, text, htext };
@@ -92,6 +98,13 @@ maxlines: usize,
 lastlinefull: bool,
 modified: bool,
 noredraw: bool,
+/// The typing tick (frame.h:49-51). `tick` is a 3×height image of the caret
+/// glyph; `tickback` saves the screen pixels under it so it can be lifted; both
+/// are allocated by `initTick` (F-5) and freed by `clear(true)`. `ticked` is the
+/// on-screen flag. All null/false until `initTick` runs.
+tick: ?Image = null,
+tickback: ?Image = null,
+ticked: bool = false,
 
 // --- method aliases: the sibling frame/* files attach here so callers can
 //     write `f.insert(...)`, `f.redraw()`, `f.ptOfChar(p)`, etc. ---
@@ -102,7 +115,14 @@ pub const drawSel0 = @import("draw.zig").drawSel0;
 pub const drawSel = @import("draw.zig").drawSel;
 pub const redraw = @import("draw.zig").redraw;
 pub const selectPaint = @import("draw.zig").selectPaint;
-pub const tick = @import("draw.zig").tick;
+// NB: the tick *painter* (draw.zig `tick`) is NOT aliased here — the struct has
+// a `tick: ?Image` field, and a decl of the same name would collide. draw.zig
+// and the sibling files call it as `drawmod.tick(f, ...)`.
+pub const delete = @import("delete.zig").delete;
+pub const selectBegin = @import("select.zig").selectBegin;
+pub const selectUpdate = @import("select.zig").selectUpdate;
+pub const selectEnd = @import("select.zig").selectEnd;
+pub const SelectState = @import("select.zig").SelectState;
 pub const canFit = util.canFit;
 pub const ckLineWrap = util.ckLineWrap;
 pub const ckLineWrap0 = util.ckLineWrap0;
@@ -124,8 +144,9 @@ pub fn col(f: *const Frame, s: ColorSlot) *Image {
 
 /// `frinit` (frinit.c:7-26): bind font/image/colors, compute `maxtab` =
 /// 8·stringWidth("0") (72px for fixed 9x18), then `setRects`. `display` is taken
-/// from `b.display` (frinit.c:11). Tick-image init (frinit.c:24) is deferred to
-/// phase 6.
+/// from `b.display` (frinit.c:11). DIVERGENCE F-5: the C's `frinittick` call
+/// (frinit.c:24) is NOT made here — `initTick` is a SEPARATE fallible method the
+/// caller runs after init, so `Frame.init` stays infallible.
 pub fn init(allocator: std.mem.Allocator, r: proto.Rect, font: *Font, b: *Image, cols: [ncol]*Image) Frame {
     var f = Frame{
         .allocator = allocator,
@@ -160,15 +181,54 @@ pub fn setRects(f: *Frame, r: proto.Rect, b: *Image) void {
     f.maxlines = @intCast(@divTrunc(dy, h));
 }
 
-/// `frclear` (frinit.c:71-86): free every run box's text and the box list.
-/// `freeall` (tick images) is a no-op in phase 4.
+/// `frclear` (frinit.c:71-86): free every run box's text and the box list; when
+/// `freeall`, also free the tick images (frinit.c:78-83). `ticked` is always
+/// cleared (frinit.c:85).
 pub fn clear(f: *Frame, freeall: bool) void {
     for (f.boxes.items) |*bx| {
         if (bx.kind == .run) f.allocator.free(bx.kind.run.text);
     }
     f.boxes.deinit(f.allocator);
     f.boxes = .empty;
-    _ = freeall;
+    if (freeall) {
+        if (f.tick) |*t| t.free() catch {};
+        if (f.tickback) |*t| t.free() catch {};
+        f.tick = null;
+        f.tickback = null;
+    }
+    f.ticked = false;
+}
+
+/// `frinittick` (frinit.c:28-59): build the two tick images. DIVERGENCE F-5:
+/// this is a SEPARATE fallible method (not folded into `init`); `tickscale` is
+/// fixed at 1 (F-4). Allocates `tick` and `tickback` as `frtick_w × height`
+/// images in the display channel, then paints the tick glyph with the four draws
+/// of frinit.c:52-58 — a BACK ground, a 1px TEXT vertical line at x=1, and 3×3
+/// TEXT boxes at the top and bottom. Idempotent: an existing tick/tickback is
+/// freed and rebuilt (frinit.c:39-40,44-45). On a `tickback` alloc failure the
+/// already-built `tick` is rolled back (frinit.c:47-51).
+pub fn initTick(f: *Frame) Error!void {
+    const h = util.fontHeight(f);
+    const chan = f.b.chan;
+    if (f.tick) |*t| try t.free();
+    f.tick = try f.display.allocImage(proto.Rect.make(0, 0, frtick_w, h), chan, false, proto.DWhite);
+    errdefer {
+        if (f.tick) |*t| t.free() catch {};
+        f.tick = null;
+    }
+    if (f.tickback) |*t| try t.free();
+    f.tickback = try f.display.allocImage(proto.Rect.make(0, 0, frtick_w, h), chan, false, proto.DWhite);
+
+    const t = &f.tick.?;
+    // frinit.c:53 background color (BACK ground over the whole tick).
+    try t.draw(t.r, f.col(.back), null, .{});
+    // frinit.c:55 vertical line at x = frtick_w/2 == 1, one pixel wide.
+    const mid = @divTrunc(frtick_w, 2);
+    try t.draw(proto.Rect.make(mid, 0, mid + 1, h), f.col(.text), null, .{});
+    // frinit.c:57 box on the top end (3×3).
+    try t.draw(proto.Rect.make(0, 0, frtick_w, frtick_w), f.col(.text), null, .{});
+    // frinit.c:58 box on the bottom end (3×3).
+    try t.draw(proto.Rect.make(0, h - frtick_w, frtick_w, h), f.col(.text), null, .{});
 }
 
 // ==========================================================================
@@ -200,6 +260,21 @@ pub fn delBox(f: *Frame, n0: usize, n1: usize) void {
         if (bx.kind == .run) f.allocator.free(bx.kind.run.text);
     }
     f.closeBox(n0, n1);
+}
+
+/// `_frfreebox` (frbox.c:46-59): free the run text in `[n0, n1]` (inclusive) but
+/// KEEP the slots. Unlike `delBox`, it does not close the gap — `delete.zig`
+/// frees the doomed run boxes here, then overwrites their slots by struct copy
+/// during the compaction walk and drops the leftovers with `closeBox` (no double
+/// free, since `closeBox` never frees). `n1 < n0` ⇒ nothing (frbox.c:51-52).
+pub fn freeBox(f: *Frame, n0: usize, n1: usize) void {
+    if (n1 < n0) return;
+    std.debug.assert(n0 < f.boxes.items.len and n1 < f.boxes.items.len); // frbox.c:53 (I-5)
+    var i = n0;
+    while (i <= n1) : (i += 1) {
+        const bx = &f.boxes.items[i];
+        if (bx.kind == .run) f.allocator.free(bx.kind.run.text);
+    }
 }
 
 /// `dupbox` (frbox.c:70-84): insert a deep copy of run box `bn` right after it,
@@ -304,6 +379,8 @@ test {
     _ = @import("insert.zig");
     _ = @import("draw.zig");
     _ = @import("util.zig");
+    _ = @import("delete.zig");
+    _ = @import("select.zig");
 }
 
 /// A canned draw tree (R-P2-6 shape): root(1) → new(2); dir "1"(3) → data(4).
@@ -507,4 +584,40 @@ test "frame: box primitives split/merge/find" {
     // strLen sums rune counts from a box to the end.
     try testing.expectEqual(@as(usize, 2), f.strLen(0)); // "a" + "é"
     try testing.expectEqual(@as(usize, 1), f.strLen(1)); // "é"
+}
+
+test "frame: inittick image ops" {
+    var fx = try TestFixture.init();
+    defer fx.deinit();
+    var f = fx.makeFrame(proto.Rect.make(20, 20, 119, 470));
+    defer f.clear(true);
+
+    const base = fx.tree.writes.items.len;
+    try f.initTick();
+    try fx.disp.flush();
+
+    // Two eager-flushed allocImage 'b' writes, then one flush carrying the 4 draws
+    // of frinit.c:53-58 (ground, vertical, top box, bottom box) + trailing 'v'.
+    try testing.expectEqual(base + 3, fx.tree.writes.items.len);
+    try testing.expectEqual(@as(u8, 'b'), fx.tree.writes.items[base][0]);
+    try testing.expectEqual(@as(usize, 51), fx.tree.writes.items[base].len);
+    try testing.expectEqual(@as(u8, 'b'), fx.tree.writes.items[base + 1][0]);
+
+    const tid = f.tick.?.id;
+    const white = fx.disp.white.id; // BACK (slot 0)
+    const black = fx.disp.black.id; // TEXT (slot 3)
+    const w = fx.tree.writes.items[base + 2];
+
+    const draws = [_]proto.Op{
+        .{ .draw = .{ .dstid = tid, .srcid = white, .maskid = white, .r = proto.Rect.make(0, 0, 3, 18) } }, // ground
+        .{ .draw = .{ .dstid = tid, .srcid = black, .maskid = white, .r = proto.Rect.make(1, 0, 2, 18) } }, // vertical at x=1
+        .{ .draw = .{ .dstid = tid, .srcid = black, .maskid = white, .r = proto.Rect.make(0, 0, 3, 3) } }, // top box
+        .{ .draw = .{ .dstid = tid, .srcid = black, .maskid = white, .r = proto.Rect.make(0, 15, 3, 18) } }, // bottom box
+    };
+    var exp: [45]u8 = undefined;
+    for (draws, 0..) |op, i| {
+        _ = try proto.encode(op, exp[0..45]);
+        try testing.expectEqualSlices(u8, &exp, w[i * 45 ..][0..45]);
+    }
+    try testing.expectEqual(@as(u8, 'v'), w[180]);
 }
