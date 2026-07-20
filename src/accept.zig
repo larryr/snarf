@@ -187,10 +187,14 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     var file = core.File.init(alloc, try core.Buffer.initFromBytes(alloc, "hello, acme wraps\nsecond line\ttab"));
     defer file.deinit();
 
-    // White ground, black text; frame rect 11 chars wide (fixed 9x18 metrics).
+    // White ground, black text. The Text rect starts at x=4 (phase-8 harness
+    // shift, R-P8-12): the 12px scrollbar + 4px gap carve leaves the FRAME at
+    // x=20 — 11 chars wide, byte-identical geometry to before, so the frozen
+    // hash below still holds (BACK==white, so the scrollbar back-fill is a
+    // redundant white-on-white paint over an already-white ground).
     try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &d.white, null, .{});
     var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
     defer text.deinit();
     try text.fill();
     try d.flush();
@@ -329,7 +333,7 @@ test "phase-6: click, type, sweep — editing through the full stack" {
 
     var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
     defer file.deinit();
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
     defer text.deinit();
 
     var ed = core.Editor.init(alloc);
@@ -423,7 +427,7 @@ test "phase-7: double-click, chord cut, chord paste — through the full stack" 
 
     var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
     defer file.deinit();
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
     defer text.deinit();
     var ed = core.Editor.init(alloc);
     defer ed.deinit();

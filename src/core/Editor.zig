@@ -127,7 +127,7 @@ pub fn cut(ed: *Editor, t: *Text, dosnarf: bool, docut: bool) !void {
     if (docut) {
         try t.deleteRange(q0, q1, true); // exec.c:1006 textdelete
         try t.setSelect(q0, q0); // exec.c:1007 textsetselect
-        // exec.c:1009 textscrdraw / winsettag — FLAG: scrollbar/tag deferred (R-P7-1).
+        try t.scrDraw(); // exec.c:1009 textscrdraw (LIVE; no-op when w==null). winsettag deferred.
     }
 }
 
@@ -147,7 +147,7 @@ pub fn snarfInsert(ed: *Editor, t: *Text, selectall: bool) !void {
     } else {
         try t.setSelect(q0 + n, q0 + n); // exec.c:1065-1066
     }
-    // exec.c:1068 textscrdraw / winsettag — FLAG: scrollbar/tag deferred (R-P7-1).
+    try t.scrDraw(); // exec.c:1068 textscrdraw (LIVE; no-op when w==null). winsettag deferred.
 }
 
 /// Route one mouse sample through the full `textselect` machine (text.c:1001-
@@ -298,7 +298,7 @@ fn chordStep(ed: *Editor, t: *Text, ev: MouseEvent) !void {
                 ed.chord_state = .paste; // text.c:1088
             }
         }
-        // text.c:1091 textscrdraw / :1092 clearmouse — FLAG (R-P7-1).
+        try t.scrDraw(); // text.c:1091 textscrdraw (LIVE; no-op when w==null). clearmouse deferred.
         ed.needs_flush = true;
     }
     ed.chord_buttons = b; // text.c:1066/1095 advance the edge tracker
@@ -336,7 +336,10 @@ const testing = std.testing;
 const Frame = draw.Frame;
 const proto = draw.proto;
 
-const rect = proto.Rect{ .min = .{ .x = 20, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
+// Harness rect shifted (x 20→4) for the phase-8 scrollbar strip: the 12px
+// scrollbar + 4px gap carve leaves the FRAME at (20,20)-(119,470), byte-identical
+// to the pre-scrollbar geometry (chrome contract §2).
+const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
 
 /// A live Text over `seed`, an Editor bound to it, on a fresh draw fixture.
 const Harness = struct {
@@ -745,11 +748,16 @@ test "editor: acceptance 60-line scroll scene" {
     try testing.expectEqual(@as(u21, 'X'), t.file.buffer.runeAt(len));
 
     // FROZEN write-stream hash (R-P2-7): flush everything, then hash the whole
-    // device byte-stream. Re-freezing requires orchestrator re-verification.
+    // device byte-stream. RE-FROZEN for phase 8 (R-P8-12): the phase-7 hash
+    // (0xc06586b7b6a07f73) legitimately broke because Text.init now back-fills to
+    // the scrollbar strip (an extra 'd' per Text) and the harness rect shifted
+    // 20→4 (frame geometry byte-identical). The spot-checks above (org, first
+    // box, EOF visibility, the appended 'X') all still pass, so this is the one
+    // sanctioned re-freeze. Re-freezing again requires orchestrator sign-off.
     try h.fx.disp.flush();
     var hasher = std.hash.Wyhash.init(0);
     for (h.fx.tree.writes.items) |w| hasher.update(w);
-    try testing.expectEqual(@as(u64, 0xc06586b7b6a07f73), hasher.final());
+    try testing.expectEqual(@as(u64, 0x4e061704e764ed75), hasher.final());
 }
 
 const Kend_rune: u21 = 0xF000 | 0x18; // keyboard.h Kend
