@@ -30,6 +30,7 @@ const Row = @import("Row.zig");
 const Window = @import("Window.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
+const Regx = @import("edit/Regx.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -158,14 +159,19 @@ press_pt: Point = .{ .x = 0, .y = 0 },
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
+/// The structural-regexp engine (R-P10-5). C-global-lived — its `lastregexp`
+/// cache spans Edit invocations (regx.c:16,203-204), so it hangs off the Editor
+/// rather than being rebuilt per command.
+regx: Regx,
 
 pub fn init(allocator: std.mem.Allocator) Editor {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .regx = Regx.init(allocator) };
 }
 
 pub fn deinit(self: *Editor) void {
     self.snarf.deinit(self.allocator);
     self.warnings.deinit(self.allocator);
+    self.regx.deinit();
     self.* = undefined;
 }
 

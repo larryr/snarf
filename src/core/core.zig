@@ -14,6 +14,9 @@ pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const exec = @import("exec/exec.zig");
+// Edit language (phase 10). One public type per line, matching the flat style
+// above; later 10x waves add ast/parse/addr/Elog/cmd here.
+pub const Regx = @import("edit/Regx.zig");
 
 test {
     std.testing.refAllDecls(@This());
