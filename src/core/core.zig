@@ -34,6 +34,11 @@ pub const edit = struct {
     pub const parse = @import("edit/parse.zig");
     pub const addr = @import("edit/addr.zig");
     pub const Elog = @import("edit/Elog.zig");
+    pub const cmd = @import("edit/cmd.zig");
+    pub const loop = @import("edit/loop.zig");
+    // The entry point (edit.c's `editcmd`/`edit` builtin, wave 10c). Named `entry`
+    // so it doesn't collide with the enclosing `edit` namespace.
+    pub const entry = @import("edit/edit.zig");
     test {
         std.testing.refAllDecls(@This());
     }
