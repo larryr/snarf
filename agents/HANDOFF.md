@@ -72,8 +72,8 @@ authorization for this file only). Prune freely — git keeps history.
   NOTE: .claude/ is now gitignored (a git add -A once staged agent worktrees).
 - **Next planned work — USER DIRECTIVE 2026-07-19: run phases 7→8→9→10 back-to-back,
   no boundary pauses** (reports still per phase): P7 DONE+MERGED (agents/reports/phase7-scroll-snarf.md: scroll/double-click/snarf/
-  chords, 290/290); P8 windows & chrome (Window
-  tag+body, Column, Row, scrollbar strip, multi-Text); P9 exec & look (B2 Exectab
+  chords, 290/290); P8 DONE+MERGED (agents/reports/phase8-windows.md: full chrome, point-to-type per
+  acme default — R-P8-9, 317/317); P9 exec & look (B2 Exectab
   builtins Cut/Paste/Snarf/Undo/New/Del..., B3 look/plumb subset); P10 Edit language
   (regx/addr/parse/cmd) + served tree (/mnt/snarf-self) start. Later: Get/Put via
   namespace, Dump/Load, Worker+SAB, touch profile, /dev/snarf clipboard. Also
