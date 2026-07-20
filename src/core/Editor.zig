@@ -27,6 +27,7 @@ const typing = @import("text/typing.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Row = @import("Row.zig");
+const Window = @import("Window.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -147,6 +148,22 @@ pub fn warning(ed: *Editor, comptime fmt: []const u8, args: anytype) void {
     const line = std.fmt.allocPrint(ed.allocator, fmt, args) catch return;
     defer ed.allocator.free(line);
     ed.warnings.appendSlice(ed.allocator, line) catch {};
+}
+
+/// `textclose`'s backpointer hygiene (text.c:109/113): nil any of
+/// `focus`/`gesture_text`/`seltext`/`argtext` that point into the dying window
+/// `w` (its `&w.tag` or `&w.body`), so a later dispatch never dereferences a
+/// freed Text. Called by `Column.close` before the window is destroyed
+/// (R-P9-3/R-P9-5).
+pub fn dropTextRefs(ed: *Editor, w: *Window) void {
+    const tag: *Text = &w.tag;
+    const body: *Text = &w.body;
+    const fields = .{ "focus", "gesture_text", "seltext", "argtext" };
+    inline for (fields) |name| {
+        if (@field(ed, name)) |t| {
+            if (t == tag or t == body) @field(ed, name) = null;
+        }
+    }
 }
 
 /// True when device point `(x,y)` lies inside the half-open rect `r`.
@@ -490,7 +507,6 @@ const testing = std.testing;
 const Frame = draw.Frame;
 const proto = draw.proto;
 const boot = @import("boot.zig");
-const Window = @import("Window.zig");
 
 // Harness rect shifted (x 20→4) for the phase-8 scrollbar strip: the 12px
 // scrollbar + 4px gap carve leaves the FRAME at (20,20)-(119,470), byte-identical
@@ -1137,4 +1153,27 @@ test "editor: scrollbar click scrolls the body" {
     try ed.handleMouse(mev(sr.min.x + 1, sr.min.y + 3 * fh, B1));
     try testing.expect(h.w1.body.org < org_b3);
     try testing.expect(ed.gesture_text == null);
+}
+
+test "editor: dropTextRefs nils dangling text pointers" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    // Pin all four backpointers at window 1's tag/body.
+    ed.focus = &h.w1.tag;
+    ed.gesture_text = &h.w1.body;
+    ed.seltext = &h.w1.body;
+    ed.argtext = &h.w1.tag;
+
+    ed.dropTextRefs(h.w1);
+    try testing.expect(ed.focus == null);
+    try testing.expect(ed.gesture_text == null);
+    try testing.expect(ed.seltext == null);
+    try testing.expect(ed.argtext == null);
+
+    // A pointer at a DIFFERENT window survives dropTextRefs for window 1.
+    ed.focus = &h.w2.body;
+    ed.dropTextRefs(h.w1);
+    try testing.expectEqual(&h.w2.body, ed.focus.?);
 }
