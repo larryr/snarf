@@ -412,6 +412,51 @@ pub fn clean(w: *Window, ed: *Editor, conservative: bool) bool {
 }
 
 // ===========================================================================
+// Control line (winctlprint, wind.c:688-696) — the /dev/acme ctl + index line.
+// Ported for the served tree (S-07 §4, ruling R-P10-F). Cite as `wind.c:NN`.
+// ===========================================================================
+
+/// `Ctlsize = 5*12` (xfid.c:17): the fixed byte length of the non-fonts ctl
+/// prefix — five `%11d ` columns.
+pub const ctl_size: usize = 60;
+
+/// `winctlprint` (wind.c:688-696): format `w`'s control line into `buf`,
+/// returning the written slice. The base line is five `%11d ` columns
+/// (12 bytes each = `ctl_size`): id, tag rune count, body rune count,
+/// `isdir` (always 0 in v1 — dir/scratch windows are unbuilt), `dirty`.
+///
+/// With `fonts`, the /dev/acme-index arm appends five more fields
+/// `"%11d %q %11d %11d %11d "`: `Dx(w.body.fr.r)`, the font name, `fr.maxtab`,
+/// `seqof(w,1)!=0` (undo pending) and `seqof(w,0)!=0` (redo pending). Snarf's
+/// `Font` carries no name (FLAG, R-P10-F) so the literal `fixed9x18` stands in.
+///
+/// Every column is formatted UNSIGNED: Zig's `{d:>11}` prints a leading `+` for
+/// a positive SIGNED int (the devinput/devdraw trap), which `%11d` never does.
+/// `buf` must hold at least `ctl_size` (non-fonts) / ~120 bytes (fonts).
+pub fn ctlPrint(w: *Window, buf: []u8, fonts: bool) []u8 {
+    const id: u32 = w.id;
+    const tag_nc: usize = w.tag.file.buffer.len();
+    const body_nc: usize = w.body.file.buffer.len();
+    const isdir: u32 = 0; // wind.c:695 (single-window: no dir windows)
+    const dirty: u32 = @intFromBool(w.dirty);
+
+    const base = std.fmt.bufPrint(buf, "{d:>11} {d:>11} {d:>11} {d:>11} {d:>11} ", .{
+        id, tag_nc, body_nc, isdir, dirty,
+    }) catch return buf[0..0];
+    std.debug.assert(base.len == ctl_size);
+    if (!fonts) return base;
+
+    const dx: u32 = @intCast(w.body.fr.r.max.x - w.body.fr.r.min.x); // Dx(w->body.fr.r)
+    const maxtab: u32 = @intCast(w.body.fr.maxtab);
+    const undo: u32 = @intFromBool(w.body.file.undoSeq() != 0); // seqof(w,1)
+    const redo: u32 = @intFromBool(w.body.file.redoSeq() != 0); // seqof(w,0)
+    const rest = std.fmt.bufPrint(buf[base.len..], "{d:>11} fixed9x18 {d:>11} {d:>11} {d:>11} ", .{
+        dx, maxtab, undo, redo,
+    }) catch return base;
+    return buf[0 .. base.len + rest.len];
+}
+
+// ===========================================================================
 // Tests. 9x18 font (height 18), Scrollwid 12 / Scrollgap 4 / ButtonBorder 2.
 // ===========================================================================
 const testing = std.testing;

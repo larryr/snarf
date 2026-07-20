@@ -38,6 +38,10 @@ pub const OpError = error{
     BadIndex,
     WriteOutside,
     BadWriteImage,
+    // Served-tree (acme fsys) errors (S-07 §4; ruling R-P10-B in
+    // agents/contracts/phase10-served.md). [ref: acme/xfid.c:20-21]
+    DeletedWindow,
+    BadCtl,
     Other,
 };
 
@@ -66,6 +70,8 @@ pub fn errorString(e: OpError) []const u8 {
         error.BadIndex => "character index out of range",
         error.WriteOutside => "writeimage outside image",
         error.BadWriteImage => "bad writeimage call",
+        error.DeletedWindow => "deleted window",
+        error.BadCtl => "ill-formed control message",
         error.Other => "i/o error",
     };
 }
@@ -96,6 +102,8 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "character index out of range")) return error.BadIndex;
     if (eq(u8, s, "writeimage outside image")) return error.WriteOutside;
     if (eq(u8, s, "bad writeimage call")) return error.BadWriteImage;
+    if (eq(u8, s, "deleted window")) return error.DeletedWindow;
+    if (eq(u8, s, "ill-formed control message")) return error.BadCtl;
     return error.Other;
 }
 
@@ -124,6 +132,8 @@ test "errors: round-trip every member" {
         error.BadIndex,
         error.WriteOutside,
         error.BadWriteImage,
+        error.DeletedWindow,
+        error.BadCtl,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));
