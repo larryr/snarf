@@ -147,6 +147,14 @@ authorization for this file only). Prune freely — git keeps history.
   constants with `b.addOptions()` + `.createModule()` imported as `build_options` (argv
   iterators also churned; addOptions sidesteps them).
 
+- **Ops incident (2026-07-19, phase-7 close-out)**: a newline-chained close-out script
+  used `git add -A ':!.claude'` — the exclusion pathspec against an ignored dir FAILS
+  (exit 1), the `&&`-chained accept commit was skipped, and a later `git add <file> &&
+  git commit` swept the ENTIRE stale index into a mislabeled `handoff:` commit
+  (90a341b, pushed). Repaired forward (no force-push): branch recreated from reflog,
+  merged properly. LESSONS: (a) never batch critical git sequences with mixed
+  newline/&& chaining; (b) never `git add -A` near close-out — stage explicit paths;
+  (c) always `git status` before ANY commit on main.
 - **Agent-orchestration learnings (2026-07-19, phase 1):** (1) Worktrees spawn from a
   possibly-stale ref — every build-agent prompt must include "verify file X exists, else
   `git rebase <integration-branch>`" (all five agents needed it). (2) Each agent must add
