@@ -60,12 +60,13 @@ q1: usize = 0,
 iq1: usize = 0,
 /// The live B1 sweep, non-null between `selectBegin` and `selectEnd`.
 sel: ?draw.Frame.SelectState = null,
-/// Double-click SEAM only (text.c:1017-1034, 1051-1058): the msec/char of the
-/// last click. Word/line expansion (`textdoubleclick`) is DEFERRED to phase 7 —
-/// these fields exist so the gesture layer has somewhere to record clicks, but
-/// nothing reads them yet.
-last_click_msec: u32 = 0,
-last_click_q: usize = 0,
+/// The last collapsed (caret) click that could open a double-click window
+/// (text.c's `clicktext`/`clickmsec`, 1017-1058). `null` when the last gesture
+/// was not a bare caret click, when a chord ran, or once a double-click has
+/// fired. Recorded at sweep release, consumed at the next press (R-P7-7). The
+/// port adds the click's char `q` (the C keys only on `clicktext`); the extra
+/// same-position gate is a benign divergence noted at the trigger site.
+last_click: ?struct { q: usize, msec: u32 } = null,
 
 // --- method aliases: typing/selection attach here so callers write
 //     `t.typeRune(ed, r)`, `t.setSelect(q0, q1)`, etc. ---
@@ -74,6 +75,7 @@ pub const setSelect = @import("select.zig").setSelect;
 pub const selectBegin = @import("select.zig").selectBegin;
 pub const selectMove = @import("select.zig").selectMove;
 pub const selectEnd = @import("select.zig").selectEnd;
+pub const doubleClick = @import("select.zig").doubleClick;
 
 /// Bind `file` to a fresh `Frame` over `r`/`font`/`b`/`cols` (frame contract
 /// §"core/text/Text.zig"). `org` starts at 0. DIVERGENCE F-5: the tick images

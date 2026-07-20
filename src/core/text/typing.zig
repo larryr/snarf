@@ -162,11 +162,12 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
         ed.in_typing_run = true;
     }
 
-    // Type-over-selection: cut first (text.c:820-825; cut == delete, F-6). This
-    // collapses the caret to the old q0.
-    if (t.q1 > t.q0) {
-        try t.deleteRange(t.q0, t.q1, true);
-    }
+    // Type-over-selection: cut first (text.c:820-825). acme SNARFS the replaced
+    // text (cut with dosnarf=TRUE, R-P7-4 — corrects the earlier F-6 placeholder
+    // that only deleted). `Editor.cut` snarfs [q0,q1) then deletes it, collapsing
+    // the caret to the old q0; it shares this run's seq (the caller already
+    // marked), so the delete + the following insert stay one undo transaction.
+    if (t.q1 > t.q0) try ed.cut(t, true, true);
 
     // Autoscroll the caret into view before editing (text.c:826). If it is
     // off-screen (e.g. after scrolling with the wheel), this re-origins.
@@ -326,6 +327,8 @@ test "typing: type over selection deletes then inserts (and bs quirk)" {
         try h.expectText("hXo");
         try testing.expectEqual(@as(usize, 2), h.text.q0);
         try testing.expectEqual(@as(usize, 2), h.text.q1);
+        // R-P7-4: the replaced text was snarfed, not just deleted.
+        try testing.expectEqualStrings("ell", h.ed.snarf.items);
         // One transaction (delete + insert share the seq): undo restores "hello".
         _ = try h.file.undo();
         try h.expectText("hello");
@@ -338,8 +341,31 @@ test "typing: type over selection deletes then inserts (and bs quirk)" {
         try h.text.typeRune(&h.ed, Kbs);
         try h.expectText("o");
         try testing.expectEqual(@as(usize, 0), h.text.q0);
+        // The type-over cut still snarfs the selection before the extra erase.
+        try testing.expectEqualStrings("ell", h.ed.snarf.items);
         _ = try h.file.undo();
         try h.expectText("hello");
+    }
+}
+
+test "typing: type-over-selection snarfs the replaced text" {
+    // R-P7-4 focus test: a printable and the Kbs variant both leave the replaced
+    // selection in the snarf buffer (acme SNARFS type-over, text.c:823).
+    {
+        const h = try Harness.init("hello world");
+        defer h.deinit();
+        try h.text.setSelect(6, 11); // select "world"
+        try h.text.typeRune(&h.ed, 'Z');
+        try h.expectText("hello Z");
+        try testing.expectEqualStrings("world", h.ed.snarf.items);
+    }
+    {
+        const h = try Harness.init("hello world");
+        defer h.deinit();
+        try h.text.setSelect(6, 11); // select "world"
+        try h.text.typeRune(&h.ed, Kbs); // Kbs over a selection also snarfs it
+        try h.expectText("hello"); // "world" cut, then one more erase (the space)
+        try testing.expectEqualStrings("world", h.ed.snarf.items);
     }
 }
 
