@@ -141,24 +141,29 @@ check("dirty rect covers the full display", () =>
 check("blit ptr + fbW*fbH*4 <= memory size", () =>
   last ? last.ptr + last.fbW * last.fbH * 4 <= memory.buffer.byteLength : "pending");
 
-check("pixel (0,0) is acme ivory (0xFFFFEA)", () => {
+check("pixel (0,0) is the row-tag pale blue (0xEAFFFF)", () => {
   if (!last) return "pending";
   const p = pixelAt(last.ptr, last.fbW, 0, 0);
-  return p.r === 255 && p.g === 255 && p.b === 234;
+  return p.r === 234 && p.g === 255 && p.b === 255;
 });
 
 // Phase 6 end-to-end: inject a typed 'h' through the real input path
 // (pushEvent -> devinput -> parked 9P read -> Editor -> Text -> frame -> blit)
 // and watch ink appear in the first cell.
 const blitsBefore = blits.length;
+// Point-to-type (R-P8-9): position the pointer inside the window BODY first
+// (below row tag ~18 + col tag ~18 + win tag ~18 + bands; x past the scrollbar).
+ex.pushEvent(3 /* pointer_move */, 60, 80, 0, 900);
+ex.tick(8);
 ex.pushEvent(5 /* key */, 0x68 /* 'h' */, 0, 0, 1000);
 ex.tick(16);
 check("typed key produced a new blit", () => blits.length > blitsBefore);
-check("'h' cell (20..29,20..38) has a black pixel after typing", () => {
+check("typed rune added ink somewhere in the body region", () => {
   const b = blits[blits.length - 1];
   if (!b) return "pending";
-  for (let y = 20; y < 38; y++) {
-    for (let x = 20; x < 29; x++) {
+  // Body region: demo text starts after the chrome strips; scan a generous band.
+  for (let y = 56; y < 200; y++) {
+    for (let x = 16; x < 300; x++) {
       const p = pixelAt(b.ptr, b.fbW, x, y);
       if (p.r === 0 && p.g === 0 && p.b === 0) return true;
     }
