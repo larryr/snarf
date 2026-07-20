@@ -20,6 +20,7 @@ const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Column = @import("Column.zig");
+const Editor = @import("Editor.zig");
 
 const Row = @This();
 const Rect = draw.Rect;
@@ -150,13 +151,16 @@ pub fn add(row: *Row, x_in: i32) Error!?*Column {
 }
 
 /// `rowclose` (rows.c:208-239), the x-axis mirror of `Column.close`: find `c`'s
-/// index (assert found); capture `r = c.r`; `dofree` destroys the whole column
-/// (`colcloseall`, cols.c:211-227 — `Column.deinit` already cascades to every
-/// owned window/File); splice `c` out. An emptied row white-fills and returns;
-/// otherwise the LAST column extends RIGHT or the NEXT column extends LEFT,
-/// the freed rect is white-filled (rows.c uses `display->white` here, not the
-/// body BACK color), and the neighbor is resized into it.
-pub fn close(row: *Row, c: *Column, dofree: bool) Error!void {
+/// index (assert found); capture `r = c.r`; `dofree` drops the Editor's text
+/// refs into EVERY window of the column (R-P9-13 — the C's textclose nils fire
+/// per window inside colcloseall's winclose cascade, text.c:109/113) and then
+/// destroys the whole column (`colcloseall`, cols.c:211-227 — `Column.deinit`
+/// already cascades to every owned window/File); splice `c` out. An emptied row
+/// white-fills and returns; otherwise the LAST column extends RIGHT or the NEXT
+/// column extends LEFT, the freed rect is white-filled (rows.c uses
+/// `display->white` here, not the body BACK color), and the neighbor is resized
+/// into it.
+pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
     const a = row.chrome.allocator;
     const screen = &row.chrome.display.image;
 
@@ -170,6 +174,7 @@ pub fn close(row: *Row, c: *Column, dofree: bool) Error!void {
     var r = c.r; // rows.c:216
 
     if (dofree) {
+        for (c.w.items) |w| ed.dropTextRefs(w); // R-P9-13; text.c:109/113
         c.deinit(); // colcloseall (cols.c:211-227): cascades tag + every window
         a.destroy(c);
     }
@@ -421,6 +426,9 @@ test "row: which finds rowtag/columntag/tag/body" {
 // --- close (rows.c:208-239) ----------------------------------------------------
 
 test "row: close removes a column and the neighbor grows back" {
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+
     // Close the LEFT column: the right column extends LEFT to cover the whole
     // row body (rows.c:231-235, the "extend next window left" arm mirrored in x).
     {
@@ -430,14 +438,15 @@ test "row: close removes a column and the neighbor grows back" {
         const c0 = (try row.add(0)).?; // 0..600
         const c1 = (try row.add(-1)).?; // split at 360: c0 0..358, c1 360..600
 
-        try row.close(c0, true);
+        try row.close(&ed, c0, true);
         try testing.expectEqual(@as(usize, 1), row.col.items.len);
         try testing.expectEqual(c1, row.col.items[0]);
         try testing.expectEqual(proto.Rect.make(0, 20, 600, 400), row.col.items[0].r);
     }
 
     // Mirror: close the RIGHT (last) column — the left column extends RIGHT to
-    // `row.r.max.x` (rows.c:227-230).
+    // `row.r.max.x` (rows.c:227-230). Editor refs into the dying column's
+    // windows are dropped (R-P9-13, the C's per-window textclose nils).
     {
         const h = try RowHarness.init(proto.Rect.make(0, 0, 600, 400));
         defer h.deinit();
@@ -445,7 +454,16 @@ test "row: close removes a column and the neighbor grows back" {
         const c0 = (try row.add(0)).?;
         const c1 = (try row.add(-1)).?;
 
-        try row.close(c1, true);
+        const f = try testing.allocator.create(File);
+        f.* = File.init(testing.allocator, try Buffer.initFromBytes(testing.allocator, "x"));
+        const w = try c1.add(&row.winid, f, -1);
+        w.owns_body = true;
+        ed.seltext = &w.body;
+        ed.argtext = &w.tag;
+
+        try row.close(&ed, c1, true);
+        try testing.expect(ed.seltext == null); // dropped, not dangling
+        try testing.expect(ed.argtext == null);
         try testing.expectEqual(@as(usize, 1), row.col.items.len);
         try testing.expectEqual(c0, row.col.items[0]);
         try testing.expectEqual(proto.Rect.make(0, 20, 600, 400), row.col.items[0].r);

@@ -81,6 +81,13 @@ unimplementable signatures; ~400-line soft cap per file, split on behavioral sea
 - **R-P9-12 (frame harness fallback)**: `Editor.but2col/but3col` are nullable; null
   (headless harness pre-Chrome) falls back to `t.fr.col(.high)` so gesture mechanics
   stay testable without Chrome.
+- **R-P9-13 (amendment, post-9b-B1)**: `Row.close` takes `ed: *Editor` —
+  `close(row, ed, c, dofree)` — and on `dofree` calls `ed.dropTextRefs(w)` for
+  EVERY window in the dying column before `Column.deinit`. The original frozen
+  signature (no `ed`) would have left Editor text pointers dangling on Delcol;
+  in the C the nils fire per window inside colcloseall's winclose→textclose
+  cascade (text.c:109/113). Flagged honestly by B1; patched by the orchestrator.
+  9c's `delcol` must call the amended signature.
 
 ## Sub-wave assignments
 
@@ -128,6 +135,7 @@ unimplementable signatures; ~400-line soft cap per file, split on behavioral sea
 - `builtins.Entry.fn_: fn (ed, et, t: ?*Text, argt: ?*Text, flag1: bool,
   flag2: bool, arg: []const u8) Text.Error!void`.
 - `Window.clean(w, ed, conservative: bool) bool`;
-  `Column.close(c, ed, w, dofree) !void`; `Row.close(row, c, dofree) !void`;
+  `Column.close(c, ed, w, dofree) !void`;
+  `Row.close(row, ed, c, dofree) !void` (R-P9-13 amendment);
   `Editor.dropTextRefs(w: *Window) void`.
 - `Window.setTag1/setTag` `Text.Error!void`; `File.setName([]const u8) !void`.
