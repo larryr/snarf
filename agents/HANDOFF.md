@@ -62,10 +62,18 @@ authorization for this file only). Prune freely — git keeps history.
   ABI v2 runtime-checked. MANUAL STEP for Larry: `zig build serve` → 127.0.0.1:8017 →
   see "hello, acme wraps"/"second line⇥tab" on the canvas (extension screenshot was
   unavailable; node pixel checks stand in).
-- **Next planned work**: re-plan phase 6+ in detail per the approved plan (outline
-  waves against S-04/S-05): devinput (mouse/kbd, chord emulation, Worker+SAB move,
-  blocking reads + Tflush wait queues) → typing/selection → Window/Column/Row → Edit
-  language → served tree. Also outstanding: CI (S-06 §5).
+- **Phase 6 (interactive editing) MERGED to `main`** (agents/reports/phase6-input.md):
+  Snarf is an EDITOR — click/type/select in the browser. Parked 9P reads + client
+  tickets (S-00 §2 CORRECTED per R-P6-1: async-mode tickets ARE the architecture;
+  Worker move = transport swap later); devinput (R-IN-02 byte-identity proven; native+
+  modifier profiles); frdelete/incremental-select/tick; texttype/textsetselect with
+  T-1 run-scoped undo grouping; the Editor loop. 259/259 + smoke 14/14 (injected
+  keystroke end-to-end). Contracts: phase6-input{,-ninep,-devinput,-editing}.md.
+  NOTE: .claude/ is now gitignored (a git add -A once staged agent worktrees).
+- **Next planned work**: next phases per breadth roadmap — B2/B3 chords + exec/look
+  (double-click, snarf/cut/paste), scroll (org/wheel/textshow), Window/Column/Row +
+  multi-Text, Edit language, served tree, Worker+SAB move, Dump/Load. Also
+  outstanding: CI (S-06 §5); wasm size watch (1.08 MiB).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
