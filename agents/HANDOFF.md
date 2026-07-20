@@ -70,9 +70,13 @@ authorization for this file only). Prune freely — git keeps history.
   T-1 run-scoped undo grouping; the Editor loop. 259/259 + smoke 14/14 (injected
   keystroke end-to-end). Contracts: phase6-input{,-ninep,-devinput,-editing}.md.
   NOTE: .claude/ is now gitignored (a git add -A once staged agent worktrees).
-- **Next planned work**: next phases per breadth roadmap — B2/B3 chords + exec/look
-  (double-click, snarf/cut/paste), scroll (org/wheel/textshow), Window/Column/Row +
-  multi-Text, Edit language, served tree, Worker+SAB move, Dump/Load. Also
+- **Next planned work — USER DIRECTIVE 2026-07-19: run phases 7→8→9→10 back-to-back,
+  no boundary pauses** (reports still per phase): P7 scroll + double-click + snarf/
+  chord-cut-paste (in flight on phase7-scroll-snarf); P8 windows & chrome (Window
+  tag+body, Column, Row, scrollbar strip, multi-Text); P9 exec & look (B2 Exectab
+  builtins Cut/Paste/Snarf/Undo/New/Del..., B3 look/plumb subset); P10 Edit language
+  (regx/addr/parse/cmd) + served tree (/mnt/snarf-self) start. Later: Get/Put via
+  namespace, Dump/Load, Worker+SAB, touch profile, /dev/snarf clipboard. Also
   outstanding: CI (S-06 §5); wasm size watch (1.08 MiB).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).

@@ -14,6 +14,7 @@ const std = @import("std");
 const draw = @import("draw");
 const ninep = @import("ninep");
 const Text = @import("text/Text.zig");
+const typing = @import("text/typing.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -81,8 +82,16 @@ pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
                     ed.needs_flush = true;
                 }
                 // FLAG: B1 press outside fr.r ignored — no tag/scrollbar (F-7).
+            } else if (ev.buttons & (8 | 16) != 0) {
+                // Wheel notch: feed a synthetic Kscrollone rune to typing
+                // (acme.c:618-628). Bit 8 = wheel-up, bit 16 = wheel-down; one
+                // line/notch (R-P7-2). This does NOT clear `in_typing_run` — a
+                // wheel scroll never breaks a run of keystrokes.
+                const rune = if (ev.buttons & 8 != 0) typing.Kscrolloneup else typing.Kscrollonedown;
+                try t.typeRune(ed, rune);
+                ed.needs_flush = true;
+                return;
             }
-            // FLAG: buttons & 8/16 (wheel) ignored — org fixed, no scroll (F-7).
             // FLAG: buttons == 2/4 (B2/B3) ignored — chords/plumb deferred (R-P6-6).
         },
         .sweeping_b1 => {
@@ -260,3 +269,80 @@ test "editor: frameEnd flushes once" {
     try h.ed.frameEnd(h.fx.disp);
     try testing.expectEqual(after_one, h.fx.tree.writes.items.len);
 }
+
+// --------------------------------------------------------------------------
+// Phase 7a scroll tests. "lineNN\n" lines are 7 runes (one 11-wide visual line);
+// the 11×25 frame holds 25 lines = 175 runes. See text/typing.zig for the pins.
+// --------------------------------------------------------------------------
+
+/// `count` lines of "lineNN\n". Caller frees.
+fn genLines(a: std.mem.Allocator, count: usize) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(a);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        var line: [7]u8 = undefined;
+        _ = std.fmt.bufPrint(&line, "line{d:0>2}\n", .{i}) catch unreachable;
+        try buf.appendSlice(a, &line);
+    }
+    return buf.toOwnedSlice(a);
+}
+
+fn scrollHarness() !*Harness {
+    const seed = try genLines(testing.allocator, 60);
+    defer testing.allocator.free(seed);
+    return Harness.init(seed);
+}
+
+test "editor: wheel scrolls one line without breaking the typing run" {
+    const h = try scrollHarness();
+    defer h.deinit();
+
+    // Start a typing run: 'x' inserts at 0 and arms in_typing_run.
+    try h.ed.handleKey('x');
+    try testing.expect(h.ed.in_typing_run);
+    try testing.expectEqual(@as(u32, 1), h.ed.seq);
+
+    // A wheel-down notch (buttons bit 16) scrolls one line via a synthetic
+    // Kscrollonedown rune and must NOT clear the run (R-P7-2). Line0 is now
+    // "xline00" (7 glyphs + break = 8 runes), so line1 begins at screen char 8.
+    try h.ed.handleMouse(.{ .x = 0, .y = 0, .buttons = 16, .msec = 0 });
+    try testing.expectEqual(@as(usize, 8), h.text.org);
+    try testing.expect(h.ed.in_typing_run); // run survives the wheel
+    try testing.expectEqual(@as(u32, 1), h.ed.seq); // still one transaction
+    try testing.expect(h.ed.needs_flush);
+}
+
+test "editor: acceptance 60-line scroll scene" {
+    const h = try scrollHarness();
+    defer h.deinit();
+    const t = &h.text;
+    const len = t.file.buffer.len(); // 420
+    try t.setSelect(len, len); // the user's caret is at the end of the file
+
+    // Three wheel-down notches scroll to line3 (one line/notch, R-P7-2).
+    var i: usize = 0;
+    while (i < 3) : (i += 1) try h.ed.handleMouse(.{ .x = 0, .y = 0, .buttons = 16, .msec = 0 });
+    try testing.expectEqual(@as(usize, 21), t.org); // runeOfLine(3) = 3*7
+    try testing.expectEqualStrings("line03", t.fr.boxes.items[0].kind.run.text);
+
+    // Kend shows the end of the file: the last displayed rune is EOF.
+    try h.ed.handleKey(Kend_rune);
+    try testing.expectEqual(len, t.org + t.fr.nchars);
+
+    // Typing 'X' at the (visible) end appends without scrolling: org unchanged.
+    const org_before = t.org;
+    try h.ed.handleKey('X');
+    try testing.expectEqual(org_before, t.org);
+    try testing.expectEqual(len + 1, t.file.buffer.len());
+    try testing.expectEqual(@as(u21, 'X'), t.file.buffer.runeAt(len));
+
+    // FROZEN write-stream hash (R-P2-7): flush everything, then hash the whole
+    // device byte-stream. Re-freezing requires orchestrator re-verification.
+    try h.fx.disp.flush();
+    var hasher = std.hash.Wyhash.init(0);
+    for (h.fx.tree.writes.items) |w| hasher.update(w);
+    try testing.expectEqual(@as(u64, 0xc06586b7b6a07f73), hasher.final());
+}
+
+const Kend_rune: u21 = 0xF000 | 0x18; // keyboard.h Kend
