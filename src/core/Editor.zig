@@ -26,9 +26,11 @@ const Text = @import("text/Text.zig");
 const typing = @import("text/typing.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
+const Row = @import("Row.zig");
 
 const Editor = @This();
 const Point = draw.Point;
+const Rect = draw.Rect;
 
 /// Native mouse button bits (profiles / devmouse.c: B1=1, B2=2, B3=4). B1 drives
 /// the selection sweep; B1+B2 is the Cut chord, B1+B3 the Paste chord.
@@ -54,9 +56,35 @@ seq: u32 = 0,
 /// run; the 6c input loop also clears it when a B1 gesture begins. One
 /// `seq`++/`File.mark` per run — not per keystroke.
 in_typing_run: bool = false,
-/// The single Text the loop routes to (F-9). Bound by the adapter after boot;
-/// null before then, in which case every event is a no-op.
+/// The single Text the loop routes to (F-9), the phase-7 fallback target. Kept
+/// for the standalone-Text harnesses and pre-boot: when `row == null`, `hitTest`
+/// resolves every point to this Text (body region), so all phase-6/7 tests stay
+/// green with no chrome. Phase 8 leaves it null in `main_wasm` (the router uses
+/// `row`).
 text: ?*Text = null,
+/// The window tree the router hit-tests against (`rowwhich`, rows.c:255-266).
+/// When non-null, `hitTest` walks the real Row/Column/Window chrome; when null,
+/// it falls back to `text` (above). Bound by the adapter after `boot`.
+row: ?*Row = null,
+/// The Text the pointer last selected/focused — acme's `argtext`/`seltext`
+/// bookkeeping (acme.c:648-651), NOT the key-routing target (R-P8-9 routes keys
+/// by the pointer, not focus). Used only as `handleKey`'s fallback when the
+/// pointer is over no Text.
+focus: ?*Text = null,
+/// The Text a mouse gesture is PINNED to, captured at B1-down and held until all
+/// buttons release (R-P8-11). While non-null every mouse sample routes here
+/// unconditionally, so a chord that drifts off the window still edits the Text it
+/// started on (acme confines a gesture to one Text — `mousetext` is frozen for
+/// the duration of `textselect`, text.c:1001-1099).
+gesture_text: ?*Text = null,
+/// The device point of the most recent mouse sample — acme's `mouse->xy` — the
+/// point `handleKey` types AT (POINT-TO-TYPE, R-P8-9 / rows.c:279-282).
+mouse_pt: Point = .{ .x = 0, .y = 0 },
+/// Edge tracker for scrollbar clicks: the button set last acted on inside a
+/// body scrollbar. B1/B3 fire once per press edge; B2 (absolute) repeats while
+/// held (acme.c:603-612 `textscroll`, collapsed per R-P8-8). Reset to 0 on
+/// buttons-up.
+scroll_but: u8 = 0,
 /// The snarf buffer: Editor-owned UTF-8 (R-P7-5, vs the C's Rune `snarfbuf`).
 /// Captured via chunked `Buffer.read` so U+FFFD semantics match `captureText`.
 snarf: std.ArrayList(u8) = .empty,
@@ -127,7 +155,7 @@ pub fn cut(ed: *Editor, t: *Text, dosnarf: bool, docut: bool) !void {
     if (docut) {
         try t.deleteRange(q0, q1, true); // exec.c:1006 textdelete
         try t.setSelect(q0, q0); // exec.c:1007 textsetselect
-        // exec.c:1009 textscrdraw / winsettag — FLAG: scrollbar/tag deferred (R-P7-1).
+        try t.scrDraw(); // exec.c:1009 textscrdraw (LIVE; no-op when w==null). winsettag deferred.
     }
 }
 
@@ -147,16 +175,116 @@ pub fn snarfInsert(ed: *Editor, t: *Text, selectall: bool) !void {
     } else {
         try t.setSelect(q0 + n, q0 + n); // exec.c:1065-1066
     }
-    // exec.c:1068 textscrdraw / winsettag — FLAG: scrollbar/tag deferred (R-P7-1).
+    try t.scrDraw(); // exec.c:1068 textscrdraw (LIVE; no-op when w==null). winsettag deferred.
 }
 
-/// Route one mouse sample through the full `textselect` machine (text.c:1001-
-/// 1099). See the `mouse_state` doc for the state set. The C's blocking
-/// `readmouse` loop becomes edge-triggered dispatch: chord ops fire only when the
-/// button set changes, and a gesture ends only when ALL buttons release (R-P7-6).
-/// B1 pressed OUTSIDE fr.r is FLAG-ignored (no tag/scrollbar, R-P7-1).
+/// A hit region within a `Text` (R-P8-10). `scrollbar` is the scrollbar strip
+/// (a body's elevator, or a tag/columntag/rowtag button square); `tag`/`body`
+/// are the frame proper.
+pub const Region = enum { tag, body, scrollbar };
+
+/// The `Text` under a point and which of its regions the point fell in.
+const Hit = struct { text: *Text, region: Region };
+
+/// `rowwhich` + region classification (rows.c:255-266, acme.c:603/630). With a
+/// window tree (`row != null`) walk the real chrome; otherwise (F-9 harnesses /
+/// pre-boot) resolve every point to `text` as a body — so the phase-6/7 tests,
+/// which have no chrome, route exactly as before. The scrollbar strip wins over
+/// the frame (`ptInRect(text.scrollr)`); otherwise the region follows `what`
+/// (tag/columntag/rowtag ⇒ .tag, body ⇒ .body).
+fn hitTest(ed: *Editor, p: Point) ?Hit {
+    if (ed.row) |row| {
+        const t = row.which(p) orelse return null; // rows.c:255-266
+        if (ptInRect(t.scrollr, p.x, p.y)) return .{ .text = t, .region = .scrollbar };
+        const region: Region = switch (t.what) {
+            .body => .body,
+            .tag, .columntag, .rowtag => .tag,
+        };
+        return .{ .text = t, .region = region };
+    }
+    // Fallback (no chrome): the single bound Text, body region.
+    if (ed.text) |t| return .{ .text = t, .region = .body };
+    return null;
+}
+
+/// Route one mouse sample (acme.c:576-672 `mousethread`, in the C's order).
+/// (1) `mouse_pt` always tracks the sample. (2) A pinned gesture owns every
+/// sample until all buttons release (R-P8-11). (3) hit-test. (4) wheel notch.
+/// (5) body scrollbar click. (6) B1-down begins a gesture. B2/B3 execute/look are
+/// deferred to phase 9; the C's focus-log / tag-commit / 500ms timer arms are
+/// correctly absent (no tag cache — see the contract's doc note).
 pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
-    const t = ed.text orelse return;
+    const pt = Point{ .x = ev.x, .y = ev.y };
+    ed.mouse_pt = pt; // (1) acme `mouse->xy` always tracks
+    const b = ev.buttons;
+    if (b == 0) ed.scroll_but = 0; // release clears scrollbar edge tracking
+
+    // (2) A pinned gesture owns every sample until all buttons release (R-P8-11):
+    // a chord that drifts off-window still edits the Text it began on.
+    if (ed.gesture_text) |gt| {
+        try ed.runGesture(gt, ev);
+        if (b == 0) ed.gesture_text = null; // buttons up ⇒ gesture over
+        return;
+    }
+
+    // (3) Resolve the Text (and region) under the pointer.
+    const hit = ed.hitTest(pt) orelse return;
+    const t = hit.text;
+
+    // (4) Wheel notch (acme.c:618-629): scroll the Text under the pointer via a
+    // synthetic Kscrollone rune — NO focus change, NO run break, NO gesture. The
+    // C's `w != nil` guard skips the row/column tags; the port's equivalent is
+    // `w != null OR what == .body`, so the F-9 standalone-body harnesses (which
+    // have `w == null`) still wheel-scroll while the chrome row/col tags (neither
+    // windowed nor bodies) are skipped.
+    if (b & (8 | 16) != 0) {
+        if (t.w != null or t.what == .body) {
+            const rune = if (b & 8 != 0) typing.Kscrolloneup else typing.Kscrollonedown;
+            try t.typeRune(ed, rune);
+            ed.needs_flush = true;
+        }
+        return;
+    }
+
+    // (5) Body scrollbar click (acme.c:603-612 → scrl.c `textscroll`, collapsed to
+    // one action per event, R-P8-8). B1/B3 fire on the press edge; B2 (absolute)
+    // repeats while held so a drag tracks. A tag's scrollr is the window button
+    // square — no-op v1 (dragcol/dragwin deferred, R-P8-5). Wheels never reach
+    // here (handled above); a wheel over a body scrollbar therefore scrolls, a
+    // benign divergence from the C (which no-ops it).
+    if (hit.region == .scrollbar) {
+        if (t.what == .body) {
+            const but: u3 = switch (b) {
+                B1 => 1,
+                B2 => 2,
+                B3 => 3,
+                else => 0,
+            };
+            if (but != 0 and (b != ed.scroll_but or but == 2)) {
+                try t.scrollClick(but, pt); // scrl.c:110-147
+                ed.needs_flush = true;
+            }
+            ed.scroll_but = b;
+        }
+        return;
+    }
+
+    // (6) B1-down in a tag/body begins a gesture: pin focus + gesture_text to this
+    // Text (acme.c:648-651 argtext/seltext), then run the sweep/double-click/chord
+    // machine against it. B2/B3-only presses are FLAG-ignored (phase 9).
+    if (b == B1) {
+        ed.focus = t;
+        ed.gesture_text = t;
+        try ed.runGesture(t, ev);
+    }
+}
+
+/// The `textselect` state machine (text.c:1001-1099), run against the gesture's
+/// pinned Text. The C's blocking `readmouse` loop becomes edge-triggered
+/// dispatch: chord ops fire only when the button set changes, and a gesture ends
+/// only when ALL buttons release (R-P7-6). B1 pressed OUTSIDE `fr.r` is
+/// FLAG-ignored (no sub-frame target, R-P7-1).
+fn runGesture(ed: *Editor, t: *Text, ev: MouseEvent) !void {
     const pt = Point{ .x = ev.x, .y = ev.y };
     const b = ev.buttons;
     switch (ed.mouse_state) {
@@ -189,19 +317,10 @@ pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
                     ed.mouse_state = .sweeping_b1;
                     ed.needs_flush = true;
                 }
-                // FLAG: B1 press outside fr.r ignored — no tag/scrollbar (R-P7-1).
-            } else if (b & (8 | 16) != 0) {
-                // Wheel notch: feed a synthetic Kscrollone rune to typing
-                // (acme.c:618-628). Bit 8 = wheel-up, bit 16 = wheel-down; one
-                // line/notch (R-P7-2). This does NOT clear `in_typing_run` — a
-                // wheel scroll never breaks a run of keystrokes.
-                const rune = if (b & 8 != 0) typing.Kscrolloneup else typing.Kscrollonedown;
-                try t.typeRune(ed, rune);
-                ed.needs_flush = true;
-                return;
+                // FLAG: B1 press outside fr.r ignored — no sub-frame target (R-P7-1).
             }
-            // FLAG: a lone B2/B3 press (execute/plumb) is deferred to the windows
-            // phase — only the B1-anchored chords are ported here.
+            // FLAG: wheel notches and B2/B3 execute/look are handled (or deferred)
+            // by handleMouse before the gesture machine is ever entered.
         },
         .sweeping_b1 => {
             if ((b & B1) != 0 and (b & (B2 | B3)) != 0) {
@@ -298,18 +417,26 @@ fn chordStep(ed: *Editor, t: *Text, ev: MouseEvent) !void {
                 ed.chord_state = .paste; // text.c:1088
             }
         }
-        // text.c:1091 textscrdraw / :1092 clearmouse — FLAG (R-P7-1).
+        try t.scrDraw(); // text.c:1091 textscrdraw (LIVE; no-op when w==null). clearmouse deferred.
         ed.needs_flush = true;
     }
     ed.chord_buttons = b; // text.c:1066/1095 advance the edge tracker
 }
 
-/// Route one key rune to typing (text.c:668-942 via `Text.typeRune`). Keys only
-/// edit when idle: a live B1 drag owns the gesture, so keys arriving mid-sweep
-/// are FLAG-dropped rather than interleaved into the selection.
+/// Route one key rune to typing (text.c:668-942 via `Text.typeRune`).
+/// POINT-TO-TYPE (R-P8-9, `rowtype` rows.c:279-282): keys go to the Text UNDER
+/// THE POINTER, not a sticky focus — this is acme's default. `focus` (then the
+/// fallback `text`) is used only when the pointer is over no Text (`rowwhich` →
+/// nil). NOTE: acme's `-b` variant instead types into `barttext` (the last
+/// button-2/3 text); we implement the default. Keys only edit when idle — a live
+/// B1 drag owns the gesture, so keys mid-sweep are FLAG-dropped (text.c: keyboard
+/// and mouse threads interlock on `row.lk`).
 pub fn handleKey(ed: *Editor, r: u21) !void {
-    const t = ed.text orelse return;
-    if (ed.mouse_state != .idle) return; // FLAG: keys during a sweep are dropped
+    if (ed.mouse_state != .idle) return; // FLAG: keys during a gesture are dropped
+    const t = if (ed.hitTest(ed.mouse_pt)) |hit|
+        hit.text
+    else
+        (ed.focus orelse ed.text orelse return);
     try t.typeRune(ed, r);
     ed.needs_flush = true;
 }
@@ -335,8 +462,13 @@ comptime {
 const testing = std.testing;
 const Frame = draw.Frame;
 const proto = draw.proto;
+const boot = @import("boot.zig");
+const Window = @import("Window.zig");
 
-const rect = proto.Rect{ .min = .{ .x = 20, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
+// Harness rect shifted (x 20→4) for the phase-8 scrollbar strip: the 12px
+// scrollbar + 4px gap carve leaves the FRAME at (20,20)-(119,470), byte-identical
+// to the pre-scrollbar geometry (chrome contract §2).
+const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
 
 /// A live Text over `seed`, an Editor bound to it, on a fresh draw fixture.
 const Harness = struct {
@@ -745,11 +877,237 @@ test "editor: acceptance 60-line scroll scene" {
     try testing.expectEqual(@as(u21, 'X'), t.file.buffer.runeAt(len));
 
     // FROZEN write-stream hash (R-P2-7): flush everything, then hash the whole
-    // device byte-stream. Re-freezing requires orchestrator re-verification.
+    // device byte-stream. RE-FROZEN for phase 8 (R-P8-12): the phase-7 hash
+    // (0xc06586b7b6a07f73) legitimately broke because Text.init now back-fills to
+    // the scrollbar strip (an extra 'd' per Text) and the harness rect shifted
+    // 20→4 (frame geometry byte-identical). The spot-checks above (org, first
+    // box, EOF visibility, the appended 'X') all still pass, so this is the one
+    // sanctioned re-freeze. Re-freezing again requires orchestrator sign-off.
     try h.fx.disp.flush();
     var hasher = std.hash.Wyhash.init(0);
     for (h.fx.tree.writes.items) |w| hasher.update(w);
-    try testing.expectEqual(@as(u64, 0xc06586b7b6a07f73), hasher.final());
+    try testing.expectEqual(@as(u64, 0x4e061704e764ed75), hasher.final());
 }
 
 const Kend_rune: u21 = 0xF000 | 0x18; // keyboard.h Kend
+
+// --------------------------------------------------------------------------
+// Phase 8: multi-Text routing over a real window tree (boot + Row/Column/Window).
+// The router hit-tests against `ed.row`; every gesture pins to one Text.
+// --------------------------------------------------------------------------
+
+/// A mouse sample at device `(x,y)` with `buttons`, msec 0.
+fn mev(x: i32, y: i32, buttons: u8) MouseEvent {
+    return .{ .x = x, .y = y, .buttons = buttons, .msec = 0 };
+}
+
+/// The center device point of a rect.
+fn center(r: Rect) Point {
+    return .{ .x = @divTrunc(r.min.x + r.max.x, 2), .y = @divTrunc(r.min.y + r.max.y, 2) };
+}
+
+/// A booted two-window scene with the Editor router bound to the tree.
+const TwoWin = struct {
+    fx: Frame.TestFixture,
+    tree: boot.Tree,
+    ed: Editor,
+    w1: *Window,
+    w2: *Window,
+
+    fn init() !*TwoWin {
+        const a = testing.allocator;
+        const h = try a.create(TwoWin);
+        errdefer a.destroy(h);
+        h.fx = try Frame.TestFixture.init();
+        const body1 = try genLines(a, 40);
+        defer a.free(body1);
+        const body2 = try genLines(a, 40);
+        defer a.free(body2);
+        h.tree = try boot.boot(a, h.fx.disp, h.fx.font, proto.Rect.make(0, 0, 600, 460), .{
+            .win_name = "one",
+            .body = body1,
+        });
+        h.w2 = try h.tree.addWindow("two", body2);
+        h.w1 = h.tree.row.col.items[0].w.items[0];
+        h.ed = Editor.init(a);
+        h.ed.row = h.tree.row;
+        return h;
+    }
+    fn deinit(h: *TwoWin) void {
+        const a = testing.allocator;
+        h.ed.deinit();
+        h.tree.deinit();
+        h.fx.deinit();
+        a.destroy(h);
+    }
+    /// A Text's buffer as decoded UTF-8 (caller frees).
+    fn text(t: *Text) ![]u8 {
+        const n = t.file.buffer.len();
+        if (n == 0) return testing.allocator.alloc(u8, 0);
+        const dest = try testing.allocator.alloc(u8, n * Buffer.max_bytes_per_rune);
+        defer testing.allocator.free(dest);
+        return testing.allocator.dupe(u8, t.file.buffer.read(0, n, dest));
+    }
+};
+
+test "editor: hit-test routes clicks across two windows" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    // Body / tag / scrollbar of each window resolve to the right Text + region.
+    const p1 = center(h.w1.body.fr.r);
+    const hit1 = ed.hitTest(p1).?;
+    try testing.expectEqual(&h.w1.body, hit1.text);
+    try testing.expect(hit1.region == .body);
+
+    const p2 = center(h.w2.body.fr.r);
+    const hit2 = ed.hitTest(p2).?;
+    try testing.expectEqual(&h.w2.body, hit2.text);
+    try testing.expect(hit2.region == .body);
+
+    const hitt = ed.hitTest(center(h.w1.tag.fr.r)).?;
+    try testing.expectEqual(&h.w1.tag, hitt.text);
+    try testing.expect(hitt.region == .tag);
+
+    const hits = ed.hitTest(center(h.w2.body.scrollr)).?;
+    try testing.expectEqual(&h.w2.body, hits.text);
+    try testing.expect(hits.region == .scrollbar);
+
+    // The row tag and column tag resolve through rowwhich/colwhich.
+    try testing.expectEqual(&h.tree.row.tag, ed.hitTest(center(h.tree.row.tag.fr.r)).?.text);
+    const ctag = &h.tree.row.col.items[0].tag;
+    try testing.expectEqual(ctag, ed.hitTest(center(ctag.fr.r)).?.text);
+
+    // A B1 click in window 1's body pins the gesture there and sets focus; the
+    // release clears the pin.
+    try ed.handleMouse(mev(p1.x, p1.y, B1));
+    try testing.expectEqual(&h.w1.body, ed.gesture_text.?);
+    try testing.expectEqual(&h.w1.body, ed.focus.?);
+    try ed.handleMouse(mev(p1.x, p1.y, 0));
+    try testing.expect(ed.gesture_text == null);
+}
+
+test "editor: keyboard follows the pointer (acme point-to-type)" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    try h.w1.body.setSelect(0, 0);
+    try h.w2.body.setSelect(0, 0);
+    // Focus is bookkeeping only — pin it to window 1 to prove it does NOT steer
+    // keys (R-P8-9: the pointer does).
+    ed.focus = &h.w1.body;
+
+    // Pointer over window 2's body, with NO click: a keystroke edits file-2.
+    ed.mouse_pt = center(h.w2.body.fr.r);
+    try ed.handleKey('Z');
+
+    const t2 = try TwoWin.text(&h.w2.body);
+    defer testing.allocator.free(t2);
+    try testing.expect(t2[0] == 'Z'); // typed into the window under the pointer
+
+    const t1 = try TwoWin.text(&h.w1.body);
+    defer testing.allocator.free(t1);
+    try testing.expect(t1[0] != 'Z'); // the focused window is untouched
+}
+
+test "editor: wheel scrolls the text under the pointer, focus elsewhere" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    ed.focus = &h.w1.body;
+    try testing.expectEqual(@as(usize, 0), h.w1.body.org);
+    try testing.expectEqual(@as(usize, 0), h.w2.body.org);
+
+    // Wheel-down (bit 16) with the pointer over window 2 scrolls window 2 only.
+    const p2 = center(h.w2.body.fr.r);
+    try ed.handleMouse(mev(p2.x, p2.y, 16));
+    try testing.expect(h.w2.body.org > 0); // window 2 scrolled
+    try testing.expectEqual(@as(usize, 0), h.w1.body.org); // window 1 did not
+    try testing.expectEqual(&h.w1.body, ed.focus.?); // focus unchanged
+    try testing.expect(ed.gesture_text == null); // no gesture opened
+}
+
+test "editor: chord confined to its gesture text" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    const before2 = try TwoWin.text(&h.w2.body);
+    defer testing.allocator.free(before2);
+
+    // Sweep-select a range in window 1's body.
+    const a = h.w1.body.fr.ptOfChar(0);
+    const bpt = h.w1.body.fr.ptOfChar(5);
+    try ed.handleMouse(mev(a.x, a.y, B1));
+    try testing.expectEqual(&h.w1.body, ed.gesture_text.?);
+    try ed.handleMouse(mev(bpt.x, bpt.y, B1));
+
+    // Add B2 with the pointer now over WINDOW 2. The gesture is pinned to window
+    // 1, so the Cut edits window 1; window 2 is byte-for-byte untouched.
+    const p2 = center(h.w2.body.fr.r);
+    try ed.handleMouse(mev(p2.x, p2.y, B1 | B2));
+    try testing.expect(ed.mouse_state == .chording);
+    try testing.expect(ed.chord_state == .cut);
+    try testing.expect(ed.snarf.items.len > 0); // something was cut from window 1
+
+    const after2 = try TwoWin.text(&h.w2.body);
+    defer testing.allocator.free(after2);
+    try testing.expectEqualStrings(before2, after2); // window 2 unchanged
+
+    try ed.handleMouse(mev(p2.x, p2.y, 0)); // release ends the gesture
+    try testing.expect(ed.mouse_state == .idle);
+    try testing.expect(ed.gesture_text == null);
+}
+
+test "editor: tag typing edits the tag File" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+
+    // The window-1 tag was seeded by boot with the caret parked at its end.
+    const seed = try TwoWin.text(&h.w1.tag);
+    defer testing.allocator.free(seed);
+    try testing.expectEqualStrings("one Del Snarf | Look ", seed);
+    const n0 = h.w1.tag.file.buffer.len();
+
+    // Pointer over the window-1 tag: typed runes edit the TAG file, not the body.
+    ed.mouse_pt = center(h.w1.tag.fr.r);
+    try ed.handleKey('!');
+    try ed.handleKey('x');
+
+    try testing.expectEqual(n0 + 2, h.w1.tag.file.buffer.len());
+    const after = try TwoWin.text(&h.w1.tag);
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings("one Del Snarf | Look !x", after);
+
+    // The body is untouched (still the seeded lines).
+    const body = try TwoWin.text(&h.w1.body);
+    defer testing.allocator.free(body);
+    try testing.expect(std.mem.startsWith(u8, body, "line00"));
+}
+
+test "editor: scrollbar click scrolls the body" {
+    const h = try TwoWin.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const fh: i32 = h.fx.font.height;
+    const sr = h.w1.body.scrollr;
+
+    // window 1 body starts at org 0. A B3 click low in its scrollbar sets the
+    // char under the cursor as the new top (scrl.c:143-146) ⇒ org advances.
+    try testing.expectEqual(@as(usize, 0), h.w1.body.org);
+    try ed.handleMouse(mev(sr.min.x + 1, sr.max.y - fh, B3));
+    const org_b3 = h.w1.body.org;
+    try testing.expect(org_b3 > 0);
+    try testing.expect(ed.gesture_text == null); // a scrollbar click opens no gesture
+
+    // A B1 click a few lines down in the scrollbar backs the view up by that many
+    // rows (scrl.c:141-146) ⇒ org decreases. Different button ⇒ a fresh edge, so
+    // it fires without an intervening release.
+    try ed.handleMouse(mev(sr.min.x + 1, sr.min.y + 3 * fh, B1));
+    try testing.expect(h.w1.body.org < org_b3);
+    try testing.expect(ed.gesture_text == null);
+}

@@ -32,12 +32,21 @@ const std = @import("std");
 const draw = @import("draw");
 const File = @import("../File.zig");
 const Buffer = @import("../Buffer.zig");
+const chrome = @import("../Chrome.zig");
+const Window = @import("../Window.zig");
 
 const Text = @This();
 const Point = draw.Point;
 
 /// textfill's per-chunk read cap (text.c:436-437).
 const chunk_runes: usize = 2000;
+
+/// The scrollbar strip width + the gap to the text, carved off the left of a
+/// Text's rect (dat.h:475-476, via Chrome).
+const scrollwid = chrome.scrollwid;
+const scrollgap = chrome.scrollgap;
+/// `nullrect` (frame.h): the empty rect `lastsr`/`all`/`scrollr` seed with.
+const zerorect: draw.Rect = .{};
 
 pub const Error = draw.Frame.Error;
 
@@ -67,6 +76,24 @@ sel: ?draw.Frame.SelectState = null,
 /// port adds the click's char `q` (the C keys only on `clicktext`); the extra
 /// same-position gate is a benign divergence noted at the trigger site.
 last_click: ?struct { q: usize, msec: u32 } = null,
+/// Which of a window's four texts this is (dat.h:166-172). A standalone Text
+/// (no window) stays `.body`; window-only behaviour (the scrollbar draw)
+/// no-ops until `w` is bound.
+what: What = .body,
+/// The owning `Window`, or null for a standalone Text (F-9 tests / pre-boot).
+/// The `Text`↔`Window` import cycle is intended and legal in Zig — same
+/// precedent as the Display↔Image cycle (see Image.zig's header). `scrDraw`
+/// only ever null-checks `w`, never dereferences it (R-P8-1).
+w: ?*Window = null,
+/// The Text's whole rectangle before the scrollbar strip is carved off
+/// (dat.h:187); `fr.r`/`fr.entire` cover only the text area to its right.
+all: draw.Rect = zerorect,
+/// The scrollbar strip — the left `Scrollwid` px of `all` (dat.h:185).
+scrollr: draw.Rect = zerorect,
+/// The last elevator rect `scrDraw` painted: its repaint memo (dat.h:186).
+lastsr: draw.Rect = zerorect,
+
+pub const What = enum { columntag, rowtag, tag, body }; // dat.h:166-172
 
 // --- method aliases: typing/selection attach here so callers write
 //     `t.typeRune(ed, r)`, `t.setSelect(q0, q1)`, etc. ---
@@ -76,6 +103,8 @@ pub const selectBegin = @import("select.zig").selectBegin;
 pub const selectMove = @import("select.zig").selectMove;
 pub const selectEnd = @import("select.zig").selectEnd;
 pub const doubleClick = @import("select.zig").doubleClick;
+pub const scrDraw = @import("scroll.zig").scrDraw;
+pub const scrollClick = @import("scroll.zig").scrollClick;
 
 /// Bind `file` to a fresh `Frame` over `r`/`font`/`b`/`cols` (frame contract
 /// §"core/text/Text.zig"). `org` starts at 0. DIVERGENCE F-5: the tick images
@@ -89,12 +118,22 @@ pub fn init(
     b: *draw.Image,
     cols: [draw.Frame.ncol]*draw.Image,
 ) Error!Text {
+    // textinit (text.c:28-38): carve the scrollbar strip off the left, then the
+    // Scrollgap, before laying out the frame in what remains.
+    var scrollr = r;
+    scrollr.max.x = r.min.x + scrollwid;
+    var fr_r = r;
+    fr_r.min.x += scrollwid + scrollgap;
     var t = Text{
         .file = file,
-        .fr = draw.Frame.init(allocator, r, font, b, cols),
+        .fr = draw.Frame.init(allocator, fr_r, font, b, cols),
         .org = 0,
+        .all = r,
+        .scrollr = scrollr,
+        .lastsr = zerorect,
     };
     try t.fr.initTick(); // F-5: tick images built here, not in Frame.init
+    try t.backfill(); // textredraw tail (text.c:48-51): back-fill to the scrollbar
     return t;
 }
 
@@ -102,6 +141,61 @@ pub fn init(
 /// storage any differently — `fr.clear` frees every run box's owned text).
 pub fn deinit(self: *Text) void {
     self.fr.clear(true);
+}
+
+/// `textredraw`'s back-fill (text.c:48-51): paint BACK over the frame plus the
+/// scrollbar+gap strip to its left, so the whole Text rect starts clean.
+fn backfill(self: *Text) Error!void {
+    if (self.fr.noredraw) return;
+    var rr = self.fr.r;
+    rr.min.x -= scrollwid + scrollgap;
+    try self.fr.b.draw(rr, self.fr.col(.back), null, .{});
+}
+
+/// `textredraw` (text.c:41-71), single-Text (no `isdir` columnate arm): reset
+/// the frame's counters over the new rect `r` (the `frinit` field-clears,
+/// keeping the already-built tick — frinit.c:12-23), back-fill, refill, and
+/// re-project the selection.
+fn textRedraw(self: *Text, r: draw.Rect) Error!void {
+    const fr = &self.fr;
+    fr.nchars = 0;
+    fr.nlines = 0;
+    fr.p0 = 0;
+    fr.p1 = 0;
+    fr.lastlinefull = false;
+    fr.setRects(r, fr.b); // frsetrects (frinit.c:61-69)
+    try self.backfill(); // text.c:48-51
+    try self.fill(); // text.c:69 textfill
+    try self.setSelect(self.q0, self.q1); // text.c:70 textsetselect
+}
+
+/// `textresize` (text.c:73-98), single-Text: relayout into `r`, trimming to a
+/// whole number of lines unless `keepextra`. Resets `all`/`scrollr`/`lastsr`,
+/// re-carves the scrollbar strip, redraws, and (when `keepextra`) paints the
+/// background fringe below the last line. Returns the new `all.max.y`.
+pub fn resize(self: *Text, r_in: draw.Rect, keepextra: bool) Error!i32 {
+    var r = r_in;
+    const h: i32 = self.fr.font.height;
+    if (r.max.y - r.min.y <= 0) {
+        r.max.y = r.min.y; // text.c:78-79
+    } else if (!keepextra) {
+        r.max.y -= @rem(r.max.y - r.min.y, h); // text.c:80-81
+    }
+    self.all = r; // text.c:83
+    self.scrollr = r; // text.c:84
+    self.scrollr.max.x = r.min.x + scrollwid; // text.c:85
+    self.lastsr = zerorect; // text.c:86
+    r.min.x += scrollwid + scrollgap; // text.c:87
+    self.fr.clear(false); // text.c:88 frclear(&fr, 0)
+    try self.textRedraw(r); // text.c:89 textredraw
+    if (keepextra and self.fr.r.max.y < self.all.max.y and !self.fr.noredraw) {
+        // background in the bottom fringe of the window (text.c:90-96).
+        r.min.x -= scrollgap; // text.c:92
+        r.min.y = self.fr.r.max.y; // text.c:93
+        r.max.y = self.all.max.y; // text.c:94
+        try self.fr.b.draw(r, self.fr.col(.back), null, .{}); // text.c:95
+    }
+    return self.all.max.y; // text.c:97
 }
 
 /// `textfill` (text.c:424-457), v1-tiny: repeatedly read a chunk of the
@@ -269,7 +363,7 @@ pub fn setOrigin(self: *Text, org_in: usize, exact: bool) Error!void {
     }
     self.org = org; // text.c:1643
     try self.fill(); // text.c:1644 textfill
-    // text.c:1645 textscrdraw — FLAG: scrollbar strip deferred to windows (R-P7-1).
+    try self.scrDraw(); // text.c:1645 textscrdraw (LIVE; no-op when w==null)
     try self.setSelect(self.q0, self.q1); // text.c:1646 textsetselect
     if (fixup and self.fr.p1 > self.fr.p0) {
         // repaint the last selected char in the correct mode (text.c:1647-1648).
@@ -301,8 +395,7 @@ pub fn show(self: *Text, q0: usize, q1: usize, doselect: bool) Error!void {
         }
     }
     if (tsd) {
-        // text.c:1133-1134 textscrdraw — FLAG (R-P7-1); the caret is already
-        // on-screen so there is nothing to scroll.
+        try self.scrDraw(); // text.c:1133-1134 textscrdraw (LIVE; no-op when w==null)
     } else {
         const nl = self.fr.maxlines / 4; // text.c:1139 (single-Text: no QWevent 3/4)
         const q = self.backNL(q0, nl); // text.c:1140
@@ -354,10 +447,11 @@ const testing = std.testing;
 const Frame = draw.Frame;
 const proto = draw.proto;
 
-// Pull the sibling typing/selection test blocks into this module's test binary.
+// Pull the sibling typing/selection/scroll test blocks into this module's test binary.
 test {
     _ = @import("typing.zig");
     _ = @import("select.zig");
+    _ = @import("scroll.zig");
 }
 
 fn makeFile(allocator: std.mem.Allocator, bytes: []const u8) !File {
@@ -371,7 +465,7 @@ test "text: fill renders a buffer" {
     var f = try makeFile(testing.allocator, "hello, acme wraps\nsecond line\ttab");
     defer f.deinit();
 
-    var t = try Text.init(&f, testing.allocator, proto.Rect.make(20, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
+    var t = try Text.init(&f, testing.allocator, proto.Rect.make(4, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
     defer t.deinit();
 
     try t.fill();
@@ -386,7 +480,7 @@ test "text: fill honors org" {
     var f = try makeFile(testing.allocator, "hello, acme wraps\nsecond line\ttab");
     defer f.deinit();
 
-    var t = try Text.init(&f, testing.allocator, proto.Rect.make(20, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
+    var t = try Text.init(&f, testing.allocator, proto.Rect.make(4, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
     defer t.deinit();
     t.org = 18; // skip "hello, acme wraps\n" -> first shown text is "second line..."
 
@@ -401,7 +495,7 @@ test "text: fill stops at frame full" {
     defer fx.deinit();
 
     // A 3-line frame: 3*18 = 54px tall, 11 chars/line (99px / 9px).
-    const r = proto.Rect.make(20, 20, 119, 20 + 3 * 18);
+    const r = proto.Rect.make(4, 20, 119, 20 + 3 * 18);
 
     // 100 lines of exactly 11 chars + '\n' (12 runes/line): the chunk-newline
     // cap (nl = maxlines - nlines = 3) cuts the read right after the 3rd
@@ -441,7 +535,7 @@ test "text: fill chunk cap" {
     var f = try makeFile(testing.allocator, buf.items);
     defer f.deinit();
 
-    var t = try Text.init(&f, testing.allocator, proto.Rect.make(20, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
+    var t = try Text.init(&f, testing.allocator, proto.Rect.make(4, 20, 119, 470), fx.font, &fx.disp.image, fx.cols());
     defer t.deinit();
 
     try t.fill();
@@ -450,9 +544,11 @@ test "text: fill chunk cap" {
 }
 
 // --------------------------------------------------------------------------
-// Phase 7a scroll tests. 9x18 fixed font: 9px/glyph, 18px/line. The default
-// rect (20,20)-(119,470) is 11 glyphs (99/9) × 25 lines (450/18). "lineNN\n"
-// lines are 6 glyphs + break = 7 runes each, exactly one visual line.
+// Phase 7a scroll tests. 9x18 fixed font: 9px/glyph, 18px/line. The Text rect
+// (4,20)-(119,470) carves the 12px scrollbar + 4px gap off the left (phase 8),
+// leaving the FRAME at (20,20)-(119,470): 11 glyphs (99/9) × 25 lines (450/18),
+// byte-identical to the pre-scrollbar frame geometry. "lineNN\n" lines are
+// 6 glyphs + break = 7 runes each, exactly one visual line.
 // --------------------------------------------------------------------------
 
 /// A `Text` over `seed` on a fresh draw fixture, filled from `org`.
@@ -496,8 +592,8 @@ fn genLines(a: std.mem.Allocator, count: usize) ![]u8 {
     return buf.toOwnedSlice(a);
 }
 
-const r25 = proto.Rect.make(20, 20, 119, 470); // 11×25
-const r3 = proto.Rect.make(20, 20, 119, 74); // 11×3
+const r25 = proto.Rect.make(4, 20, 119, 470); // 11×25
+const r3 = proto.Rect.make(4, 20, 119, 74); // 11×3
 
 test "text: backNL counts lines" {
     // "aaa\n"×4 + "eee": line starts at 0,4,8,12,16; len 19.

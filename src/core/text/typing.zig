@@ -205,7 +205,10 @@ const proto = draw.proto;
 const File = @import("../File.zig");
 const Buffer = @import("../Buffer.zig");
 
-const rect = proto.Rect{ .min = .{ .x = 20, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
+// Harness rect shifted (x 20→4) for the phase-8 scrollbar strip: the 12px
+// scrollbar + 4px gap carve leaves the FRAME at (20,20)-(119,470), byte-identical
+// to the pre-scrollbar geometry (chrome contract §2).
+const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
 
 /// A live Text over `seed` plus an Editor, wired to a fresh draw fixture.
 const Harness = struct {

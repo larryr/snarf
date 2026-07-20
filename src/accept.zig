@@ -187,10 +187,14 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     var file = core.File.init(alloc, try core.Buffer.initFromBytes(alloc, "hello, acme wraps\nsecond line\ttab"));
     defer file.deinit();
 
-    // White ground, black text; frame rect 11 chars wide (fixed 9x18 metrics).
+    // White ground, black text. The Text rect starts at x=4 (phase-8 harness
+    // shift, R-P8-12): the 12px scrollbar + 4px gap carve leaves the FRAME at
+    // x=20 — 11 chars wide, byte-identical geometry to before, so the frozen
+    // hash below still holds (BACK==white, so the scrollbar back-fill is a
+    // redundant white-on-white paint over an already-white ground).
     try d.image.draw(draw.proto.Rect.make(0, 0, 640, 480), &d.white, null, .{});
     var black = try d.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &d.white, &d.white, &black, &black, &black });
     defer text.deinit();
     try text.fill();
     try d.flush();
@@ -329,7 +333,7 @@ test "phase-6: click, type, sweep — editing through the full stack" {
 
     var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
     defer file.deinit();
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
     defer text.deinit();
 
     var ed = core.Editor.init(alloc);
@@ -423,7 +427,7 @@ test "phase-7: double-click, chord cut, chord paste — through the full stack" 
 
     var file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
     defer file.deinit();
-    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(20, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
+    var text = try core.Text.init(&file, alloc, draw.proto.Rect.make(4, 20, 119, 470), &font, &d.image, .{ &back, &high, &black, &black, &black });
     defer text.deinit();
     var ed = core.Editor.init(alloc);
     defer ed.deinit();
@@ -470,4 +474,67 @@ test "phase-7: double-click, chord cut, chord paste — through the full stack" 
     // FROZEN-ACCEPT-7: acme palette, "cut  nowme" with the pasted word
     // selected. Frozen 2026-07-19 after spot-checks (R-P2-7).
     try testing.expectEqual(@as(u64, 0x5b816c29a0ad026f), hb.hash());
+}
+
+test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{ .win_name = "scratch", .body = "hello, acme\nsecond line\n" });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    try ed.frameEnd(d);
+
+    // Chrome spot-checks: row tag pale blue at (30,2); black band below the
+    // row tag; window tag pale blue; body ivory; scrollbar bord (yellowgreen).
+    try testing.expectEqual(@as(u32, 0xEAFFFFFF), hb.pixelAt(30, 2));
+    const h: u32 = font.height; // 18
+    try testing.expectEqual(@as(u32, 0x000000FF), hb.pixelAt(30, h)); // border band
+    // Row tag literal in its File:
+    var tbuf: [128]u8 = undefined;
+    try testing.expectEqualStrings("Newcol Kill Putall Dump Exit ", tree.row.tag.file.buffer.read(0, tree.row.tag.file.buffer.len(), &tbuf));
+
+    // Second window; type into each body via point-to-type (pointer position).
+    const w2 = try tree.addWindow("notes", "");
+    _ = w2;
+    try ed.frameEnd(d);
+    const w1 = tree.row.col.items[0].w.items[0];
+    const win2 = tree.row.col.items[0].w.items[1];
+    // Point into w1's body and type:
+    const p1 = w1.body.fr.r;
+    ed.mouse_pt = .{ .x = p1.min.x + 5, .y = p1.min.y + 5 };
+    try ed.handleKey('A');
+    // Point into w2's body and type:
+    const p2 = win2.body.fr.r;
+    ed.mouse_pt = .{ .x = p2.min.x + 5, .y = p2.min.y + 5 };
+    try ed.handleKey('B');
+    try ed.frameEnd(d);
+    var rbuf: [128]u8 = undefined;
+    try testing.expectEqual(@as(u21, 'A'), w1.body.file.buffer.runeAt(0));
+    try testing.expectEqualStrings("B", win2.body.file.buffer.read(0, win2.body.file.buffer.len(), &rbuf));
+
+    // FROZEN-ACCEPT-8: full acme chrome — row tag, column tag+button, two
+    // windows with tags/buttons/scrollbars, point-to-type edits in both.
+    // Frozen 2026-07-20 after spot-checks (R-P2-7).
+    try testing.expectEqual(@as(u64, 0x12a80ccd9fd03239), hb.hash());
 }
