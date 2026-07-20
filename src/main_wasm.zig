@@ -47,13 +47,21 @@ const alloc = std.heap.wasm_allocator;
 /// numbers are duplicated in index.html until canvasResize/DPR land.
 const width: u32 = 640;
 const height: u32 = 480;
-/// Frame rect (R-P5-8 numbers): the interactive text body.
-const text_rect = draw.proto.Rect.make(20, 20, 620, 470);
+/// The window tree fills the whole display (rowinit lays the rowtag + white
+/// ground; Chrome owns the acme palette solids now — the phase-6/7 hand-built
+/// BACK/HIGH images are gone).
+const screen_rect = draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height));
 
-// The acme palette (R-P6-9/F-10). Colors are RGBA (0xRRGGBBAA); the display is
-// opaque so alpha is 0xFF throughout.
-const acme_back: draw.proto.Color = 0xFFFFEAFF; // ivory ground (BACK)
-const acme_high: draw.proto.Color = 0xEEEE9EFF; // selection highlight (HIGH)
+/// The initial window body (a few demo lines so the scene shows text + wraps).
+const demo_body =
+    \\Snarf — the ACME port, phase 8.
+    \\
+    \\A row of columns of windows, each a tag over a body.
+    \\Point the mouse at a window and type (point-to-type).
+    \\B1 sweeps a selection; B1+B2 cuts, B1+B3 pastes.
+    \\The left strip of each body is its scrollbar.
+    \\
+;
 
 /// Standing-ticket read buffers. Mouse reads land exactly one 49-byte record
 /// (dev/input.zig mouse_rec_len); kbd reads land a short UTF-8 burst.
@@ -75,8 +83,8 @@ fn pumpServer(ctx: *anyopaque) anyerror!void {
 ///   &canvas→dd, &dd→srv, &pipe→srv/cl, &srv→cl.pump, &cl→display; on the INPUT
 ///   side &devinput→srv_input, &pipe_input→srv_input/cl_input, &srv_input→
 ///   cl_input.pump; &mouse_buf/&kbd_buf are borrowed by the standing tickets so
-///   they must not move; &text→editor.text, and text.fr is pointed at by its own
-///   SelectState, so text must not move either.
+///   they must not move; the window tree heap-allocates its Row/Column/Window so
+///   their addresses are stable, and editor.row → tree.row.
 const App = struct {
     // --- draw stack (phase 5) ---
     canvas: dev.draw_canvas.CanvasBackend,
@@ -86,13 +94,9 @@ const App = struct {
     cl: ninep.Client,
     display: *draw.Display,
     font: draw.Font,
-    // --- palette images (acme scene, F-10) ---
-    back: draw.Image,
-    high: draw.Image,
-    black: draw.Image,
-    // --- document ---
-    file: core.File,
-    text: core.Text,
+    // --- window tree (phase 8): Chrome + Row + Column + Window(s) over heap
+    //     body Files, assembled by core.boot; the Editor router hit-tests it. ---
+    tree: core.boot.Tree,
     editor: core.Editor,
     // --- input stack (6c) ---
     devinput: DevInput,
@@ -138,21 +142,18 @@ fn boot() !void {
     a.display = try draw.Display.init(alloc, &a.cl, root.fid);
     a.font = try draw.Font.init(alloc, a.display, draw.Font.default_subfont);
 
-    // ---- acme palette + EMPTY buffer (R-P6-9/F-10) ----
-    a.back = try a.display.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, acme_back);
-    a.high = try a.display.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, acme_high);
-    a.black = try a.display.allocImage(draw.proto.Rect.make(0, 0, 1, 1), draw.proto.RGBA32, true, draw.proto.DBlack);
-    a.file = core.File.init(alloc, core.Buffer.initEmpty(alloc));
-    // cols = {BACK, HIGH, bord, text, htext} = {back, high, black, black, black}.
-    a.text = try core.Text.init(&a.file, alloc, text_rect, &a.font, &a.display.image, .{ &a.back, &a.high, &a.black, &a.black, &a.black });
+    // ---- window tree: Chrome + Row + Column + initial Window (phase 8) ----
+    // boot draws the whole scene (white ground, rowtag/columntag/window chrome,
+    // the demo body); no hand-built palette or manual ground fill needed.
+    a.tree = try core.boot.boot(alloc, a.display, &a.font, screen_rect, .{
+        .win_name = "scratch",
+        .body = demo_body,
+    });
 
-    // Ivory ground fill over the whole display, then lay out the (empty) buffer.
-    try a.display.image.draw(draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height)), &a.back, null, .{});
-    try a.text.fill();
-
-    // Editor routing machine bound to the single Text (F-9).
+    // Editor routing machine bound to the window tree (R-P8-9/10/11): keys
+    // point-to-type, gestures pin to their Text, the wheel scrolls under-pointer.
     a.editor = core.Editor.init(alloc);
-    a.editor.text = &a.text;
+    a.editor.row = a.tree.row;
 
     // ---- input stack: devinput ← server ← client (the devdraw pattern) ----
     a.devinput = DevInput.init(alloc);
@@ -205,7 +206,11 @@ fn decodeEvent(a: *App, kind: u32, x: i32, y: i32, c: u32, t: u32) void {
         .pointer_down => a.devinput.pushPointer(.down, x, y, @truncate(c), t),
         .pointer_up => a.devinput.pushPointer(.up, x, y, @truncate(c), t),
         .pointer_move => a.devinput.pushPointer(.move, x, y, @truncate(c), t),
-        .wheel => a.devinput.pushWheel(x, y, 0, t), // a=notches; y/0 unused (F-7 ignores wheel)
+        // a=notches; y/0 unused (F-7 ignores wheel). FLAG (phase 8): the wheel
+        // record does not carry the pointer position, so Editor.handleMouse
+        // scrolls whatever Text `mouse_pt` last landed on (the previous move) —
+        // shim wheel-coordinate plumbing is deferred with the Worker+SAB move.
+        .wheel => a.devinput.pushWheel(x, y, 0, t),
         .key => a.devinput.pushKey(@intCast(x), @bitCast(@as(u8, @truncate(c))), t),
         .mod_down, .mod_up => {
             const which: dev.input.Mod = switch (c) {
