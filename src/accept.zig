@@ -548,3 +548,183 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     // stream from the phase-8 freeze. Spot-checks above still hold (R-P2-7).
     try testing.expectEqual(@as(u64, 0x9816211a7aca91d7), hb.hash());
 }
+
+test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "snarfme rest\n",
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    ed.but2col = tree.chrome.but2col; // acme.c:1084-1085, as main_wasm binds them
+    ed.but3col = tree.chrome.but3col;
+    try ed.frameEnd(d);
+
+    const col = tree.row.col.items[0];
+    const w1 = col.w.items[0];
+
+    // B1-select "snarfme" ([0,7)) in body-1 — sets seltext/argtext (acme.c:656-657).
+    const b1p0 = w1.body.fr.ptOfChar(0);
+    const b1p7 = w1.body.fr.ptOfChar(7);
+    try ed.handleMouse(.{ .x = b1p0.x, .y = b1p0.y, .buttons = 1, .msec = 0 });
+    try ed.handleMouse(.{ .x = b1p7.x, .y = b1p7.y, .buttons = 1, .msec = 20 });
+    try ed.handleMouse(.{ .x = b1p7.x, .y = b1p7.y, .buttons = 0, .msec = 40 });
+    try testing.expectEqual(@as(usize, 0), w1.body.q0);
+    try testing.expectEqual(@as(usize, 7), w1.body.q1);
+    try testing.expect(ed.seltext == &w1.body);
+
+    // B2-click "Snarf" in w1's tag ("one Del Snarf | Look ", 'a' of Snarf at 10):
+    // the cut wrapper routes to the window's BODY selection (exec.c:961-963).
+    // Snarf never marks (exec.c:124 mark=F) so ed.seq stays 0.
+    const tag_snarf = w1.tag.fr.ptOfChar(10);
+    try ed.handleMouse(.{ .x = tag_snarf.x, .y = tag_snarf.y, .buttons = 2, .msec = 1000 });
+    try ed.handleMouse(.{ .x = tag_snarf.x, .y = tag_snarf.y, .buttons = 0, .msec = 1000 });
+    try testing.expectEqualStrings("snarfme", ed.snarf.items);
+    try testing.expectEqual(@as(u32, 0), ed.seq);
+    var rbuf: [64]u8 = undefined;
+    try testing.expectEqualStrings("snarfme rest\n", w1.body.file.buffer.read(0, w1.body.file.buffer.len(), &rbuf));
+
+    // Second window; point-to-type an 'X' into it (dirties it, R-P6-8 typing run).
+    const w2 = try tree.addWindow("notes", "");
+    try ed.frameEnd(d);
+    ed.mouse_pt = .{ .x = w2.body.fr.r.min.x + 5, .y = w2.body.fr.r.min.y + 5 };
+    try ed.handleKey('X');
+    try ed.frameEnd(d); // the tag sweep adds " Undo" to w2's tag (after "Snarf")
+    try testing.expect(w2.dirty);
+
+    // B2-click "Del" in w2's tag ("notes Del Snarf ...", 'e' of Del at 7).
+    // FIRST strike: the two-strike clean (wind.c:666-685) warns once, clears
+    // dirty (file.mod stays — the mod dot survives), and the window lives on.
+    const tag_del = w2.tag.fr.ptOfChar(7);
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 2, .msec = 2000 });
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 0, .msec = 2000 });
+    try testing.expectEqual(@as(usize, 2), col.w.items.len);
+    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "notes modified") != null);
+    try testing.expect(!w2.dirty);
+    try testing.expect(w2.body.file.mod);
+
+    // SECOND strike: the window closes and w1 grows back over the whole column
+    // body (colclose neighbor geometry, cols.c:189-207).
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 2, .msec = 3000 });
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 0, .msec = 3000 });
+    try testing.expectEqual(@as(usize, 1), col.w.items.len);
+    try testing.expectEqual(w1, col.w.items[0]);
+    try testing.expectEqual(col.r.max.y, w1.r.max.y);
+    try ed.frameEnd(d);
+
+    // FROZEN-ACCEPT-9: B2 exec scene — tag Snarf against the body selection,
+    // live-tag Undo, two-strike Del, neighbor regrowth. NEW freeze (R-P2-7),
+    // spot-checks above.
+    try testing.expectEqual(@as(u64, 0xb52b86b54d50d100), hb.hash());
+}
+
+test "phase-9: B3 look scene — click cycles occurrences with wraparound" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    // 60 lines with "needle" on lines 2, 30 and 50 — the latter two below the
+    // fold of a ~22-line body frame.
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(alloc);
+    var offs: [3]usize = undefined;
+    var noff: usize = 0;
+    var line: usize = 0;
+    var runes: usize = 0;
+    while (line < 60) : (line += 1) {
+        if (line == 2 or line == 30 or line == 50) {
+            offs[noff] = runes + 2; // past "x "
+            noff += 1;
+            try body.appendSlice(alloc, "x needle y\n");
+            runes += 11;
+        } else {
+            try body.appendSlice(alloc, "filler\n");
+            runes += 7;
+        }
+    }
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "hay",
+        .body = body.items,
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    ed.but2col = tree.chrome.but2col;
+    ed.but3col = tree.chrome.but3col;
+    try ed.frameEnd(d);
+
+    const w = tree.row.col.items[0].w.items[0];
+    const t = &w.body;
+
+    // B3-click mid-"needle" on line 2 (visible from org=0): the alnum run is the
+    // needle; the caret collapses past it and the forward search lands on the
+    // line-30 occurrence, scrolled visible by textshow (look.c:208-218).
+    const c1 = t.fr.ptOfChar(offs[0] + 2 - t.org);
+    try ed.handleMouse(.{ .x = c1.x, .y = c1.y, .buttons = 4, .msec = 100 });
+    try ed.handleMouse(.{ .x = c1.x, .y = c1.y, .buttons = 0, .msec = 100 });
+    try testing.expectEqual(offs[1], t.q0);
+    try testing.expectEqual(offs[1] + 6, t.q1);
+    try testing.expect(t.org > 0); // scrolled
+    try testing.expect(t.q0 >= t.org and t.q0 < t.org + t.fr.nchars); // visible
+    try testing.expect(ed.seltext == t); // look.c:427
+
+    // B3-click inside the CURRENT selection: the selection is the needle
+    // (look.c:738-743); the search continues to the line-50 occurrence.
+    const c2 = t.fr.ptOfChar(t.q0 + 2 - t.org);
+    try ed.handleMouse(.{ .x = c2.x, .y = c2.y, .buttons = 4, .msec = 200 });
+    try ed.handleMouse(.{ .x = c2.x, .y = c2.y, .buttons = 0, .msec = 200 });
+    try testing.expectEqual(offs[2], t.q0);
+    try testing.expectEqual(offs[2] + 6, t.q1);
+    try testing.expect(t.q0 >= t.org and t.q0 < t.org + t.fr.nchars);
+
+    // Third click: WRAPS around to the line-2 occurrence (look.c:385-389).
+    const c3 = t.fr.ptOfChar(t.q0 + 2 - t.org);
+    try ed.handleMouse(.{ .x = c3.x, .y = c3.y, .buttons = 4, .msec = 300 });
+    try ed.handleMouse(.{ .x = c3.x, .y = c3.y, .buttons = 0, .msec = 300 });
+    try testing.expectEqual(offs[0], t.q0);
+    try testing.expectEqual(offs[0] + 6, t.q1);
+    try testing.expect(t.q0 >= t.org and t.q0 < t.org + t.fr.nchars);
+    try ed.frameEnd(d);
+}
