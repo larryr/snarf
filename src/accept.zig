@@ -827,3 +827,89 @@ test "phase-10: served tree scene" {
     try testing.expect(!w.body.file.mod);
     try cl.clunk(ctl.fid);
 }
+
+test "phase-10: Edit via B2 scene — s-global, one undo, live tag" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "ed",
+        .body = "b one\nb two\nb three\n",
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    ed.but2col = tree.chrome.but2col;
+    ed.but3col = tree.chrome.but3col;
+    try ed.frameEnd(d);
+
+    const w = tree.row.col.items[0].w.items[0];
+
+    // Append the Edit command to the tag (after " Look ") and B2-SWEEP it — a
+    // sweep executes the swept text verbatim, inline args included (exec.c:
+    // 241-244), so the whole "Edit ,s/b/X/g" line dispatches the Edit builtin.
+    const cmd_text = "Edit ,s/b/X/g";
+    const tag_start = w.tag.file.buffer.len();
+    try w.tag.insertAt(tag_start, cmd_text, true);
+    try ed.frameEnd(d);
+    const seq_before = ed.seq;
+
+    const p_from = w.tag.fr.ptOfChar(tag_start - w.tag.org);
+    const p_to = w.tag.fr.ptOfChar(tag_start + cmd_text.len - w.tag.org);
+    try ed.handleMouse(.{ .x = p_from.x, .y = p_from.y, .buttons = 2, .msec = 100 });
+    try ed.handleMouse(.{ .x = p_to.x, .y = p_to.y, .buttons = 2, .msec = 150 });
+    try ed.handleMouse(.{ .x = p_to.x, .y = p_to.y, .buttons = 0, .msec = 200 });
+
+    // Three substitutions, ONE transaction: exactly one seq bump, body rewritten.
+    var rbuf: [128]u8 = undefined;
+    try testing.expectEqualStrings(
+        "X one\nX two\nX three\n",
+        w.body.file.buffer.read(0, w.body.file.buffer.len(), &rbuf),
+    );
+    try testing.expectEqual(seq_before + 1, ed.seq);
+
+    // The frameEnd tag sweep now shows " Undo" (live tags, R-P9-4).
+    try ed.frameEnd(d);
+    var tgbuf: [256]u8 = undefined;
+    try testing.expect(std.mem.indexOf(
+        u8,
+        w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tgbuf),
+        " Undo",
+    ) != null);
+
+    // B2-click that " Undo": the WHOLE Edit reverses in one step (one File.mark
+    // per Edit — elog.c:271-273 + exec.c:1141).
+    const tag2 = w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tgbuf);
+    const undo_at = std.mem.indexOf(u8, tag2, " Undo").? + 2; // 'n' of Undo (ASCII tag ⇒ byte==rune index)
+    const p_undo = w.tag.fr.ptOfChar(undo_at - w.tag.org);
+    try ed.handleMouse(.{ .x = p_undo.x, .y = p_undo.y, .buttons = 2, .msec = 300 });
+    try ed.handleMouse(.{ .x = p_undo.x, .y = p_undo.y, .buttons = 0, .msec = 300 });
+    try testing.expectEqualStrings(
+        "b one\nb two\nb three\n",
+        w.body.file.buffer.read(0, w.body.file.buffer.len(), &rbuf),
+    );
+    try ed.frameEnd(d);
+
+    // FROZEN-ACCEPT-10: the Edit-language scene — swept Edit s-global, live-tag
+    // Undo appearing, single-step whole-transaction undo. NEW freeze (R-P2-7).
+    try testing.expectEqual(@as(u64, 0xe9014ecfa82cbc4b), hb.hash());
+}
