@@ -102,6 +102,12 @@ scroll_but: u8 = 0,
 /// The snarf buffer: Editor-owned UTF-8 (R-P7-5, vs the C's Rune `snarfbuf`).
 /// Captured via chunked `Buffer.read` so U+FFFD semantics match `captureText`.
 snarf: std.ArrayList(u8) = .empty,
+/// The Edit language's persistent last-regexp cache (acme `lastpat`, edit.c:181).
+/// A non-empty `//`-pattern replaces it; an empty pattern REUSES it — and, per the
+/// C, the cache persists ACROSS Edit invocations (a later `Edit s//x/` reuses the
+/// pattern from an earlier `Edit`). Added by wave 10a-A2 (R-P10-5); owned by
+/// `ed.allocator`, `deinit`'ed below.
+edit_lastpat: std.ArrayList(u21) = .empty,
 /// v1 warning sink (R-P9-6): `warning()` appends formatted lines here. acme's
 /// `warning()` writes the `+Errors` window (util.c:259+) via `flushwarnings` —
 /// that needs the served namespace, so v1 buffers on the Editor. FLAG: rewire to
@@ -165,6 +171,7 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 
 pub fn deinit(self: *Editor) void {
     self.snarf.deinit(self.allocator);
+    self.edit_lastpat.deinit(self.allocator);
     self.warnings.deinit(self.allocator);
     self.* = undefined;
 }
