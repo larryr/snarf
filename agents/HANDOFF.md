@@ -81,14 +81,29 @@ authorization for this file only). Prune freely — git keeps history.
   FROZEN-ACCEPT-8 re-frozen 0x9816211a7aca91d7 (live-tag Undo); FROZEN-ACCEPT-9
   = 0xb52b86b54d50d100. Debt: Editor.zig ~1743 lines (carve gesture machine out
   next structural pass); getArg raw-bytes until namespace `expand`.
-- **Next planned work — USER DIRECTIVE 2026-07-19/20: run phases back-to-back to
-  P10 completion, no boundary pauses** (reports still per phase): P7 DONE+MERGED
-  (290/290); P8 DONE+MERGED (point-to-type per acme default — R-P8-9, 317/317);
-  P9 DONE+MERGED (above); **P10 IN PROGRESS**: Edit language (regx/addr/parse/cmd
-  per S-05 §5) + served tree (/mnt/snarf-self) start. Later: Get/Put via
-  namespace, Dump/Load, Worker+SAB, touch profile, /dev/snarf clipboard, Zerox
-  (multi-Text-per-File), Sort, Exit, Shift-B3 reverse look wiring. Also
-  outstanding: CI (S-06 §5); wasm size watch (1258.5 KiB after P9).
+- **Phase 10 (Edit language + served tree) MERGED to `main` (4c59893)**
+  (agents/reports/phase10-edit.md): structural regexp engine (sam Pike-VM,
+  fwd+bwd), full addresses, Edit commands a c i d s m t + x y g v loops + p = u
+  {} (one Edit = one undo via Elog frozen-coordinate reverse apply), and the
+  /mnt/snarf-self served tree start (index/ctl/body/tag, ctl clean/dirty/del/
+  delete/name, walk-new creates windows). 476/476 + smoke 14/14. Contracts:
+  phase10-{edit,regx-addr,edit-cmd,served}.md (R-P10-1..9 + A..J).
+  FROZEN-ACCEPT-10 = 0xe9014ecfa82cbc4b. Agent-found contract corrections
+  recorded in the report (NPROG/test-9); Edit builtin uses et's window body,
+  never seltext.
+- **OPS LESSON (2026-07-20, recorded after a near-miss)**: `zig build test |
+  grep | awk` gates return the LAST pipe stage's exit code — a failing suite
+  still lets `&&` chains continue. A wrong frozen-hash constant rode green-looking
+  gates until a forced-failure probe exposed it. Gate pattern now: run tests to a
+  file, check `$?` explicitly, grep the file for fail/crash. ALSO: shell
+  `printf '0x%x'` silently mangles decimals > INT64_MAX — use python for hash
+  conversions.
+- **Next (directive completed through P10; new work needs user direction)**:
+  Get/Put via namespace (host fs / origin mounts), Dump/Load, Worker+SAB,
+  touch profile, /dev/snarf clipboard, Zerox (multi-Text-per-File), Sort, Exit,
+  Shift-B3 reverse look + dot=addr ctl wiring (small integration wave), +Errors
+  window (rewire ed.warnings). Also outstanding: CI (S-06 §5); wasm size watch
+  (1504.6 KiB after P10); Editor.zig ~1800 lines (gesture-machine carve-out).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
   open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
 
