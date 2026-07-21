@@ -105,7 +105,9 @@ authorization for this file only). Prune freely — git keeps history.
   window (rewire ed.warnings). Also outstanding: CI (S-06 §5); wasm size watch
   (1504.6 KiB after P10); Editor.zig ~1800 lines (gesture-machine carve-out).
 - **Open questions**: OQ-BLD-1 → Zig 0.16.0; OQ-GFX-2 → misc-fixed (see above). Still
-  open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2).
+  open: touch chord-paste gesture (OQ-IN-1), ABI codegen (OQ-BLD-2). NEW: OQ-EDIT-4 —
+  vim-motion modal layer as external client, design settled + `kbd hold` verb specified
+  (S-02 §6, R-EDIT-19), **implementation deferred by user** — don't build unprompted.
 
 ## Environment & account facts (verified 2026-07-19)
 
@@ -192,6 +194,19 @@ authorization for this file only). Prune freely — git keeps history.
   op-controlled data (B1 handleStat, patched + regression test).
 
 ## Session log (newest first)
+
+### 2026-07-21 — vim-motions design writeup (remote, larryr; docs-bootstrap session cont.)
+- Merged to `main` (`356f769`, rebased onto phase-10 main): R-02 v3 adds **R-EDIT-19**
+  (dot-transformer principle: dot is the only cursor; every modality moves it via the
+  address engine) + **OQ-EDIT-4** (vim motions = external namespace client; motions
+  compile to addresses). S-02 §6 specifies the **`kbd hold`/`kbd release`** ctl verbs
+  (deliver-first keyboard, symmetric with B2/B3 interception; release-on-clunk
+  mandatory) — **specified only, deferred**. S-05 §9 cross-refs.
+- Ground truth verified in `sys/man/4/acme` (K events are report-only; addr accepts full
+  address syntax; ctl has dot=addr/addr=dot/show) — the asymmetry is the whole reason
+  the verb is needed.
+- Note for implementers: when `kbd hold` eventually lands, it belongs in served/xfid +
+  typing dispatch, NOT in devinput (motions need buffer structure devinput lacks).
 
 ### 2026-07-19 — docs bootstrap session (remote, larryr)
 - Authored and merged to `main`: full docs tree (requirements R-01..R-07, specs
