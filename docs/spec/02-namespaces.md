@@ -93,6 +93,26 @@ same syntax but only mouse/keyboard origins that exist here. Served in-process; 
 reachable by the origin server over the same WebSocket (server-initiated attach is a v2
 item — v1 exposes it to other tabs via `BroadcastChannel` transport experiment, OQ-OV-2).
 
+**Deferred extension — `kbd hold` (specified here, not implemented in v1).** acme(4)'s
+event interface is asymmetric: with an `event` file open, B2/B3 actions are
+*deliver-first* (the client may act on the message or write it back for the editor to
+apply), but keyboard actions are *report-only* — typed runes self-insert and are then
+reported as `K I` deltas. That asymmetry is the one thing preventing modal layers (vim
+motions, OQ-EDIT-4) from being pure namespace clients. Snarf completes the symmetry:
+
+- writing `kbd hold` to a window's `ctl` switches that window's keyboard to
+  deliver-first: `K` events are delivered to the event-file reader **without mutating
+  the buffer**; the client either handles the rune itself (a motion/operator, typically
+  ending in `addr` writes + `dot=addr`, per R-EDIT-19) or writes the event back to apply
+  it as the ordinary self-insertion (passthrough — i.e. insert mode);
+- `kbd release` written to `ctl`, clunking the `event` fid, or window deletion restores
+  normal typing — a wedged or dead client MUST never leave a window untypeable;
+- holds are per-window and do not affect the tag unless separately requested
+  (`kbd hold tag`).
+
+Rationale, motion→address mapping, and the dot-transformer principle: R-EDIT-19 and
+OQ-EDIT-4 in [R-02](../requirements/02-editor-functional.md).
+
 ## 7. Input & graphics devices
 
 `/dev/draw`, `/dev/mouse`, `/dev/cursor`, `/dev/kbd`, `/dev/cons` are specified in

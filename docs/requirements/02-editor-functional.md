@@ -47,6 +47,7 @@ port; the implementation design is in [../spec/05-editor-core.md](../spec/05-edi
 |----|-------------|
 | R-EDIT-17 | Snarf SHALL export its own state as a file tree, ACME-style (`/mnt/acme`-equivalent: per-window `addr`, `body`, `tag`, `event`, `ctl`, …), served over 9P **to the origin server or other tabs** where transports permit, and always available internally — so tooling can be written against Snarf just as against ACME. |
 | R-EDIT-18 | Executing text that is not a built-in SHALL be resolved against an extensible command table; v1 ships built-ins only plus commands the origin exports (OQ-EDIT-1). There is no local shell. |
+| R-EDIT-19 | **Dot-transformer principle**: dot (the selection, always a range) is the only cursor. Every input modality — B1 select (spatial), B3 look (content), `Edit`/`addr` (structural), and any future layer such as a modal/vim-motion client — SHALL move the cursor only by computing an address and assigning dot. No input feature may move the cursor by a mechanism the address engine cannot express. |
 
 ## 6. Open questions
 
@@ -57,6 +58,15 @@ port; the implementation design is in [../spec/05-editor-core.md](../spec/05-edi
   hard-coded (R-EDIT-13); rules file later.*
 - OQ-EDIT-3: Win/terminal windows (`win`) are meaningless without a shell — permanently out
   of scope, or emulated against an origin-side pty service? *Deferred.*
+- OQ-EDIT-4 (*design settled 2026-07-21; implementation deferred*): **modal editing
+  ("vim motions") as an external namespace client.** Vim's grammar maps onto acme's:
+  motions are address arithmetic (`3j` → `+3`, `w` → `+/word-re/`, `/pat` → `/pat/`),
+  operator+motion is an address span acted on via `addr`+`data`, visual mode is dot,
+  registers are `/dev/snarf` + scratch files. One gap blocks a *pure* client: per
+  acme(4), open `event` files intercept B2/B3 but keyboard events are report-only —
+  typed runes self-insert before a client sees them. Snarf specifies (but defers) the
+  `kbd hold` interception verb in spec S-02 §6 to close this. No v1 work; revisit once
+  the editor core is functional.
 
 ## 7. Revision log
 
@@ -64,3 +74,7 @@ port; the implementation design is in [../spec/05-editor-core.md](../spec/05-edi
 - **v2** — R-EDIT-09 added to bind the mouse language to the emulation requirements;
   R-EDIT-06/18 reworded after deciding there is no local shell (browser sandbox);
   R-EDIT-14 tied explicitly to `/dev/snarf`.
+- **v3** — added R-EDIT-19 (dot-transformer principle: all input modalities converge on
+  dot assignment through the address engine) and OQ-EDIT-4 (vim-motion modal layer as an
+  external client, enabled by the deferred `kbd hold` verb, S-02 §6). Design discussion
+  with user; implementation deferred.

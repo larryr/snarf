@@ -80,6 +80,9 @@ with one-time warning. (This synchronization is the feature the project is named
 The `/mnt/snarf-self` tree (S-02 §6) is served by the core itself on the in-memory
 transport; `event` file delivery follows acme(4): text deltas and B2/B3 events offered to
 the client with the same `K`/`M` origin runes and built-in fallback on clunk-without-read.
+The deferred `kbd hold` extension (S-02 §6) hooks in here; until it is implemented, `K`
+events remain report-only exactly as in acme(4). Selection movement of every kind resolves
+through the address engine per the dot-transformer principle (R-EDIT-19).
 
 ## 10. Trace
 
@@ -95,3 +98,4 @@ the client with the same `K`/`M` origin runes and built-in fallback on clunk-wit
 | R-EDIT-15 | §4 (Get/Put via namespace), §2 (names are paths) |
 | R-EDIT-16 | §8 |
 | R-EDIT-17 | §9 |
+| R-EDIT-19 | §3, §6, §9 (all selection movement via address engine) |
