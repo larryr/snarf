@@ -4,6 +4,17 @@ Protocol: see `CLAUDE.md` §"Session handoff protocol". Read top-to-bottom; newe
 entry first. Any session may edit; commit to `main` with prefix `handoff:` (standing
 authorization for this file only). Prune freely — git keeps history.
 
+## ⚠ In-flight claims (check before touching these areas)
+
+- **CLAIMED (2026-09-02, Larry): button/mouse input** — a local session on Larry's other
+  machine is changing input handling. Until this claim clears, NO other session may
+  modify: `src/dev/input.zig`, `src/dev/profiles.zig`, S-04 (`docs/spec/04-input-devices.md`),
+  ADR-0004, `docs/spec/diagrams/mouse-chords.puml`, or the input edges of `Editor.zig`
+  (gesture machine) / `main_wasm.zig` / `web/shim.js`. Adjacent work is fine if it
+  doesn't touch those files. Claim clears when that session merges and removes this
+  entry (or Larry says so). Owning session: please push a WIP branch early so the work
+  is visible, and update this entry with the branch name.
+
 ## Current state (update in place)
 
 - **Repo**: docs + scaffold + `zig build serve` all on `main` (scaffold `0c4ec78`, serve
