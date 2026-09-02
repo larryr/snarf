@@ -14,6 +14,13 @@ authorization for this file only). Prune freely — git keeps history.
   doesn't touch those files. Claim clears when that session merges and removes this
   entry (or Larry says so). Owning session: please push a WIP branch early so the work
   is visible, and update this entry with the branch name.
+- **CLAIMED (2026-09-02, remote session): origin server** — branch `origin-server`
+  (pushed). Morphing `tools/serve.zig` into the origin server: static HTTP + WebSocket
+  `/9p` + a 9P export (S-02 §5). Owns: `tools/**`, `build.zig` serve/origin steps,
+  `src/ninep/` additions only (no edits to existing ninep files without noting here).
+  Does NOT touch `web/shim.js` or the wasm side yet (browser mount of `/mnt/origin` is
+  a follow-up wave, coordinated with the input claim above). Zig in the remote sandbox:
+  `pip install ziglang==0.16.0` (PyPI is proxy-allowed; ziglang.org is not).
 
 ## Current state (update in place)
 
