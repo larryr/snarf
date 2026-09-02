@@ -34,10 +34,17 @@ binary.
 Diagram source: [diagrams/build-flow.puml](diagrams/build-flow.puml)
 
 Steps: compile wasm → copy `web/` verbatim → embed/copy `assets/fonts` → assemble
-`zig-out/www/`. `zig build serve` runs a tiny std.http dev server over `zig-out/www` with
+`zig-out/www/`. `zig build serve` runs the **origin server** (`tools/origin/`, std-only,
+outside the editor module graph): static `zig-out/www` with
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`
-(R-BLD-04) plus `application/wasm` MIME. `zig build dist` = same tree, plus gzip/brotli
-precompression later.
+(R-BLD-04) plus `application/wasm` MIME, **and** 9P2000 over WebSocket at `/9p`
+(S-01 §3.2) exporting the tree in S-02 §5 — `-Dexport=<dir>` chooses the directory
+behind `fs/` (default: the repo root), `-Dport`/`-Dbind` as before. `zig build dist` =
+same tree, plus gzip/brotli precompression later.
+
+> Revision log: 2026-09-02 (phase 11) — `tools/serve.zig` became `tools/origin/`
+> (`snarf-origin`): thread per connection, `std.http.Server`'s WebSocket upgrade, the
+> existing `ninep.server.Server` as the 9P engine. The `serve` step name is unchanged.
 
 ## 4. JS shim ABI (contract, R-PLAT-04)
 

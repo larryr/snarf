@@ -106,27 +106,34 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run-native", "Run the native headless harness");
     run_step.dependOn(&run_native.step);
 
-    // --- zig build serve: std-only dev server over zig-out/www (S-06 §3),
-    //     setting application/wasm + COOP/COEP. Host tool, not in the editor
-    //     module graph. Port via -Dport (default 8017). ---
+    // --- zig build serve: the origin server (S-02 §5, S-06 §3) — static
+    //     zig-out/www with application/wasm + COOP/COEP, plus 9P2000 over
+    //     WebSocket at /9p exporting `-Dexport` (default: this repo). Host
+    //     tool, outside the editor module graph; std-only. ---
     const port = b.option(u16, "port", "Port for `zig build serve` (default 8017)") orelse 8017;
     const bind = b.option([]const u8, "bind", "Bind address for `zig build serve` (default 127.0.0.1; use 0.0.0.0 for all interfaces)") orelse "127.0.0.1";
+    const export_dir = b.option([]const u8, "export", "Directory served read/write at /9p `fs/` (default: the repo root)") orelse b.build_root.path orelse ".";
     const serve_opts = b.addOptions();
     serve_opts.addOption([]const u8, "www_dir", b.getInstallPath(.prefix, "www"));
     serve_opts.addOption(u16, "port", port);
     serve_opts.addOption([]const u8, "bind", bind);
+    serve_opts.addOption([]const u8, "export_dir", export_dir);
     const serve_exe = b.addExecutable(.{
-        .name = "snarf-serve",
+        .name = "snarf-origin",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/serve.zig"),
+            .root_source_file = b.path("tools/origin/main.zig"),
             .target = b.graph.host,
             .optimize = optimize,
-            .imports = &.{.{ .name = "build_options", .module = serve_opts.createModule() }},
+            .imports = &.{
+                .{ .name = "ninep", .module = ninep },
+                .{ .name = "build_options", .module = serve_opts.createModule() },
+            },
         }),
     });
+    b.installArtifact(serve_exe);
     const run_serve = b.addRunArtifact(serve_exe);
     run_serve.step.dependOn(b.getInstallStep()); // assemble zig-out/www first
-    const serve_step = b.step("serve", "Serve zig-out/www over HTTP (application/wasm + COOP/COEP)");
+    const serve_step = b.step("serve", "Run the origin server: zig-out/www over HTTP + 9P over WebSocket at /9p");
     serve_step.dependOn(&run_serve.step);
 
     // --- Tests: every module's colocated `test` blocks, run natively. core,
@@ -146,8 +153,10 @@ pub fn build(b: *std.Build) void {
         .{ .name = "ninep", .module = ninep },
         .{ .name = "shim", .module = shim },
     });
-    // The serve dev tool has its own tests (path resolution, content types).
-    addModuleTests(b, test_step, target, optimize, "tools/serve.zig", &.{
+    // The origin server: unit tests per file plus a loopback acceptance test
+    // (real listener, real WebSocket, real ninep.Client) rooted at accept.zig.
+    addModuleTests(b, test_step, target, optimize, "tools/origin/accept.zig", &.{
+        .{ .name = "ninep", .module = ninep },
         .{ .name = "build_options", .module = serve_opts.createModule() },
     });
     // Cross-module acceptance tests (orchestrator-owned): the one root where
