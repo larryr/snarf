@@ -78,6 +78,18 @@ services (R-EDIT-18: an origin "command" is a file `bin/<name>/ctl` that Snarf w
 (Go `9fans.net/go`, plan9port `u9fs` behind a WS bridge) will be listed in the repo README
 when code lands; the docs only fix the wire contract.
 
+> Revision log: 2026-09-02 (phase 11) — Snarf's own origin server shipped
+> (`tools/origin/`, `zig build serve`). v1 export tree: `version` (server identity),
+> `bin/{echo,date}/{ctl,output}` (**built-ins only — no host process is ever spawned**;
+> arbitrary exec over a WebSocket would be remote code execution, so real host commands
+> await an allow-list design + ADR), and `fs/` — one host directory (`-Dexport`),
+> plain files and directories only, read/write with OTRUNC, **no create/remove yet**
+> (the server framework has no create/remove ops, ruling R5 of phase 1). Directory
+> reads are offset-addressed stat streams (read(5)). Per-connection state: outputs and
+> fid nodes die with the WebSocket. The browser side (`/mnt/origin` mount at boot,
+> R-9P-10 absence tolerance, `Reconnect`) is the NEXT wave; today the export is proven
+> natively via `ninep.Client` over a WebSocket client (tools/origin/accept.zig).
+
 ## 6. `/mnt/snarf-self` — Snarf's own interface (R-9P-12, R-EDIT-17)
 
 Mirror of ACME's served tree so existing ACME tooling concepts port directly:

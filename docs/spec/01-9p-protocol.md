@@ -62,6 +62,14 @@ server can be lifted out of process unchanged (R-9P-04).
   `Rerror "connection closed"`; a `Reconnect` command in Snarf's UI re-attaches.
 - Keepalive: WebSocket ping/pong at 30 s, owned by the shim.
 
+> Revision log: 2026-09-02 (phase 11) — server side implemented
+> (`tools/origin/ws_transport.zig` as a `ninep.transport.Transport`): binary frames only
+> (a text frame is a `BadFrame` and drops the connection), size prefix checked against
+> the payload, pings answered inside the transport so they never reach 9P, **no
+> fragmentation** (a non-FIN frame is rejected — one message per frame, as specified).
+> Blocking transport, thread per connection; the client half for native use is
+> `ws_client.zig`. The shim's WebSocket import and `/mnt/origin` mount are not yet wired.
+
 ### 3.3 Flow control & tags
 
 Clients may pipeline; tag space is 16-bit; `NOTAG` only for `Tversion`. Servers answer in
