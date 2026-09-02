@@ -14,13 +14,10 @@ authorization for this file only). Prune freely — git keeps history.
   doesn't touch those files. Claim clears when that session merges and removes this
   entry (or Larry says so). Owning session: please push a WIP branch early so the work
   is visible, and update this entry with the branch name.
-- **CLAIMED (2026-09-02, remote session): origin server** — branch `origin-server`
-  (pushed). Morphing `tools/serve.zig` into the origin server: static HTTP + WebSocket
-  `/9p` + a 9P export (S-02 §5). Owns: `tools/**`, `build.zig` serve/origin steps,
-  `src/ninep/` additions only (no edits to existing ninep files without noting here).
-  Does NOT touch `web/shim.js` or the wasm side yet (browser mount of `/mnt/origin` is
-  a follow-up wave, coordinated with the input claim above). Zig in the remote sandbox:
-  `pip install ziglang==0.16.0` (PyPI is proxy-allowed; ziglang.org is not).
+- *(cleared 2026-09-02)* origin server — phase 11 MERGED (`8154bd6`); branch
+  `origin-server` can be deleted. The browser-side wave (shim WebSocket import +
+  `/mnt/origin` mount) is NOT claimed yet and touches `web/shim.js` — coordinate with
+  the input claim before starting it.
 
 ## Current state (update in place)
 
@@ -109,6 +106,15 @@ authorization for this file only). Prune freely — git keeps history.
   FROZEN-ACCEPT-10 = 0xe9014ecfa82cbc4b. Agent-found contract corrections
   recorded in the report (NPROG/test-9); Edit builtin uses et's window body,
   never seltext.
+- **Phase 11 (origin server) MERGED to `main` (`8154bd6`, 2026-09-02)**
+  (agents/reports/phase11-origin.md): `tools/serve.zig` → `tools/origin/` =
+  `snarf-origin` (`zig build serve` unchanged): static www + **9P2000 over WebSocket
+  at `/9p`** on the existing `ninep.server.Server`. Tree: `version`,
+  `bin/{echo,date}/{ctl,output}` (built-ins only — NO host exec, R-P11-5), `fs/` =
+  `-Dexport` dir (default repo root) read/write, no create/remove (R5). Proven
+  natively: real listener + RFC 6455 client + `ninep.Client` end-to-end
+  (tools/origin/accept.zig). 485/485. Contract phase11-origin.md (R-P11-1..9).
+  Browser side (shim WS import, `/mnt/origin` mount, Reconnect) is the next wave.
 - **OPS LESSON (2026-07-20, recorded after a near-miss)**: `zig build test |
   grep | awk` gates return the LAST pipe stage's exit code — a failing suite
   still lets `&&` chains continue. A wrong frozen-hash constant rode green-looking
@@ -116,8 +122,12 @@ authorization for this file only). Prune freely — git keeps history.
   file, check `$?` explicitly, grep the file for fail/crash. ALSO: shell
   `printf '0x%x'` silently mangles decimals > INT64_MAX — use python for hash
   conversions.
-- **Next (directive completed through P10; new work needs user direction)**:
-  Get/Put via namespace (host fs / origin mounts), Dump/Load, Worker+SAB,
+- **Next (directive completed through P11; new work needs user direction)**:
+  **origin wave 2** — shim WebSocket import (S-06 §4) + wasm WS transport + `/mnt/origin`
+  mount at boot (R-9P-10 tolerance) + Reconnect + 30 s ping — then Get/Put can target
+  `/mnt/origin/fs/...` (fences `web/shim.js`: clear with the input claim first);
+  `fs/` create/remove (framework Ops growth, lifts R5); host-command allow-list (ADR).
+  Also: Get/Put via namespace (host fs / origin mounts), Dump/Load, Worker+SAB,
   touch profile, /dev/snarf clipboard, Zerox (multi-Text-per-File), Sort, Exit,
   Shift-B3 reverse look + dot=addr ctl wiring (small integration wave), +Errors
   window (rewire ed.warnings). Also outstanding: CI (S-06 §5); wasm size watch
@@ -157,10 +167,11 @@ authorization for this file only). Prune freely — git keeps history.
     needed). Public over HTTPS — no `gh` auth required. macOS case-insensitive FS causes
     ~12 harmless case-collision dirty entries in plan9 postscript/troff/rc font dirs;
     none touch cited paths (`sys/src/9/port/*`, `sys/man/`).
-- **Network policy in remote sandbox**: github release downloads and kroki.io are
-  blocked by the proxy; **apt works** — `apt-get install -y plantuml` (1.2020.2) is the
-  way to verify diagrams. Older PlantUML: salt tree-tables unsupported — use
-  `@startmindmap` for trees.
+- **Network policy in remote sandbox**: github release downloads, kroki.io AND
+  ziglang.org are blocked by the proxy; **apt and PyPI work** — `apt-get install -y
+  plantuml` (1.2020.2) verifies diagrams, and **`pip install ziglang==0.16.0`** gives a
+  working Zig 0.16.0 (`ln -s .../ziglang/zig /usr/local/bin/zig`; `zig build test`
+  ≈ 12 s). Older PlantUML: salt tree-tables unsupported — use `@startmindmap` for trees.
 - **Docs verification recipe**: `plantuml -checkonly docs/spec/diagrams/*.puml`, render
   suspicious ones to PNG and eyeball.
 
