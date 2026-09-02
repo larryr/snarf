@@ -68,6 +68,11 @@ sessions, ask to attach the forks (`add larryr/plan9port`) and clone shallow.
 
 - Develop on a feature branch; never commit directly to `main` — with **one standing
   exception**: `agents/HANDOFF.md` (see protocol below).
+- **Push early when work spans machines**: a branch that exists only on one computer is
+  invisible to every other session. As soon as a branch exists, push it (WIP commits are
+  fine) and record it under "In-flight claims" in `agents/HANDOFF.md` with the files it
+  owns. Before starting on any area, check that section and `git ls-remote --heads` for
+  someone else's branch.
 - Known environment gotchas and account-specific facts (GitHub App permissions, network
   policy, fork locations) are maintained in `agents/HANDOFF.md`, not here — check it.
 
