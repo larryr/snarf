@@ -126,7 +126,9 @@ authorization for this file only). Prune freely — git keeps history.
   has Contents (push, branches API) but **no Pull requests permission** — PR
   create/list/merge via API fail 403/404. PRs must be opened by the user in the GitHub UI;
   merges can be done by pushing a git merge commit (GitHub then flips an open PR to
-  Merged). Re-test occasionally in case the grant lands.
+  Merged). Re-test occasionally in case the grant lands (re-tested 2026-09-02: still
+  blocked). Note: a PR can only be opened BEFORE merging — once a branch is fast-forwarded
+  into `main` there is no diff left to PR.
 - **Local `gh` (larry's Mac) 2026-07-19**: `gh` 2.96.0, authed as `larryr` via keyring
   (ssh git protocol), token scopes `repo`/`read:org`/`gist`/`admin:public_key`. Git
   push/fetch and read APIs (`gh api user`, `gh pr list`, `gh repo view`) work. **BUT
@@ -205,6 +207,22 @@ authorization for this file only). Prune freely — git keeps history.
   op-controlled data (B1 handleStat, patched + regression test).
 
 ## Session log (newest first)
+
+### 2026-09-02 — coordination session (remote, larryr; docs-bootstrap session cont.)
+- Repo had been quiet since 2026-07-21 (last code: phase 10, 2026-07-20). No new
+  branches on the remote as of this session.
+- Recorded the **input-area claim** (top of this file) for Larry's local session working
+  on button/mouse input; that work was not yet pushed anywhere.
+- Added the **push-early rule** to `CLAUDE.md` §Workflow (`9fad850`): push branches as
+  soon as they exist, record them under In-flight claims, check claims + `git ls-remote
+  --heads` before starting on an area.
+- PR capability re-tested — still blocked (see facts). Merges continue via git.
+- **libghostty assessed, no action**: not useful for anything built/planned in v1 (font
+  stack, renderer, editor text all solved differently). The one future fit is
+  `libghostty-vt` (zero-dep Zig VT state machine, wasm-capable) IF terminal windows
+  (OQ-EDIT-3) are ever done as a real VT terminal over origin-exported ptys rather than
+  acme's dumb `win` — that would need the first ADR-0002 amendment. Ghostty is fine as
+  an idiom reference for large Zig codebases (no dependency).
 
 ### 2026-07-21 — vim-motions design writeup (remote, larryr; docs-bootstrap session cont.)
 - Merged to `main` (`356f769`, rebased onto phase-10 main): R-02 v3 adds **R-EDIT-19**
