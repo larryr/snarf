@@ -6,14 +6,14 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **CLAIMED (2026-09-02, Larry): button/mouse input** — a local session on Larry's other
-  machine is changing input handling. Until this claim clears, NO other session may
-  modify: `src/dev/input.zig`, `src/dev/profiles.zig`, S-04 (`docs/spec/04-input-devices.md`),
-  ADR-0004, `docs/spec/diagrams/mouse-chords.puml`, or the input edges of `Editor.zig`
-  (gesture machine) / `main_wasm.zig` / `web/shim.js`. Adjacent work is fine if it
-  doesn't touch those files. Claim clears when that session merges and removes this
-  entry (or Larry says so). Owning session: please push a WIP branch early so the work
-  is visible, and update this entry with the branch name.
+- **CLAIMED (2026-09-02, Larry): button/mouse input** — owned by Larry's local session;
+  work is DONE on branch **`input-modifier-boot`** (pushed, `f6937bf`): boot in modifier
+  profile (Option=B2, Cmd/Ctrl=B3) + S-04 §2.2 physical-passthrough amendment; 335/335 +
+  smoke 14/14. **Awaiting a PR opened by Larry in the GitHub UI** (API PR-create still
+  blocked, re-tested 2026-09-04) — do NOT merge or fast-forward `main` over this branch
+  before the PR exists. Until merged, no other session may modify: `src/dev/input.zig`,
+  `src/dev/profiles.zig`, S-04, ADR-0004, `docs/spec/diagrams/mouse-chords.puml`, or the
+  input edges of `Editor.zig` / `main_wasm.zig` / `web/shim.js`. Claim clears on merge.
 - *(cleared 2026-09-02)* origin server — phase 11 MERGED (`8154bd6`); branch
   `origin-server` can be deleted. The browser-side wave (shim WebSocket import +
   `/mnt/origin` mount) is NOT claimed yet and touches `web/shim.js` — coordinate with
@@ -143,7 +143,7 @@ authorization for this file only). Prune freely — git keeps history.
   has Contents (push, branches API) but **no Pull requests permission** — PR
   create/list/merge via API fail 403/404. PRs must be opened by the user in the GitHub UI;
   merges can be done by pushing a git merge commit (GitHub then flips an open PR to
-  Merged). Re-test occasionally in case the grant lands (re-tested 2026-09-02: still
+  Merged). Re-test occasionally in case the grant lands (re-tested 2026-09-04: still
   blocked). Note: a PR can only be opened BEFORE merging — once a branch is fast-forwarded
   into `main` there is no diff left to PR.
 - **Local `gh` (larry's Mac) 2026-07-19**: `gh` 2.96.0, authed as `larryr` via keyring
