@@ -304,7 +304,16 @@ pub const Machine = struct {
                         bits = self.latchedBits();
                     }
                     self.pointer_down = true;
-                    self.buttons = if (bits == 0) B1 else bits; // rows 3/4
+                    // Rows 3/4, amended (S-04 §2.2 rev 2026-09-04): with
+                    // nothing latched the base bit comes from the PHYSICAL
+                    // button (native map), so a real B2/B3 mouse keeps working
+                    // inside the modifier profile — which is the boot default.
+                    self.buttons = if (bits != 0)
+                        bits
+                    else if (p.button < native_button_map.len)
+                        native_button_map[p.button]
+                    else
+                        B1;
                 }
                 return .{ .events = .{ self.recordAt(p.x, p.y, p.msec), null } };
             },
@@ -431,6 +440,26 @@ test "modifier: plain click and sweep" {
 
     r = m.step(mkPointer(.up, 11, 21, 0, 3));
     try expectRec(0, r.events[0]);
+}
+
+test "modifier: physical B2/B3 pass through when nothing latched" {
+    // S-04 §2.2 revision 2026-09-04: the modifier profile is a superset of
+    // native for simple clicks — an unlatched pointer-down seeds from the
+    // physical button, so a real 3-button mouse (or macOS secondary click,
+    // DOM button 2) still produces B2/B3.
+    var m = Machine.init(.modifier);
+    var r = m.step(mkPointer(.down, 0, 0, 2, 1)); // DOM right button
+    try expectRec(B3, r.events[0]);
+    r = m.step(mkPointer(.up, 0, 0, 2, 2));
+    try expectRec(0, r.events[0]);
+
+    // A latched modifier still wins over the physical button.
+    _ = m.step(mkMod(.down, .alt, 3));
+    r = m.step(mkPointer(.down, 0, 0, 2, 4));
+    try expectRec(B2, r.events[0]);
+    r = m.step(mkPointer(.up, 0, 0, 2, 5));
+    try expectRec(0, r.events[0]);
+    _ = m.step(mkMod(.up, .alt, 6));
 }
 
 test "modifier: armed click emulates B2/B3" {
