@@ -19,6 +19,7 @@ test {
     _ = @import("ws_transport.zig");
     _ = @import("dirread.zig");
     _ = @import("hostfs.zig");
+    _ = @import("log.zig");
     _ = services;
     _ = tree;
 }

@@ -18,6 +18,7 @@ const http = @import("http.zig");
 const WsTransport = @import("ws_transport.zig").WsTransport;
 const HostFs = @import("hostfs.zig").HostFs;
 const Tree = @import("tree.zig").Tree;
+const Log = @import("log.zig").Log;
 
 /// Negotiated message ceiling (S-01 §1).
 pub const msize: u32 = 65536;
@@ -37,6 +38,11 @@ pub const Origin = struct {
     stopping: std.atomic.Value(bool) = .init(false),
     /// Live connection threads, so a controlled shutdown can wait for them.
     conns: std.atomic.Value(u32) = .init(0),
+    /// Monotonic connection serial, for correlating log lines.
+    conn_serial: std.atomic.Value(u32) = .init(0),
+    /// Optional logger (info→stdout, errors→stderr). Null — as in the
+    /// acceptance tests, which construct `Origin` directly — means silent.
+    log: ?*Log = null,
 
     pub fn listen(io: Io, gpa: std.mem.Allocator, cfg: Config, bind: []const u8, port_num: u16) !Origin {
         const address = try Io.net.IpAddress.parse(bind, port_num);
@@ -64,8 +70,9 @@ pub const Origin = struct {
                 return;
             }
             _ = self.conns.fetchAdd(1, .acq_rel);
-            const t = std.Thread.spawn(.{}, handleConnection, .{ self, stream }) catch {
-                handleConnection(self, stream);
+            const serial = self.conn_serial.fetchAdd(1, .monotonic);
+            const t = std.Thread.spawn(.{}, handleConnection, .{ self, stream, serial }) catch {
+                handleConnection(self, stream, serial);
                 continue;
             };
             t.detach();
@@ -89,21 +96,29 @@ pub const Origin = struct {
     pub fn deinit(self: *Origin) void {
         self.listener.deinit(self.io);
     }
+
+    fn info(self: *Origin, comptime fmt: []const u8, args: anytype) void {
+        if (self.log) |l| l.info(fmt, args);
+    }
+
+    fn logErr(self: *Origin, comptime fmt: []const u8, args: anytype) void {
+        if (self.log) |l| l.err(fmt, args);
+    }
 };
 
-fn handleConnection(o: *Origin, stream_in: Io.net.Stream) void {
+fn handleConnection(o: *Origin, stream_in: Io.net.Stream, serial: u32) void {
     var stream = stream_in;
     defer _ = o.conns.fetchSub(1, .acq_rel);
     defer stream.close(o.io);
-    serveConnection(o, &stream) catch |err| {
+    serveConnection(o, &stream, serial) catch |err| {
         // Dropped connections (browser preconnect, reload) are routine.
         const routine = err == error.ReadFailed or err == error.EndOfStream or
             err == error.WriteFailed or err == error.HttpConnectionClosing;
-        if (!routine) std.debug.print("snarf-origin: {s}\n", .{@errorName(err)});
+        if (!routine) o.logErr("conn {d}: {s}", .{ serial, @errorName(err) });
     };
 }
 
-fn serveConnection(o: *Origin, stream: *Io.net.Stream) !void {
+fn serveConnection(o: *Origin, stream: *Io.net.Stream, serial: u32) !void {
     // Room for one full 9P frame plus WebSocket framing on each side.
     const recv_buf = try o.gpa.alloc(u8, msize + 4096);
     defer o.gpa.free(recv_buf);
@@ -113,16 +128,25 @@ fn serveConnection(o: *Origin, stream: *Io.net.Stream) !void {
     var writer = stream.writer(o.io, send_buf);
     var server: std.http.Server = .init(&reader.interface, &writer.interface);
     var request = try server.receiveHead();
+    o.info("conn {d}: {s} {s}", .{ serial, @tagName(request.head.method), request.head.target });
 
     if (std.mem.eql(u8, http.pathOf(request.head.target), ws_path)) {
         switch (request.upgradeRequested()) {
             .websocket => |key_opt| {
-                const key = key_opt orelse return http.plain(&request, .bad_request, "400 missing sec-websocket-key\n");
+                const key = key_opt orelse {
+                    o.logErr("conn {d}: /9p upgrade missing sec-websocket-key", .{serial});
+                    return http.plain(&request, .bad_request, "400 missing sec-websocket-key\n");
+                };
                 var ws = try request.respondWebSocket(.{ .key = key });
                 try ws.flush();
+                o.info("conn {d}: 9p session open", .{serial});
+                defer o.info("conn {d}: 9p session closed", .{serial});
                 return serveNineP(o, &ws);
             },
-            else => return http.plain(&request, .upgrade_required, "426 upgrade required: /9p speaks 9P2000 over WebSocket\n"),
+            else => {
+                o.logErr("conn {d}: /9p without websocket upgrade", .{serial});
+                return http.plain(&request, .upgrade_required, "426 upgrade required: /9p speaks 9P2000 over WebSocket\n");
+            },
         }
     }
     try http.serveStatic(o.io, o.gpa, &request, o.cfg.www_dir);
@@ -156,20 +180,22 @@ pub fn main() !void {
     defer threaded.deinit();
     const io = threaded.io();
 
+    var log: Log = .{ .io = io };
+
     const cfg: Config = .{ .www_dir = build_options.www_dir, .export_dir = build_options.export_dir };
     var origin = Origin.listen(io, gpa, cfg, build_options.bind, build_options.port) catch |err| {
-        std.debug.print("snarf-origin: cannot listen on {s}:{d}: {s}\n", .{ build_options.bind, build_options.port, @errorName(err) });
+        log.err("snarf-origin: cannot listen on {s}:{d}: {s}", .{ build_options.bind, build_options.port, @errorName(err) });
         return err;
     };
     defer origin.deinit();
+    origin.log = &log;
 
-    std.debug.print(
+    log.info(
         \\snarf-origin: http://{s}:{d}/   (Ctrl-C to stop)
         \\  www    : {s}
         \\  9p     : ws://{s}:{d}{s}  →  version, bin/{{echo,date}}, fs/
         \\  fs/    : {s}  (read/write)
         \\  headers: application/wasm + COOP/COEP (cross-origin isolated)
-        \\
     , .{ build_options.bind, origin.port(), cfg.www_dir, build_options.bind, origin.port(), ws_path, cfg.export_dir });
 
     origin.serveForever();
