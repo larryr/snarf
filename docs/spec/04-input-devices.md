@@ -55,6 +55,13 @@ Modifiers are **latched as virtual buttons**, not click-time modes:
   gesture; only pointer-up ends it. This is the one deliberate divergence from "modifier ==
   button" and it is what makes execute-with-argument reachable on a trackpad.
 
+- **Physical passthrough (rev 2026-09-04)**: a pointer-down with *nothing latched*
+  takes its bit from the native map (DOM button 0/1/2 → B1/B2/B3) instead of always B1,
+  making the modifier profile a superset of native for simple clicks — and therefore the
+  **boot default** (`main_wasm` writes `profile modifier` to ctl at init). A latched
+  modifier still wins over the physical button. Mid-sweep chords via a *second physical
+  button* remain native-profile-only.
+
 ### 2.3 touch profile (R-IN-06)
 
 | Gesture | Logical |
@@ -109,3 +116,8 @@ the latest position), but button *transitions* are never dropped.
 > the 4e tree (plan9port's 0x80 is a noted p9p divergence). §5 implemented: coalescing
 > in devinput's queue, transitions never dropped (diverges from the kernel's
 > qfull-discard, justified by R-IN-02). IME and Keyboard Lock deferred.
+>
+> 2026-09-04 — §2.2 amended: unlatched pointer-down in the modifier profile seeds from
+> the physical button (passthrough superset of native for simple clicks); snarf boots in
+> the modifier profile (`main_wasm` → ctl `profile modifier`). Full auto-detection
+> (`pointer: coarse`, `maxTouchPoints`) still pending with touch/chordbar.

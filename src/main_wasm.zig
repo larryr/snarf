@@ -174,6 +174,19 @@ fn boot() !void {
     a.kbd_fid = kw.fid;
     _ = try a.cl_input.open(a.kbd_fid, ninep.msg.OREAD);
 
+    // Boot input profile (S-04 §2, minimal auto-select for v1): browser
+    // hardware is mostly trackpads and one-button mice, so boot into the
+    // MODIFIER profile — Option/Alt latches B2, Cmd/Ctrl latches B3, and (per
+    // the 2026-09-04 S-04 §2.2 amendment) an unlatched press still passes the
+    // physical button through, so real B2/B3 mice lose nothing. Overridable
+    // any time by writing `profile native` to /dev/input/ctl.
+    {
+        const cw = try a.cl_input.walk(iroot.fid, &.{"ctl"});
+        _ = try a.cl_input.open(cw.fid, ninep.msg.ORDWR);
+        _ = try a.cl_input.write(cw.fid, 0, "profile modifier");
+        try a.cl_input.clunk(cw.fid);
+    }
+
     // Standing tickets (R-P6-4): one parkable read outstanding on each device,
     // re-armed on completion. The buffers are App-resident so they outlive the
     // tickets (beginRead borrows, never owns).
