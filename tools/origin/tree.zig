@@ -18,6 +18,7 @@ const OpError = ninep.errors.OpError;
 const HostFs = @import("hostfs.zig").HostFs;
 const services = @import("services.zig");
 const DirReader = @import("dirread.zig").DirReader;
+const Log = @import("log.zig").Log;
 
 pub const version_text = "snarf-origin 0.1\n";
 
@@ -43,6 +44,11 @@ pub const Tree = struct {
     gpa: std.mem.Allocator,
     host: *HostFs,
     outputs: services.Outputs = .{},
+    /// Optional access log (all ops → stdout, denials → stderr); null — as in
+    /// every test — means silent. `serial` correlates lines with the
+    /// connection-level log in main.zig.
+    log: ?*Log = null,
+    serial: u32 = 0,
 
     pub fn init(gpa: std.mem.Allocator, host: *HostFs) Tree {
         return .{ .gpa = gpa, .host = host };
@@ -126,11 +132,38 @@ pub const Tree = struct {
         };
     }
 
+    // -- access log -----------------------------------------------------------
+
+    /// The node's full tree path, for log lines (formatted into `buf`).
+    fn pathOf(node: Node, buf: []u8) []const u8 {
+        return switch (node) {
+            .root => "/",
+            .version => "version",
+            .bin => "bin",
+            .svc => |i| std.fmt.bufPrint(buf, "bin/{s}", .{services.table[i].name}) catch "bin/?",
+            .svc_ctl => |i| std.fmt.bufPrint(buf, "bin/{s}/ctl", .{services.table[i].name}) catch "bin/?/ctl",
+            .svc_output => |i| std.fmt.bufPrint(buf, "bin/{s}/output", .{services.table[i].name}) catch "bin/?/output",
+            .host => |rel| if (rel.len == 0) "fs" else std.fmt.bufPrint(buf, "fs/{s}", .{rel}) catch "fs/…",
+        };
+    }
+
+    fn logOp(self: *Tree, comptime fmt: []const u8, args: anytype) void {
+        if (self.log) |l| l.info("conn {d}: 9p " ++ fmt, .{self.serial} ++ args);
+    }
+
+    fn logDenied(self: *Tree, comptime what: []const u8, node: Node) void {
+        if (self.log) |l| {
+            var pb: [640]u8 = undefined;
+            l.err("conn {d}: 9p " ++ what ++ " {s}: permission denied", .{ self.serial, pathOf(node, &pb) });
+        }
+    }
+
     // -- Ops ------------------------------------------------------------------
 
     fn attach(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, _: []const u8) OpError!Qid {
         const self: *Tree = @ptrCast(@alignCast(ctx));
         try self.setNode(fid, .root);
+        self.logOp("attach /", .{});
         return self.qidOf(.root);
     }
 
@@ -152,6 +185,10 @@ pub const Tree = struct {
         };
         if (cur.* == .host) self.gpa.free(cur.host);
         cur.* = next;
+        if (self.log != null) {
+            var pb: [640]u8 = undefined;
+            self.logOp("walk {s}", .{pathOf(next, &pb)});
+        }
         return qid;
     }
 
@@ -188,15 +225,33 @@ pub const Tree = struct {
         const wants_write = acc == msg.OWRITE or acc == msg.ORDWR or (mode & msg.OTRUNC) != 0;
         const qid = try self.qidOf(node);
         switch (node) {
-            .root, .bin, .svc, .version, .svc_output => if (wants_write) return error.PermissionDenied,
+            .root, .bin, .svc, .version, .svc_output => if (wants_write) {
+                self.logDenied("open[w]", node);
+                return error.PermissionDenied;
+            },
             .svc_ctl => {},
             .host => |rel| {
                 if (qid.qtype.dir) {
-                    if (wants_write) return error.PermissionDenied;
+                    if (wants_write) {
+                        self.logDenied("open[w]", node);
+                        return error.PermissionDenied;
+                    }
                 } else if ((mode & msg.OTRUNC) != 0) {
                     try self.host.truncate(rel);
                 }
             },
+        }
+        if (self.log != null) {
+            var pb: [640]u8 = undefined;
+            self.logOp("open[{s}{s}] {s}", .{
+                switch (acc) {
+                    msg.OWRITE => "w",
+                    msg.ORDWR => "rw",
+                    else => "r",
+                },
+                if ((mode & msg.OTRUNC) != 0) "+trunc" else "",
+                pathOf(node, &pb),
+            });
         }
         return qid;
     }
@@ -204,6 +259,10 @@ pub const Tree = struct {
     fn read(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, offset: u64, buf: []u8) server.ReadError!usize {
         const self: *Tree = @ptrCast(@alignCast(ctx));
         const node = nodeOf(fid).*;
+        if (self.log != null) {
+            var pb: [640]u8 = undefined;
+            self.logOp("read {s} @{d}+{d}", .{ pathOf(node, &pb), offset, buf.len });
+        }
         switch (node) {
             .root => {
                 var dr = DirReader.init(offset, buf);
@@ -239,26 +298,51 @@ pub const Tree = struct {
     fn write(ctx: *anyopaque, srv: *server.Server, fid: *server.Fid, offset: u64, data: []const u8) OpError!usize {
         const self: *Tree = @ptrCast(@alignCast(ctx));
         _ = srv;
-        switch (nodeOf(fid).*) {
+        const node = nodeOf(fid).*;
+        switch (node) {
             .svc_ctl => |i| {
                 const args = services.parseExec(data) orelse return error.BadCtl;
+                self.logOp("exec bin/{s}: \"{s}\"", .{
+                    services.table[i].name,
+                    std.mem.trim(u8, data[0..@min(data.len, 128)], " \n"),
+                });
                 const out = services.table[i].run(self.gpa, self.host.io, args) catch return error.IoError;
                 self.outputs.set(self.gpa, i, out);
                 return data.len;
             },
-            .host => |rel| return self.host.writeFile(rel, offset, data),
-            else => return error.PermissionDenied,
+            .host => |rel| {
+                if (self.log != null) {
+                    var pb: [640]u8 = undefined;
+                    self.logOp("write {s} @{d}+{d}", .{ pathOf(node, &pb), offset, data.len });
+                }
+                return self.host.writeFile(rel, offset, data);
+            },
+            else => {
+                self.logDenied("write", node);
+                return error.PermissionDenied;
+            },
         }
     }
 
     fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
         const self: *Tree = @ptrCast(@alignCast(ctx));
+        if (self.log != null) {
+            if (fid.ctx) |p| {
+                const node: *Node = @ptrCast(@alignCast(p));
+                var pb: [640]u8 = undefined;
+                self.logOp("clunk {s}", .{pathOf(node.*, &pb)});
+            }
+        }
         self.freeNode(fid);
     }
 
     fn statOp(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) OpError!Stat {
         const self: *Tree = @ptrCast(@alignCast(ctx));
         const node = nodeOf(fid).*;
+        if (self.log != null) {
+            var pb: [640]u8 = undefined;
+            self.logOp("stat {s}", .{pathOf(node, &pb)});
+        }
         return self.statOfNode(node, nameOf(node));
     }
 };
