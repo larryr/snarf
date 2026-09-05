@@ -6,14 +6,9 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **CLAIMED (2026-09-02, Larry): button/mouse input** — owned by Larry's local session;
-  work is DONE on branch **`input-modifier-boot`** (pushed, `f6937bf`): boot in modifier
-  profile (Option=B2, Cmd/Ctrl=B3) + S-04 §2.2 physical-passthrough amendment; 335/335 +
-  smoke 14/14. **Awaiting a PR opened by Larry in the GitHub UI** (API PR-create still
-  blocked, re-tested 2026-09-04) — do NOT merge or fast-forward `main` over this branch
-  before the PR exists. Until merged, no other session may modify: `src/dev/input.zig`,
-  `src/dev/profiles.zig`, S-04, ADR-0004, `docs/spec/diagrams/mouse-chords.puml`, or the
-  input edges of `Editor.zig` / `main_wasm.zig` / `web/shim.js`. Claim clears on merge.
+- *(cleared 2026-09-05)* button/mouse input — MERGED to `main` (`0bd405f`, via
+  UI-opened PR + pushed merge commit): boot in modifier profile (Option=B2, Cmd/Ctrl=B3)
+  with S-04 §2.2 physical-passthrough amendment; branch `input-modifier-boot` deleted.
 - *(cleared 2026-09-02)* origin server — phase 11 MERGED (`8154bd6`); branch
   `origin-server` can be deleted. The browser-side wave (shim WebSocket import +
   `/mnt/origin` mount) is NOT claimed yet and touches `web/shim.js` — coordinate with
