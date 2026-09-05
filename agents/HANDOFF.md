@@ -143,8 +143,10 @@ authorization for this file only). Prune freely — git keeps history.
   into `main` there is no diff left to PR.
 - **Local `gh` (larry's Mac) 2026-07-19**: `gh` 2.96.0, authed as `larryr` via keyring
   (ssh git protocol), token scopes `repo`/`read:org`/`gist`/`admin:public_key`. Git
-  push/fetch and read APIs (`gh api user`, `gh pr list`, `gh repo view`) work. **BUT
-  `gh pr create` STILL FAILS** — `GraphQL: larryr does not have the correct permissions to
+  push/fetch and read APIs (`gh api user`, `gh repo view`) work — but PR APIs are blocked
+  in BOTH directions (verified 2026-09-05): `gh pr list` returns `[]` even with a PR open,
+  and REST `repos/larryr/snarf/pulls` 404s — the token has NO Pull-requests permission,
+  read or write. PR state must be checked by the user in the UI. **`gh pr create` FAILS** — `GraphQL: larryr does not have the correct permissions to
   execute CreatePullRequest`. So PR *creation* is blocked in **both** remote and local
   contexts, despite the `repo` scope — treat "can't create PRs from here" as the standing
   reality; the user opens PRs in the UI (or we land via `git merge`). `gh auth status`
