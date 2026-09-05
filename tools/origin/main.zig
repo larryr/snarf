@@ -141,7 +141,7 @@ fn serveConnection(o: *Origin, stream: *Io.net.Stream, serial: u32) !void {
                 try ws.flush();
                 o.info("conn {d}: 9p session open", .{serial});
                 defer o.info("conn {d}: 9p session closed", .{serial});
-                return serveNineP(o, &ws);
+                return serveNineP(o, &ws, serial);
             },
             else => {
                 o.logErr("conn {d}: /9p without websocket upgrade", .{serial});
@@ -156,13 +156,15 @@ fn serveConnection(o: *Origin, stream: *Io.net.Stream, serial: u32) !void {
 /// released when the peer goes away. Fid nodes live in a per-session arena:
 /// a peer that vanishes without clunking must not leak. The transport blocks,
 /// so `step` never reports idle; the loop ends on `Closed`.
-fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket) !void {
+fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket, serial: u32) !void {
     var arena = std.heap.ArenaAllocator.init(o.gpa);
     defer arena.deinit();
     var host = try HostFs.open(o.io, o.cfg.export_dir);
     defer host.close();
     var tree = Tree.init(arena.allocator(), &host);
     defer tree.deinit();
+    tree.log = o.log;
+    tree.serial = serial;
     var tport: WsTransport = .{ .ws = ws };
     var srv = try ninep.server.Server.init(o.gpa, tport.transport(), &Tree.ops, &tree, msize);
     defer srv.deinit();
