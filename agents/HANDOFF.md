@@ -6,17 +6,25 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **PHASE 12 BUILD IN FLIGHT (started 2026-09-05, larry's Mac session)** — branch
-  `phase12-origin-mount`, contract `agents/contracts/phase12-origin-mount.md`
-  (user approved as drafted: no auto-reconnect, plumbing-only scope). OWNS:
-  `web/shim.js`, `src/shim/*`, `src/main_wasm.zig`, `tools/origin/*`,
-  `tools/smoke_wasm.mjs`, Exectab growth in core exec. Do not touch these areas
-  until this claim clears.
+- *(none as of 2026-09-05 late — phase 12 merged `34bb36c`, all branches cleaned;
+  remote has only `main`)*
 
 ## Current state (update in place)
 
-- **All 11 phases of the original directive are MERGED to `main`; `main` is green.**
-  485/485 tests, node smoke 14/14, `zig fmt` clean, Zig 0.16.0, wasm ≈ 1506 KiB (watch).
+- **Phases 1–12 are MERGED to `main`; `main` is green.**
+  522/522 tests, node smoke 20/20, `zig fmt` clean, Zig 0.16.0, wasm ≈ 1554 KiB (watch —
+  +48 KiB in phase 12).
+- **Phase 12 MERGED (`34bb36c`, 2026-09-05)** — see agents/reports/phase12-origin-mount.md:
+  browser mounts the origin at `/mnt/origin` (ABI v4 ws imports, WsTransport,
+  tick-driven OriginMount in NEW module `src/origin/`, 10 s absence tolerance,
+  `Reconnect` builtin via Editor.OriginHook, server 30 s keepalive). Also that day:
+  origin server logging (info→stdout, errors→stderr, ops-level 9p access log —
+  `e69d451`, `cd0139f`). GAPS handed forward (in the as-built contract): ninep.Client
+  has NO async ticket for walk/open/clunk (Get/Put + origin file reads BLOCKED on it);
+  Namespace lacks `unmount(prefix)`; ed.warnings still invisible in the UI.
+  MANUAL STEP for Larry: restart `zig build serve`, reload browser, watch the server
+  stdout access log show the mount handshake; kill/restart server, middle-click
+  `Reconnect`.
   Snarf is a working browser editor: typing/selection/undo, scroll, snarf+chords, window
   and column management with live tags, B2 exec (10 builtins), B3 look, the Edit language
   (structural regexps), the `/mnt/snarf-self` served tree, and `snarf-origin`
@@ -48,20 +56,14 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT (planned with user 2026-09-05): phase 12 then phase 13 — DRAFT contracts on
-  `main`, awaiting user review before build starts.**
-  - Phase 12 `agents/contracts/phase12-origin-mount.md`: browser half of the origin
-    server — shim `ws` imports (ABI v4), wasm `WsTransport`, `/mnt/origin` mounted at
-    boot (R-9P-10 absence tolerance), `Reconnect` builtin, SERVER-initiated 30 s ping
-    (browsers cannot send WS pings from JS — the old "shim ping" note was wrong; S-06 §4
-    needs a revision entry, also for dropping wsOpen's URL arg, same-origin only).
-  - Phase 13 `agents/contracts/phase13-opfs.md`: `/mnt/opfs` — in-module 9P device
-    server over the Origin Private File System (R-9P-09), `fsOp` import (ABI v5),
-    parked async ops; grows `ninep.server.Ops` with create/remove (lifts phase-1 R5).
-    Sequenced after 12 (both edit `web/shim.js`/`abi.zig`). User's stated direction:
-    later EXPORT `/mnt/opfs` over 9P to other machines (needs Tauth first).
-  - Open review questions on 12: auto-reconnect stays out (R-P12-6)? pull a
-    user-visible demo (B3 look on an origin path) forward, or keep plumbing-only?
+- **NEXT: phase 13 (`agents/contracts/phase13-opfs.md`, DRAFT)**: `/mnt/opfs` — in-module
+  9P device server over the Origin Private File System (R-9P-09), `fsOp` import (ABI v5),
+  parked async ops; grows `ninep.server.Ops` with create/remove (lifts phase-1 R5).
+  User's stated direction: later EXPORT `/mnt/opfs` over 9P to other machines (Tauth
+  first). NOTE for the phase-13 outline: fold in the phase-12 gaps — grow
+  `Namespace.unmount(prefix)` while touching the framework, and the async-RPC ticket
+  API in `client.zig` is the gate for ANY wave that reads mounted files (Get/Put,
+  origin file reads, and OPFS acceptance via the client all want it).
 - **Backlog after 12/13** (unordered): canvasResize + DPR (R-GFX-05 — top user-felt
   gap); Get/Put via namespace (origin/opfs targets) + Dump/Load; `/mnt/host` picker +
   `/dev/storage`; Worker+SAB (transport swap, R-P6-1); touch profile; /dev/snarf
@@ -123,6 +125,16 @@ authorization for this file only). Prune freely — git keeps history.
   the S-07 survey table — don't recount.
 
 ## Session log (newest first)
+
+### 2026-09-05 (later) — phase 12 built + merged (local, larry's Mac)
+- Origin-server logging landed first (user request): stdout/stderr split (`e69d451`),
+  then ops-level 9p access log (`cd0139f`) — that log became the smoke oracle.
+- Phase 12 via the pipeline: B1 (shim+ABI+WsTransport) and B2 (mount+Reconnect+ping)
+  as sequential opus worktree agents; orchestrator smoke battery drives a REAL
+  spawned snarf-origin and executes `Reconnect` as a real user gesture. Merged
+  `34bb36c`; contract updated to AS BUILT with B1/B2/orchestrator rulings.
+- Pipeline lesson: point-to-type inserts at the window's DOT, not at the pointer —
+  input-injection tests must B1-click first to anchor the dot.
 
 ### 2026-09-05 — verification + wave planning (local, larry's Mac)
 - Deleted stale merged remote branches `origin-server`, `claude/snarf-docs-specs-iuj6q3`
