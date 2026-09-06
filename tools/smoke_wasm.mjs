@@ -17,9 +17,11 @@
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 
 const WASM_PATH = fileURLToPath(new URL("../zig-out/www/snarf.wasm", import.meta.url));
-const EXPECT_ABI = 3; // R-P6-10: 2 -> 3 (input EventKind surface).
+const ORIGIN_BIN = fileURLToPath(new URL("../zig-out/bin/snarf-origin", import.meta.url));
+const EXPECT_ABI = 4; // R-P12-2: 3 -> 4 (ws import surface).
 const FB_W = 640;
 const FB_H = 480; // R-P5-3.
 
@@ -48,13 +50,17 @@ const knownEnv = {
 
 // Build the import object from the module's declared imports so unknown env
 // functions get a warn+record stub instead of a LinkError (the "auto-stub loop").
-function buildImports(module) {
+// `extra` overrides/extends the known env for a specific instance (phase 12
+// gives instance 2 real WebSocket-backed ws imports; instance 1 keeps stubs,
+// which doubles as the R-P12-5 origin-absent boot).
+function buildImports(module, extra = {}) {
+  const env = { ...knownEnv, ...extra };
   const imports = {};
   for (const { module: mod, name, kind } of WebAssembly.Module.imports(module)) {
     imports[mod] ??= {};
     if (imports[mod][name] !== undefined) continue;
-    if (mod === "env" && knownEnv[name]) {
-      imports[mod][name] = knownEnv[name];
+    if (mod === "env" && env[name]) {
+      imports[mod][name] = env[name];
     } else if (kind === "function") {
       imports[mod][name] = (...args) => {
         console.warn(`[stub] ${mod}.${name}(${args.join(", ")})`);
@@ -181,6 +187,172 @@ try {
   console.error("tick/wake trapped:", e);
 }
 check("tick(16)/tick(32)/wake() no trap", () => !pumpTrapped);
+
+// Phase 12, R-P12-5: with the ws imports stubbed the dial never completes;
+// crossing the 10 s dial deadline must warn-and-carry-on, never trap.
+let timeoutTrapped = false;
+try {
+  ex.tick(15_000);
+  ex.tick(15_016);
+} catch (e) {
+  timeoutTrapped = true;
+  console.error("origin-absent timeout tick trapped:", e);
+}
+check("origin absent: 10s dial timeout crossed without trap", () => !timeoutTrapped);
+
+// ---- phase 12: /mnt/origin against a real snarf-origin --------------------
+//
+// Spawns zig-out/bin/snarf-origin (its port is baked by `zig build -Dport=`;
+// the banner is parsed for the actual value — if the port is busy, e.g. your
+// dev server is running, these checks report PENDING, not FAIL). A SECOND
+// module instance gets real WebSocket-backed ws imports and we assert, via
+// the wire frames and the server's own access log: version+attach round-trip
+// and the mount handshake completes; a server kill is survived; after a
+// restart, executing `Reconnect` through real injected input (typed word +
+// B2 click) re-attaches. Reads of origin FILES are next wave (needs the async
+// RPC ticket API — see the phase-12 contract gaps).
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function startOrigin() {
+  const child = spawn(ORIGIN_BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
+  const out = { child, lines: [], port: 0, dead: false };
+  let buf = "";
+  child.stdout.on("data", (d) => {
+    buf += d.toString();
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      out.lines.push(buf.slice(0, i));
+      buf = buf.slice(i + 1);
+    }
+  });
+  child.on("exit", () => (out.dead = true));
+  return out;
+}
+
+async function waitLine(srv, re, ms) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const hit = srv.lines.find((l) => re.test(l));
+    if (hit) return hit;
+    if (srv.dead && !srv.lines.length) return null;
+    await sleep(50);
+  }
+  return null;
+}
+
+let srv = startOrigin();
+const banner = await waitLine(srv, /snarf-origin: http:\/\/127\.0\.0\.1:(\d+)\//, 3000);
+const originUp = banner !== null && !srv.dead;
+if (originUp) srv.port = Number(banner.match(/:(\d+)\//)[1]);
+
+if (!originUp) {
+  try { srv.child.kill(); } catch {}
+  for (const name of [
+    "origin: server spawned", "origin: Tversion+Tattach sent on the wire",
+    "origin: server log shows 9p attach", "origin: server kill survived",
+    "origin: Reconnect re-attached on restarted server",
+  ]) check(name, () => "pending");
+  console.warn("[origin] snarf-origin did not start (port busy?) — origin checks PENDING");
+} else {
+  check("origin: server spawned", () => true);
+
+  // Real ws env for instance 2. `portBox` so a restarted server (new port
+  // resolution is the same baked port) is dialed by Reconnect's fresh id.
+  const portBox = { port: srv.port };
+  const sentTypes = [];
+  let ex2 = null;
+  const sockets = new Map();
+  function push2(id, kind, bytes) {
+    if (!ex2) return;
+    const ptr = bytes.length ? ex2.wsStage(bytes.length) : ex2.wsStage(0);
+    if (bytes.length) {
+      if (ptr === 0) return console.warn("[origin] wsStage refused", bytes.length);
+      new Uint8Array(ex2.memory.buffer, ptr, bytes.length).set(bytes);
+    }
+    ex2.wsPush(id, kind, ptr, bytes.length);
+  }
+  const wsEnv = {
+    wsOpen(id) {
+      const sock = new WebSocket(`ws://127.0.0.1:${portBox.port}/9p`);
+      sock.binaryType = "arraybuffer";
+      sockets.set(id, sock);
+      sock.onopen = () => sockets.get(id) === sock && push2(id, 1, new Uint8Array(0));
+      sock.onmessage = (e) => sockets.get(id) === sock && push2(id, 2, new Uint8Array(e.data));
+      sock.onclose = () => sockets.get(id) === sock && push2(id, 3, new Uint8Array(0));
+      sock.onerror = () => sockets.get(id) === sock && push2(id, 4, new Uint8Array(0));
+    },
+    wsSend(id, ptr, len) {
+      const bytes = ex2.memory.buffer.slice(ptr, ptr + len);
+      sentTypes.push(new Uint8Array(bytes)[4]); // 9P type byte
+      sockets.get(id)?.send(bytes);
+    },
+    wsClose(id) {
+      const sock = sockets.get(id);
+      sockets.delete(id);
+      try { sock?.close(); } catch {}
+    },
+  };
+
+  const inst2 = await WebAssembly.instantiate(module, buildImports(module, wsEnv));
+  ex2 = inst2.exports;
+  memory = ex2.memory; // decode()/pixelAt() now read instance 2.
+  ex2.init();
+
+  // Pump: the socket connects on the JS event loop, so alternate ticks/sleeps.
+  let now = 100;
+  for (let i = 0; i < 60 && !srv.lines.some((l) => l.includes("9p attach /")); i++) {
+    ex2.tick((now += 16));
+    await sleep(50);
+  }
+  check("origin: Tversion+Tattach sent on the wire", () =>
+    sentTypes.includes(100) && sentTypes.includes(104));
+  check("origin: server log shows 9p attach", () =>
+    srv.lines.some((l) => l.includes("9p attach /")));
+
+  // Kill the server: the close record must be absorbed without a trap.
+  srv.child.kill("SIGKILL");
+  await sleep(300);
+  let killTrapped = false;
+  try {
+    ex2.tick((now += 16));
+    ex2.tick((now += 16));
+  } catch (e) {
+    killTrapped = true;
+    console.error("post-kill tick trapped:", e);
+  }
+  check("origin: server kill survived", () => !killTrapped);
+
+  // Restart, then execute `Reconnect` the way a user does: point-to-type in
+  // the body, type the word, B2-click (button 1) inside it (R-P12-7).
+  srv = startOrigin();
+  const banner2 = await waitLine(srv, /snarf-origin: http:\/\/127\.0\.0\.1:(\d+)\//, 3000);
+  if (banner2) portBox.port = Number(banner2.match(/:(\d+)\//)[1]);
+
+  // B1-click to place the dot at (60,80) — point-to-type inserts at the DOT,
+  // not at the pointer, so the word must be anchored where we'll B2-click.
+  ex2.pushEvent(1 /* pointer_down */, 60, 80, 0 /* B1 */, (now += 16));
+  ex2.tick((now += 16));
+  ex2.pushEvent(2 /* pointer_up */, 60, 80, 0, (now += 16));
+  ex2.tick((now += 16));
+  for (const ch of "Reconnect") {
+    ex2.pushEvent(5 /* key */, ch.codePointAt(0), 0, 0, (now += 16));
+    ex2.tick((now += 16));
+  }
+  ex2.pushEvent(1 /* pointer_down */, 70, 80, 1 /* B2 */, (now += 16));
+  ex2.tick((now += 16));
+  ex2.pushEvent(2 /* pointer_up */, 70, 80, 1, (now += 16));
+  ex2.tick((now += 16));
+  for (let i = 0; i < 60 && !srv.lines.some((l) => l.includes("9p attach /")); i++) {
+    ex2.tick((now += 16));
+    await sleep(50);
+  }
+  check("origin: Reconnect re-attached on restarted server", () =>
+    banner2 !== null && srv.lines.some((l) => l.includes("9p attach /")));
+
+  for (const [, sock] of sockets) { try { sock.close(); } catch {} }
+  try { srv.child.kill(); } catch {}
+}
 
 // ---- report --------------------------------------------------------------
 

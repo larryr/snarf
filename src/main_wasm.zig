@@ -21,9 +21,11 @@ const core = @import("core");
 const dev = @import("dev");
 const draw = @import("draw");
 const ninep = @import("ninep");
+const origin = @import("origin");
 const shim = @import("shim");
 
 const DevInput = dev.input.DevInput;
+const OriginMount = origin.OriginMount;
 
 /// Root-only host log import (R-P5-6): declared HERE, never in abi.zig, so the
 /// native shim test root never references the symbol. shim.js binds
@@ -109,6 +111,20 @@ const App = struct {
     ticket_kbd: ninep.Client.ReadTicket,
     mouse_buf: [mouse_buf_len]u8,
     kbd_buf: [kbd_buf_len]u8,
+    // --- namespace + origin mount (phase 12) ---
+    /// The session's mount table (S-02 §1). Empty at boot: the draw and input
+    /// stacks are reached through their own captured clients, not by path. The
+    /// origin binds `/mnt/origin` into it when (and only when) it comes up.
+    ns: ninep.mount.Namespace,
+    /// `/mnt/origin` (R-P12-5/6/7). Holds interior pointers (the client's
+    /// transport captures `&origin.ws`), so like everything else here it lives
+    /// in the heap App and never moves.
+    origin: OriginMount,
+    /// The `wsStage` staging buffer (R-P12-2): the shim copies each arriving
+    /// WebSocket frame in here through the exported memory, then calls `wsPush`.
+    /// Grown on demand, never shrunk — one buffer, reused for every frame, and
+    /// only ever live between a `wsStage` call and the `wsPush` that follows it.
+    ws_stage: []u8,
 };
 
 /// The ONE sanctioned module-level var: the boot context (see App's doc above).
@@ -193,8 +209,74 @@ fn boot() !void {
     a.ticket_mouse = try a.cl_input.beginRead(a.mouse_fid, 0, &a.mouse_buf);
     a.ticket_kbd = try a.cl_input.beginRead(a.kbd_fid, 0, &a.kbd_buf);
 
+    // ---- namespace + origin mount (R-P12-5) ----
+    // Boot NEVER waits on the socket: `dial` asks the shim to open it and
+    // returns, the handshake is driven one step per `tick`, and if it does not
+    // finish within OriginMount.dial_timeout_ms the mount is simply absent
+    // (one warning line, no retry loop). Everything above this point — draw,
+    // input, the window tree — is bit-identical with the origin down; that is
+    // the acceptance bar. Both fields are assigned BEFORE `dial`, because the
+    // mount captures `&a.origin.ws` and `&a.ns`.
+    a.ns = ninep.mount.Namespace.init(alloc);
+    a.origin = OriginMount.init(alloc, &a.ns);
+    a.ws_stage = &.{};
+    // Route the `Reconnect` builtin back out to the transport (R-P12-7). The
+    // core cannot see `origin`/`shim` (R-OV-03), so this hook is the whole of
+    // what it knows about the connection.
+    a.editor.origin = .{ .ctx = a, .redial = redialOrigin };
+    a.origin.dial();
+
     try a.display.flush();
     app = a;
+}
+
+/// `Editor.OriginHook.redial` (R-P12-7): tear down whatever connection exists
+/// and start a fresh dial. Returns immediately — `tick` reports the outcome.
+fn redialOrigin(ctx: *anyopaque) void {
+    const a: *App = @ptrCast(@alignCast(ctx));
+    a.origin.dial();
+}
+
+/// Reserve `len` bytes of module memory for one inbound WebSocket frame and
+/// hand the shim its address (R-P12-2). The shim writes the frame there through
+/// the exported memory and immediately calls `wsPush`; nothing else touches the
+/// buffer in between (JS is single-threaded and `wsPush` does not re-enter JS).
+/// Returns 0 — "cannot stage", the shim drops the frame — before `init`, on a
+/// frame larger than any 9P message we would accept, or on allocation failure.
+export fn wsStage(len: u32) u32 {
+    const a = app orelse return 0;
+    if (len > stage_cap) return 0;
+    // The shim stages EVERY record, including the empty payload of `open`, and
+    // reads 0 as "cannot stage". So always hand back a real allocation: the
+    // pointer of an empty slice is not guaranteed to be non-zero.
+    const want = @max(len, 1);
+    if (a.ws_stage.len < want) {
+        if (a.ws_stage.len > 0) alloc.free(a.ws_stage);
+        a.ws_stage = alloc.alloc(u8, want) catch {
+            a.ws_stage = &.{};
+            return 0;
+        };
+    }
+    return @intFromPtr(a.ws_stage.ptr);
+}
+
+/// The staging ceiling: a frame this large is not a 9P message we ever
+/// negotiated (OriginMount proposes 8192), so refusing it early keeps a hostile
+/// or confused peer from sizing our heap.
+const stage_cap: u32 = 1 << 20;
+
+/// Deliver one inbound WebSocket record to the connection it belongs to
+/// (R-P12-2). `kind` mirrors `shim.abi.WsKind`; `ptr[0..len]` is the staged
+/// payload (empty for `open`). This ONLY queues — the module drains on `tick`,
+/// so there is no JS→WASM re-entrancy. An unknown kind or a record for a
+/// connection this session has walked away from is dropped.
+export fn wsPush(id: u32, kind: u32, ptr: [*]const u8, len: u32) void {
+    const a = app orelse return;
+    const k: shim.abi.WsKind = switch (kind) {
+        1...4 => @enumFromInt(kind), // range-checked (no std.meta.intToEnum in 0.16)
+        else => return,
+    };
+    a.origin.push(id, k, ptr[0..len]);
 }
 
 /// The single input entry (R-P6-10, S-06 §4: input has NO env imports — it flows
@@ -249,11 +331,25 @@ export fn wake() void {}
 /// Drains both 9P stacks and the input device, then flushes once. A failure
 /// traps through the panic handler.
 export fn tick(now_ms: u32) void {
-    _ = now_ms;
     const a = app orelse return;
     _ = a.srv.poll() catch |e| @panic(@errorName(e)); // draw stack
     drainInput(a) catch |e| @panic(@errorName(e)); // input stack → Editor
+    pollOrigin(a, now_ms); // /mnt/origin handshake + disconnect watch
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
+}
+
+/// Advance the origin connection and turn a state change into EXACTLY one
+/// warning line (R-P12-5/6/7). `now_ms` is the animation-frame clock: freestanding
+/// wasm has no `std.Io` and no OS, so this is the module's only source of time and
+/// the 10 s dial budget is counted in these ticks. A failure here never touches
+/// the editor — an absent `/mnt/origin` is a supported state, not an error.
+fn pollOrigin(a: *App, now_ms: u32) void {
+    switch (a.origin.poll(now_ms)) {
+        .none => {},
+        .mounted => a.editor.warning("/mnt/origin: mounted\n", .{}),
+        .failed => |why| a.editor.warning("/mnt/origin: not mounted ({s})\n", .{why}),
+        .lost => |why| a.editor.warning("/mnt/origin: disconnected ({s})\n", .{why}),
+    }
 }
 
 /// Drain every mouse record and kbd rune the input device can produce right now,

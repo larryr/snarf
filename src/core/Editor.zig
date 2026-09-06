@@ -36,6 +36,24 @@ const Editor = @This();
 const Point = draw.Point;
 const Rect = draw.Rect;
 
+/// The origin-transport seam (R-P12-7), installed on the `origin` field below by
+/// whichever root owns the connection — `src/main_wasm.zig` in the browser, no
+/// one in the native harnesses.
+///
+/// Deliberately ONE verb. The core has no business knowing that the origin is a
+/// WebSocket, that it has a connection id, or whether it is currently up: it
+/// asks for a re-dial and learns the outcome the same way the user does, from
+/// the warning the connection's own poll emits when it resolves.
+pub const OriginHook = struct {
+    ctx: *anyopaque,
+    /// Close any live origin connection and start a fresh dial. Returns
+    /// IMMEDIATELY: the dial is asynchronous (R-P12-5), so success or failure
+    /// arrives later as one warning line from the platform's tick, NOT from
+    /// this call. Infallible by contract — a re-dial that cannot even start
+    /// reports itself through that same warning.
+    redial: *const fn (ctx: *anyopaque) void,
+};
+
 /// Native mouse button bits (profiles / devmouse.c: B1=1, B2=2, B3=4). B1 drives
 /// the selection sweep; B1+B2 is the Cut chord, B1+B3 the Paste chord.
 const B1: u8 = 1;
@@ -137,6 +155,16 @@ sel23_range: struct { q0: usize = 0, q1: usize = 0 } = .{},
 but2col: ?*draw.Image = null,
 /// The B3 sweep-highlight solid (`but3col`, acme.c:1085); same null fallback.
 but3col: ?*draw.Image = null,
+/// The platform seam the `Reconnect` builtin routes through (R-P12-7).
+///
+/// `core` may never import `shim` or `dev` (R-OV-03, R-CON-02, S-07 §6), so the
+/// origin's WebSocket lives entirely outside it and reaches the editor two ways
+/// only: through the 9P namespace (files) and through this hook (the one
+/// command that must talk to the transport itself). `src/main_wasm.zig` installs
+/// it after boot; every native harness leaves it null, which makes `Reconnect`
+/// a single warning line instead of a crash. Same inversion as `draw.Backend`
+/// and the input device's vtables — an erased ctx plus one function pointer.
+origin: ?OriginHook = null,
 /// Mouse gesture state (`textselect`, text.c:1001-1099):
 ///   * `idle`          — between gestures.
 ///   * `sweeping_b1`   — B1 down, extending a selection (frselect loop body).

@@ -6,7 +6,9 @@ absence tolerance, a `Reconnect` builtin, and connection keepalive. After this p
 editor's namespace reaches real origin files; *using* them from the UI (Get/Put, look on
 paths) is the NEXT wave — this one proves the plumbing end-to-end.
 
-Status: DRAFT for user review — rulings below are pre-agreed design; amend as built.
+Status: AS BUILT (merged 2026-09-05). R-P12-1..8 held; R-P12-9(b) was narrowed by
+the async-RPC gap (see orchestrator ruling R-P12-O1 at the end). B1/B2 amendment
+rulings below are binding.
 
 ## Rulings (proposed)
 
@@ -61,6 +63,80 @@ Status: DRAFT for user review — rulings below are pre-agreed design; amend as 
   restart + `Reconnect` → reads work again, origin-absent boot stays green.
   (c) Manual (Larry): `zig build serve`, browser, execute `Reconnect`, watch warnings.
 
+### Rulings added while building B1 (amend-as-built)
+
+- **R-P12-B1-1 — `WsTransport.transport(T)` is comptime-generic.** R-P12-3's placement
+  ("lives in src/shim, implements ninep's vtable") conflicted with S-07 §6 (`shim → std
+  only`; the shim module has no `ninep` import in build.zig). Resolution: the adapter is
+  instantiated by the caller — `ws.transport(ninep.transport.Transport)` from
+  `main_wasm.zig`/`src/origin`, which import both. Error sets are member-identical so
+  the fn pointers coerce. No build.zig hole, boundary intact.
+- **R-P12-B1-2 — inbound kinds.** `abi.WsKind` = open 1 / data 2 / close 3 / err 4
+  (`err` because `error` is a Zig keyword; JS mirror spells it `error`). Text frames on
+  the 9P socket are pushed as an `err` record (R-P12-3: text is not 9P). Poison
+  (`BadFrame`, or OOM on the inbound copy) is a ONE-SHOT error, then `Closed` — a
+  dropped frame would desync the stream, so it must surface.
+- **R-P12-B1-3 — close nuance.** A LOCAL `close()` abandons everything (queue dropped,
+  all ops `Closed`). A REMOTE close/error keeps already-queued frames readable first
+  (transport guarantee 4 — replies that arrived in the same batch as the close are not
+  lost). Write while dialing → `WouldBlock` (pump retries); write when dead → `Closed`.
+- **R-P12-B1-4 — connection ids.** JS detaches handlers on `wsClose` and guards every
+  handler with a socket-identity check, but each dial SHOULD use a fresh id (B2 does).
+
+### Rulings added while building B2 (amend-as-built)
+
+- **R-P12-B2-1 — the origin handshake is hand-driven.** `ninep.Client`'s RPCs are
+  synchronous: they send a T-message then loop on `readMsg`, resolving
+  `WouldBlock` through the client `Pump`. Over a browser WebSocket no pump can
+  produce a reply (frames arrive only after the module returns to the JS event
+  loop) and R-P12-4 forbids spinning, so `version`+`attach` are driven one step
+  per `tick` at the FRAME level in `src/origin/OriginMount.zig`
+  (`ninep.msg.encode`/`decode` straight onto `WsTransport`). On Rattach the
+  negotiated msize is written into the `Client` and `/mnt/origin` is bound; from
+  then on the `Client` owns the transport. `src/ninep/*` is untouched.
+- **R-P12-B2-2 — the keepalive is a second thread per connection.** The 9P
+  connection thread parks in `readMsg` and `std.http.Server.WebSocket` has no
+  read deadline to hang a timer off, so `tools/origin` spawns one `Keepalive`
+  thread per session. It shares exactly one thing with the reader — the
+  `Writer` — guarded by `WsTransport.write_mu` (`std.Io.Mutex`). The 30 s
+  interval is slept in 100 ms slices so a closing session joins promptly. Two
+  consecutive unanswered pings ⇒ `Io.net.Stream.shutdown(.both)`, which unblocks
+  the parked read and lets the session tear itself down through its normal path
+  (the connection thread still owns the descriptor).
+- **R-P12-B2-3 — `Reconnect` inverts through `Editor.OriginHook`.** `core` may
+  not import `shim`/`origin` (R-OV-03, S-07 §6), so the builtin reaches the
+  transport through one erased-ctx function pointer that `src/main_wasm.zig`
+  installs at boot: `origin: ?OriginHook`, `redial: *const fn (ctx: *anyopaque)
+  void`. Null in every native harness ⇒ `Reconnect` is one warning line. The
+  builtin itself prints NOTHING on the happy path: the dial is asynchronous, so
+  R-P12-7's "one warning line" is the outcome line the tick-driven poll emits.
+- **R-P12-B2-4 — the mount lives in its own module.** `src/origin/` (imports
+  `ninep` + `shim`, same layer as `dev`) rather than inside `src/main_wasm.zig`,
+  so the mount state machine is exercised natively by `zig build test` with no
+  browser (R-P12-9a). `core` never imports it.
+
+### Gaps found, reported not patched
+
+- **`ninep.mount.Namespace` has no `unmount`.** R-P12-6 requires unbinding
+  `/mnt/origin`; `mount.zig` offers only `mount`/`bind`. `OriginMount.unbind`
+  drops the row through the table's public fields (free the owned prefix,
+  `orderedRemove`) — exactly what the missing method would do. The framework
+  should grow `Namespace.unmount(prefix)` before a SECOND runtime-managed mount
+  exists.
+- **`ninep.Client` has no async ticket for walk/open/clunk** — only `beginRead`/
+  `checkRead`. Nothing but a read can therefore be driven over the WebSocket
+  transport. The next wave (Get/Put, look on `/mnt/origin` paths) needs either
+  that ticket API or a resumable RPC state machine in `client.zig`.
+- **R-P12-6's Rerror text is a warning, not a wire reply.** There is no server
+  left to send `Rerror "websocket closed"`, so outstanding tickets and stale
+  fids surface `error.Closed` from the transport; the phrase appears in the
+  warning line (`OriginMount.closed_text`) and in `reasonText()`.
+- **`std.http.Server.WebSocket.readSmallMessage` silently skips pong frames**
+  (`std/http/Server.zig`, "// Skip pongs."), which makes R-P12-8's missed-pong
+  rule unobservable. `tools/origin/ws_transport.zig` therefore carries
+  `readAnyMessage`: the same RFC 6455 §5.2 decode over the same public
+  `Io.Reader` API, with pongs surfaced instead of swallowed.
+
 ## Ground truth
 
 - Phase-11 server behavior: `agents/contracts/phase11-origin.md` R-P11-2/3 (blocking
@@ -79,8 +155,23 @@ Status: DRAFT for user review — rulings below are pre-agreed design; amend as 
 3. Orchestrator: smoke extension (R-P12-9b), S-06 §4 revision log, boundary check
    (core imports unchanged), merge.
 
-## Deferred (unchanged from phase 11 list)
+### Orchestrator ruling (merge inspection)
 
-Get/Put + look on `/mnt/origin` paths (next wave); `fs/` create/remove (Ops growth,
-lifts R5); host-command allow-list (ADR); `Tauth` before any non-loopback bind;
-Worker+SAB transport swap (R-P6-1 says this is a transport move, not a redesign).
+- **R-P12-O1 — R-P12-9(b) narrowed.** "read of `/mnt/origin/version` round-trips" is
+  NOT provable this phase: `ninep.Client` has no async ticket for walk/open/clunk (gap
+  above), and the handshake ruling R-P12-B2-1 deliberately stops hand-driving frames at
+  Rattach. The smoke instead proves, against a real spawned `snarf-origin` over real
+  WebSockets: origin-absent boot green through the 10 s deadline; Tversion+Tattach on
+  the wire and `9p attach /` in the server's own access log (mount handshake complete);
+  SIGKILL of the server absorbed without trap; and `Reconnect` — driven as a USER
+  gesture (B1 click, typed word, B2 click through pushEvent) — re-attaching on a
+  restarted server. File reads move to the next wave's acceptance, where the async RPC
+  API lands. 20/20 smoke checks; suite 522/522.
+
+## Deferred (unchanged from phase 11 list, plus gaps above)
+
+Get/Put + look on `/mnt/origin` paths (next wave — BLOCKED on an async RPC ticket API
+or resumable RPC state machine in `client.zig`, see gaps); `Namespace.unmount(prefix)`
+before a second runtime-managed mount; `fs/` create/remove (Ops growth, lifts R5);
+host-command allow-list (ADR); `Tauth` before any non-loopback bind; Worker+SAB
+transport swap (R-P6-1 says this is a transport move, not a redesign).

@@ -19,6 +19,7 @@ const std = @import("std");
 const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
 const cmd_edit = @import("cmd_edit.zig");
+const cmd_origin = @import("cmd_origin.zig");
 const cmd_window = @import("cmd_window.zig");
 const edit = @import("../edit/edit.zig");
 
@@ -62,6 +63,9 @@ pub const exectab = [_]Entry{
     // exec.c:119 — flag2 is the C's XXX==2, TRUTHY (dat.h:488-493): tobody=TRUE is
     // LOAD-BEARING (a tag Paste lands in the body), so it is ported as `true`.
     .{ .name = "Paste", .fn_ = cmd_edit.paste, .mark = true, .flag1 = true, .flag2 = true }, // exec.c:119
+    // Snarf-only (R-P12-7): re-dial `/mnt/origin`. Not in exec.c — acme has no
+    // droppable mount. Marks nothing and edits nothing; both flags unused.
+    .{ .name = "Reconnect", .fn_ = cmd_origin.reconnect, .mark = false, .flag1 = false, .flag2 = false },
     .{ .name = "Redo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:122 (isundo=FALSE; flag2 XXX unused)
     .{ .name = "Snarf", .fn_ = cmd_edit.cut, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:124 (docut=FALSE)
     .{ .name = "Undo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:127 (isundo=TRUE; flag2 XXX unused)
@@ -69,20 +73,23 @@ pub const exectab = [_]Entry{
 
 test "builtins: table shape and flags match exec.c" {
     const testing = std.testing;
-    // Grew by one row (R-P10-8): Edit sits alphabetically between Delete and New.
-    try testing.expectEqual(@as(usize, 11), exectab.len);
-    // Alphabetical order (exec.c:98-130 subset + Edit at :106).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Edit", "New", "Newcol", "Paste", "Redo", "Snarf", "Undo" };
+    // Grew by one row again (R-P12-7): Reconnect sits alphabetically between
+    // Paste and Redo. Earlier growth: Edit, between Delete and New (R-P10-8).
+    try testing.expectEqual(@as(usize, 12), exectab.len);
+    // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect).
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Edit", "New", "Newcol", "Paste", "Reconnect", "Redo", "Snarf", "Undo" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
     // Cut marks + snarfs + cuts; Snarf marks NOT, snarfs, does not cut.
     try testing.expect(exectab[0].mark and exectab[0].flag1 and exectab[0].flag2); // Cut
-    try testing.expect(!exectab[9].mark and exectab[9].flag1 and !exectab[9].flag2); // Snarf
+    try testing.expect(!exectab[10].mark and exectab[10].flag1 and !exectab[10].flag2); // Snarf
     // Paste's flag2 (tobody) is the truthy XXX.
     try testing.expect(exectab[7].mark and exectab[7].flag1 and exectab[7].flag2); // Paste
     // Undo/Redo differ only in flag1 (isundo).
-    try testing.expect(exectab[10].flag1 and !exectab[8].flag1); // Undo vs Redo
+    try testing.expect(exectab[11].flag1 and !exectab[9].flag1); // Undo vs Redo
     // Delete = Del with flag1 (skip-clean twin).
     try testing.expect(exectab[3].flag1 and !exectab[1].flag1);
     // Edit manages its own seq, so it never marks (R-P10-8).
     try testing.expect(!exectab[4].mark and std.mem.eql(u8, exectab[4].name, "Edit"));
+    // Reconnect touches the session, never a buffer: it marks nothing.
+    try testing.expect(!exectab[8].mark and !exectab[8].flag1 and !exectab[8].flag2);
 }

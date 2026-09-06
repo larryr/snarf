@@ -45,6 +45,18 @@ pub fn build(b: *std.Build) void {
             .{ .name = "shim", .module = shim },
         },
     });
+    // `/mnt/origin` boot glue (R-P12-5/6/7): the WebSocket transport (`shim`)
+    // joined to the mount table and 9P client (`ninep`). Same layer as `dev` —
+    // it sees the browser boundary, so `core` must never import it. Its own
+    // module (rather than living in `src/main_wasm.zig`) so the mount state
+    // machine is exercised NATIVELY by `zig build test`, with no browser.
+    const origin = b.addModule("origin", .{
+        .root_source_file = b.path("src/origin/origin.zig"),
+        .imports = &.{
+            .{ .name = "ninep", .module = ninep },
+            .{ .name = "shim", .module = shim },
+        },
+    });
 
     // --- snarf.wasm: freestanding, exports init/wake/tick (S-06 §2). ---
     const wasm_target = b.resolveTargetQuery(.{
@@ -66,6 +78,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "dev", .module = dev },
                 .{ .name = "draw", .module = draw },
                 .{ .name = "ninep", .module = ninep },
+                .{ .name = "origin", .module = origin },
                 .{ .name = "shim", .module = shim },
             },
         }),
@@ -150,6 +163,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "ninep", .module = ninep },
     });
     addModuleTests(b, test_step, target, optimize, "src/dev/dev.zig", &.{
+        .{ .name = "ninep", .module = ninep },
+        .{ .name = "shim", .module = shim },
+    });
+    // The `/mnt/origin` state machine over a scripted browser (R-P12-9a).
+    addModuleTests(b, test_step, target, optimize, "src/origin/origin.zig", &.{
         .{ .name = "ninep", .module = ninep },
         .{ .name = "shim", .module = shim },
     });
