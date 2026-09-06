@@ -6,9 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-05 — remote has only `main`; stale merged branches deleted)*
-- A background agent task (2026-09-05, larry's Mac) is adding Mermaid mirrors under
-  `docs/spec/diagrams/mermaid/` directly to `main` (user-authorized); additive only.
+- **PHASE 12 BUILD IN FLIGHT (started 2026-09-05, larry's Mac session)** — branch
+  `phase12-origin-mount`, contract `agents/contracts/phase12-origin-mount.md`
+  (user approved as drafted: no auto-reconnect, plumbing-only scope). OWNS:
+  `web/shim.js`, `src/shim/*`, `src/main_wasm.zig`, `tools/origin/*`,
+  `tools/smoke_wasm.mjs`, Exectab growth in core exec. Do not touch these areas
+  until this claim clears.
 
 ## Current state (update in place)
 
