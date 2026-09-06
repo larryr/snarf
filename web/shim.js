@@ -3,12 +3,13 @@
 // calls init(), drives tick() from requestAnimationFrame, and forwards raw input
 // events into the module via the pushEvent export (R-P6-10). The device import
 // surface fills in per S-06 §4 as devices land; phase 5 wired the pixel path
-// (env.blit) + diagnostics (env.consoleLog); phase 6 adds input capture.
+// (env.blit) + diagnostics (env.consoleLog); phase 6 adds input capture; phase 12
+// adds the `ws` trio that carries 9P to the origin (R-P12-2).
 
 // ABI generation this shim mirrors; must equal src/shim/abi.zig `version` and
-// the module's exported abi_version() (checked below). 2→3 this phase (R-P6-10).
+// the module's exported abi_version() (checked below). 3→4 this phase (R-P12-2).
 // Drift becomes a build error once the generated checksum lands (OQ-BLD-2).
-const ABI_VERSION = 3;
+const ABI_VERSION = 4;
 
 // EventKind, a MECHANICAL mirror of src/shim/abi.zig `EventKind` (R-P6-10). All
 // input POLICY stays in Zig (ADR-0004); this shim only transliterates and tags.
@@ -24,6 +25,11 @@ const EK = {
 
 // Modifier id, mirror of dev/profiles.zig `Mod` (enum(u8){alt,meta,ctrl,shift}).
 const MOD_ID = { Alt: 0, Meta: 1, Control: 2, Shift: 3 };
+
+// WS_KIND, a MECHANICAL mirror of src/shim/abi.zig `WsKind` (R-P12-2) — the tag
+// on every inbound record handed to the module's wsPush export. Zig spells the
+// last one `err` (keyword); only the integers must agree.
+const WS_KIND = { open: 1, data: 2, close: 3, error: 4 };
 
 // KEYRUNE — a MECHANICAL mirror of the 4e keyboard.h special-key block (device
 // authority per R-P6-7 / the devinput side contract). DOM `KeyboardEvent.key`
@@ -67,6 +73,52 @@ const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
 
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
+
+// Live 9P sockets by connection id (R-P12-2). One entry per wsOpen; removed on
+// close so a superseded socket's late events are dropped (see wsAlive).
+const sockets = new Map();
+
+// Shared empty payload for records that carry none (the open record).
+const EMPTY_BYTES = new Uint8Array(0);
+
+// Installed at boot from the module's wsStage/wsPush exports; stays null when
+// the module predates them, which disables the ws imports entirely (the origin
+// mount is then simply absent — R-P12-5's tolerance, seen from this side).
+let wsPushRecord = null;
+
+// Diagnostics in the same voice as the module's consoleLog import.
+function warn(...args) {
+  console.warn("[snarf]", ...args);
+}
+
+// The 9P endpoint, same-origin ONLY (R-P12-1/R-9P-15): scheme from the page's
+// protocol, host verbatim, path /9p. The module never sees a URL and has no
+// override knob — a third-party endpoint would be someone else's namespace.
+function wsUrl() {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${location.host}/9p`;
+}
+
+// True while `sock` is still the socket registered for `id`. A Reconnect
+// (R-P12-7) may have dialed a replacement; the old socket's trailing onclose
+// must not be reported against the new connection.
+function wsAlive(id, sock) {
+  return sockets.get(id) === sock;
+}
+
+// Push one inbound record into the module: stage the bytes into wasm memory via
+// wsStage, then hand the module the pointer (R-P12-2). wsPush only queues — the
+// module drains on tick() — so there is no JS→WASM re-entrancy here.
+function pushWs(id, kind, bytes) {
+  if (!wsPushRecord) return;
+  wsPushRecord(id, kind, bytes);
+}
+
+// Same, for the short human-readable reason on a close/error record.
+function pushWsText(id, kind, text) {
+  pushWs(id, kind, textEncoder.encode(text));
+}
 
 const imports = {
   env: {
@@ -85,6 +137,86 @@ const imports = {
     consoleLog(ptr, len) {
       const bytes = new Uint8Array(memory.buffer, ptr, len);
       console.log("[snarf]", textDecoder.decode(bytes));
+    },
+
+    // Dial the origin's 9P endpoint as connection `id` (R-P12-2). No URL crosses
+    // the ABI: this side derives it (R-P12-1). Returns immediately — boot never
+    // waits on the socket (R-P12-5); the module learns the outcome from the
+    // open/close/error record.
+    wsOpen(id) {
+      if (!wsPushRecord) {
+        warn("ws: module has no wsStage/wsPush exports — origin mount disabled");
+        return;
+      }
+      // A redial on a live id supersedes the old socket (R-P12-7 normally closes
+      // it first); drop it silently rather than leak it with stale handlers.
+      imports.env.wsClose(id);
+      let sock;
+      try {
+        sock = new WebSocket(wsUrl());
+      } catch (err) {
+        pushWsText(id, WS_KIND.error, `dial failed: ${err}`);
+        return;
+      }
+      // Binary only: a 9P frame is bytes, and a text frame is not 9P (R-P12-3).
+      sock.binaryType = "arraybuffer";
+      sockets.set(id, sock);
+
+      sock.onopen = () => {
+        if (wsAlive(id, sock)) pushWs(id, WS_KIND.open, EMPTY_BYTES);
+      };
+      sock.onmessage = (e) => {
+        if (!wsAlive(id, sock)) return;
+        if (typeof e.data === "string") {
+          // A text frame on the 9P socket is a protocol violation; report it and
+          // let the module poison the connection (R-P12-3).
+          pushWsText(id, WS_KIND.error, "text frame on a 9P socket");
+          sockets.delete(id);
+          sock.close();
+          return;
+        }
+        // One binary message == exactly one 9P frame; the module checks size[4].
+        pushWs(id, WS_KIND.data, new Uint8Array(e.data));
+      };
+      sock.onclose = (e) => {
+        if (!wsAlive(id, sock)) return;
+        sockets.delete(id);
+        pushWsText(id, WS_KIND.close, `${e.code} ${e.reason || "closed"}`);
+      };
+      sock.onerror = () => {
+        // onerror carries no detail by design (the browser hides the cause); a
+        // close event follows, and the module ignores the second death.
+        if (wsAlive(id, sock)) pushWsText(id, WS_KIND.error, "socket error");
+      };
+    },
+
+    // Send one 9P frame as one binary WebSocket message (R-P12-3). The bytes are
+    // copied out of wasm memory first: send() must never hold a view of a buffer
+    // that detaches when linear memory grows (R-P5-1). A send on a dead or
+    // not-yet-open socket is dropped — the module already has, or is about to
+    // get, the close record that explains it.
+    wsSend(id, ptr, len) {
+      const sock = sockets.get(id);
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
+      sock.send(new Uint8Array(memory.buffer, ptr, len).slice());
+    },
+
+    // Close connection `id`. Idempotent; unknown ids are a no-op. The handlers
+    // are detached first so the module gets no close record for a socket it
+    // closed itself (and a Reconnect's fresh socket is never confused for it).
+    wsClose(id) {
+      const sock = sockets.get(id);
+      if (!sock) return;
+      sockets.delete(id);
+      sock.onopen = null;
+      sock.onmessage = null;
+      sock.onclose = null;
+      sock.onerror = null;
+      try {
+        sock.close();
+      } catch (err) {
+        warn("ws: close failed", err);
+      }
     },
   },
 };
@@ -180,10 +312,39 @@ function installInput(pushEvent) {
 async function boot() {
   const resp = await fetch("./snarf.wasm");
   const { instance } = await WebAssembly.instantiateStreaming(resp, imports);
-  const { memory: mem, abi_version, init, wake, tick, pushEvent } =
-    instance.exports;
+  const {
+    memory: mem,
+    abi_version,
+    init,
+    wake,
+    tick,
+    pushEvent,
+    wsStage,
+    wsPush,
+  } = instance.exports;
 
   memory = mem;
+
+  // Arm the inbound ws path only if the module exports both halves of the
+  // staging pair (R-P12-2). Without them the env.ws* imports stay inert rather
+  // than opening a socket nothing can read.
+  if (typeof wsStage === "function" && typeof wsPush === "function") {
+    wsPushRecord = (id, kind, bytes) => {
+      const ptr = wsStage(bytes.length);
+      if (!ptr) {
+        // The module could not stage the record (no room). Dropping a 9P frame
+        // desynchronizes the stream, so report the failure instead of hiding it.
+        warn("ws: staging buffer unavailable, dropped a", kind, "record");
+        return;
+      }
+      if (bytes.length > 0) {
+        new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+      }
+      wsPush(id, kind, ptr, bytes.length);
+    };
+  } else {
+    warn("ws: module exports no wsStage/wsPush — no origin mount this boot");
+  }
 
   // Verify the ABI contract BEFORE handing control to the module (R-P5-4).
   const moduleAbi = abi_version();
