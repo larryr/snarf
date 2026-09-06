@@ -75,6 +75,16 @@ std-only, still no node).
 > version = 2, checked at runtime via the exported `abi_version()` before init;
 > the generated-checksum build check (OQ-BLD-2) remains deferred (contract
 > R-P5-4/R-P5-6).
+>
+> Revision log: 2026-09-05 (phase 12) — the `ws` import surface shipped as
+> `wsOpen(id)`, `wsSend(id, ptr, len)`, `wsClose(id)`: the URL argument sketched
+> above is DROPPED — the shim derives `ws(s)://<location.host>/9p` itself, so the
+> module never sees a URL and the endpoint stays same-origin by construction
+> (R-9P-15, contract R-P12-1). Inbound WS records do NOT use the ring: they
+> follow the phase-6 pushEvent pattern via two new exports — `wsStage(len) → ptr`
+> (module-side staging buffer; 0 = refused) and `wsPush(id, kind, ptr, len)`,
+> kind ∈ {open=1, data=2, close=3, error=4} — queued only, drained on
+> `tick()`/`wake()` (no JS→WASM re-entrancy). ABI version = 4 (3→4).
 
 ## 5. CI (sketch)
 

@@ -6,7 +6,9 @@ absence tolerance, a `Reconnect` builtin, and connection keepalive. After this p
 editor's namespace reaches real origin files; *using* them from the UI (Get/Put, look on
 paths) is the NEXT wave — this one proves the plumbing end-to-end.
 
-Status: DRAFT for user review — rulings below are pre-agreed design; amend as built.
+Status: AS BUILT (merged 2026-09-05). R-P12-1..8 held; R-P12-9(b) was narrowed by
+the async-RPC gap (see orchestrator ruling R-P12-O1 at the end). B1/B2 amendment
+rulings below are binding.
 
 ## Rulings (proposed)
 
@@ -60,6 +62,26 @@ Status: DRAFT for user review — rulings below are pre-agreed design; amend as 
   `/mnt/origin/version` round-trips, server kill → fids die with the right error,
   restart + `Reconnect` → reads work again, origin-absent boot stays green.
   (c) Manual (Larry): `zig build serve`, browser, execute `Reconnect`, watch warnings.
+
+### Rulings added while building B1 (amend-as-built)
+
+- **R-P12-B1-1 — `WsTransport.transport(T)` is comptime-generic.** R-P12-3's placement
+  ("lives in src/shim, implements ninep's vtable") conflicted with S-07 §6 (`shim → std
+  only`; the shim module has no `ninep` import in build.zig). Resolution: the adapter is
+  instantiated by the caller — `ws.transport(ninep.transport.Transport)` from
+  `main_wasm.zig`/`src/origin`, which import both. Error sets are member-identical so
+  the fn pointers coerce. No build.zig hole, boundary intact.
+- **R-P12-B1-2 — inbound kinds.** `abi.WsKind` = open 1 / data 2 / close 3 / err 4
+  (`err` because `error` is a Zig keyword; JS mirror spells it `error`). Text frames on
+  the 9P socket are pushed as an `err` record (R-P12-3: text is not 9P). Poison
+  (`BadFrame`, or OOM on the inbound copy) is a ONE-SHOT error, then `Closed` — a
+  dropped frame would desync the stream, so it must surface.
+- **R-P12-B1-3 — close nuance.** A LOCAL `close()` abandons everything (queue dropped,
+  all ops `Closed`). A REMOTE close/error keeps already-queued frames readable first
+  (transport guarantee 4 — replies that arrived in the same batch as the close are not
+  lost). Write while dialing → `WouldBlock` (pump retries); write when dead → `Closed`.
+- **R-P12-B1-4 — connection ids.** JS detaches handlers on `wsClose` and guards every
+  handler with a socket-identity check, but each dial SHOULD use a fresh id (B2 does).
 
 ### Rulings added while building B2 (amend-as-built)
 
@@ -133,8 +155,23 @@ Status: DRAFT for user review — rulings below are pre-agreed design; amend as 
 3. Orchestrator: smoke extension (R-P12-9b), S-06 §4 revision log, boundary check
    (core imports unchanged), merge.
 
-## Deferred (unchanged from phase 11 list)
+### Orchestrator ruling (merge inspection)
 
-Get/Put + look on `/mnt/origin` paths (next wave); `fs/` create/remove (Ops growth,
-lifts R5); host-command allow-list (ADR); `Tauth` before any non-loopback bind;
-Worker+SAB transport swap (R-P6-1 says this is a transport move, not a redesign).
+- **R-P12-O1 — R-P12-9(b) narrowed.** "read of `/mnt/origin/version` round-trips" is
+  NOT provable this phase: `ninep.Client` has no async ticket for walk/open/clunk (gap
+  above), and the handshake ruling R-P12-B2-1 deliberately stops hand-driving frames at
+  Rattach. The smoke instead proves, against a real spawned `snarf-origin` over real
+  WebSockets: origin-absent boot green through the 10 s deadline; Tversion+Tattach on
+  the wire and `9p attach /` in the server's own access log (mount handshake complete);
+  SIGKILL of the server absorbed without trap; and `Reconnect` — driven as a USER
+  gesture (B1 click, typed word, B2 click through pushEvent) — re-attaching on a
+  restarted server. File reads move to the next wave's acceptance, where the async RPC
+  API lands. 20/20 smoke checks; suite 522/522.
+
+## Deferred (unchanged from phase 11 list, plus gaps above)
+
+Get/Put + look on `/mnt/origin` paths (next wave — BLOCKED on an async RPC ticket API
+or resumable RPC state machine in `client.zig`, see gaps); `Namespace.unmount(prefix)`
+before a second runtime-managed mount; `fs/` create/remove (Ops growth, lifts R5);
+host-command allow-list (ADR); `Tauth` before any non-loopback bind; Worker+SAB
+transport swap (R-P6-1 says this is a transport move, not a redesign).
