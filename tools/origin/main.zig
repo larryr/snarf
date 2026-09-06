@@ -141,7 +141,7 @@ fn serveConnection(o: *Origin, stream: *Io.net.Stream, serial: u32) !void {
                 try ws.flush();
                 o.info("conn {d}: 9p session open", .{serial});
                 defer o.info("conn {d}: 9p session closed", .{serial});
-                return serveNineP(o, &ws, serial);
+                return serveNineP(o, &ws, serial, stream);
             },
             else => {
                 o.logErr("conn {d}: /9p without websocket upgrade", .{serial});
@@ -156,7 +156,11 @@ fn serveConnection(o: *Origin, stream: *Io.net.Stream, serial: u32) !void {
 /// released when the peer goes away. Fid nodes live in a per-session arena:
 /// a peer that vanishes without clunking must not leak. The transport blocks,
 /// so `step` never reports idle; the loop ends on `Closed`.
-fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket, serial: u32) !void {
+///
+/// A `Keepalive` thread rides alongside (R-P12-8). It is spawned LAST so its
+/// `defer` runs FIRST: the pinger is stopped and joined before the transport and
+/// server it borrows are torn down.
+fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket, serial: u32, stream: *Io.net.Stream) !void {
     var arena = std.heap.ArenaAllocator.init(o.gpa);
     defer arena.deinit();
     var host = try HostFs.open(o.io, o.cfg.export_dir);
@@ -165,9 +169,22 @@ fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket, serial: u32) !void {
     defer tree.deinit();
     tree.log = o.log;
     tree.serial = serial;
-    var tport: WsTransport = .{ .ws = ws };
+    var tport: WsTransport = .{ .ws = ws, .io = o.io };
     var srv = try ninep.server.Server.init(o.gpa, tport.transport(), &Tree.ops, &tree, msize);
     defer srv.deinit();
+
+    var keep: Keepalive = .{ .o = o, .tport = &tport, .stream = stream, .serial = serial };
+    const keep_thread = std.Thread.spawn(.{}, Keepalive.run, .{&keep}) catch |err| blk: {
+        // A session without a pinger still works; it just cannot notice a
+        // silently-vanished peer until TCP does.
+        o.logErr("conn {d}: no keepalive thread: {s}", .{ serial, @errorName(err) });
+        break :blk null;
+    };
+    defer if (keep_thread) |t| {
+        keep.stop.store(true, .release);
+        t.join();
+    };
+
     while (true) {
         _ = srv.step() catch |err| switch (err) {
             error.Closed => return,
@@ -175,6 +192,69 @@ fn serveNineP(o: *Origin, ws: *std.http.Server.WebSocket, serial: u32) !void {
         };
     }
 }
+
+/// Server-initiated WebSocket keepalive (R-P12-8).
+///
+/// Browsers cannot send ping frames from JS, so liveness has to originate here:
+/// we ping every 30 s, the browser auto-pongs, and TWO consecutive pings with no
+/// pong in between drop the connection. The client side needs nothing — a dead
+/// TCP surfaces to the module as a WS close, which is R-P12-6.
+///
+/// RULING R-P12-B2-2 (thread, not a read deadline). The connection thread owns
+/// the socket and parks in `readMsg`; `std.http.Server.WebSocket` offers no read
+/// timeout to hang a timer off, and giving the reader a deadline would mean
+/// re-plumbing the 9P server loop for spurious wakeups. A second thread per
+/// connection is the simpler correct shape for a dev tool: it shares exactly one
+/// thing with the reader — the `Writer` — which `WsTransport.write_mu` guards.
+/// The 30 s wait is slept in short slices so a closing session joins promptly
+/// instead of blocking shutdown for up to half a minute.
+const Keepalive = struct {
+    o: *Origin,
+    tport: *WsTransport,
+    /// Shut down to unblock the connection thread's parked read when the peer
+    /// stops answering. Not `close`: the connection thread's own `defer` owns
+    /// the descriptor, and closing it from here would be a use-after-free race.
+    stream: *Io.net.Stream,
+    serial: u32,
+    stop: std.atomic.Value(bool) = .init(false),
+
+    /// How often to ping.
+    const interval_ms: u32 = 30_000;
+    /// Stop-flag polling granularity; also the join latency.
+    const slice_ms: u32 = 100;
+    /// Consecutive unanswered pings tolerated before the connection is dropped.
+    const max_missed: u32 = 2;
+
+    fn run(self: *Keepalive) void {
+        var elapsed_ms: u32 = 0;
+        var last_pongs: u32 = 0;
+        var missed: u32 = 0;
+        var awaiting = false;
+
+        while (!self.stop.load(.acquire)) {
+            Io.sleep(self.o.io, .{ .nanoseconds = slice_ms * std.time.ns_per_ms }, .awake) catch return;
+            elapsed_ms += slice_ms;
+            if (elapsed_ms < interval_ms) continue;
+            elapsed_ms = 0;
+
+            const seen = self.tport.pongs.load(.acquire);
+            if (seen != last_pongs) {
+                last_pongs = seen;
+                missed = 0;
+            } else if (awaiting) {
+                missed += 1;
+            }
+            if (missed >= max_missed) {
+                self.o.logErr("conn {d}: no pong after {d} pings, dropping", .{ self.serial, missed });
+                // Unblock the parked read so the session tears itself down.
+                self.stream.shutdown(self.o.io, .both) catch {};
+                return;
+            }
+            if (!self.tport.ping()) return; // socket refused it: already dying
+            awaiting = true;
+        }
+    }
+};
 
 pub fn main() !void {
     const gpa = std.heap.smp_allocator;
