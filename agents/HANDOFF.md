@@ -87,9 +87,18 @@ authorization for this file only). Prune freely — git keeps history.
 - **Local Mac permission note (2026-09-05)**: the Claude Code auto-mode classifier
   blocks `git push --delete` (remote branch deletion) and some compound git commands;
   the user runs those via `! <cmd>` in-session instead.
+- **Remote sandbox git (2026-09-11)**: `git push --delete <branch>` is refused by the git
+  proxy (HTTP 403) — merged branches must be deleted by the user/UI or a local session.
+  Ordinary pushes print scary noise (`--negotiate-only … RPC failed; HTTP 403 …
+  unexpected disconnect`) yet SUCCEED — always confirm with `git ls-remote --heads`
+  before retrying or concluding a push failed.
 - **Self-approval**: GitHub forbids approving your own PR; don't promise an "approve" step.
 - **Remote-session repo scope**: only repos attached at start or via `add_repo`
   (same-owner-only v1; fork third-party repos to `larryr/` first).
+- **The ACME paper is in-tree**: `docs/acme/` (HTML+PDF+troff source, from the pinned
+  4e fork `sys/doc/acme/`; provenance/license in its README). Cite `acme paper §N`.
+  doc.cat-v.org, 9p.io and plan9.io are proxy-blocked from remote sandboxes — use the
+  fork (`raw.githubusercontent.com/larryr/plan9/<full-sha>/…`; short SHAs 404 there).
 - **Reference forks** (pinned, cite by SHA — see CLAUDE.md): `larryr/plan9port@337c6ac`,
   `larryr/plan9@ed1a9c2`. Local full clones: `~/proj/plan9port`, `~/proj/plan9` (tips
   already AT the pinned SHAs; macOS case-collision dirty entries are harmless). Remote:
