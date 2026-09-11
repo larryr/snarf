@@ -14,11 +14,15 @@ file system, and the origin server as one namespace.
   called out: toolchain, external libraries, graphics//dev/draw, and the 3-button mouse.
 - **[spec/diagrams/](spec/diagrams/)** — PlantUML sources (`.puml`). Sources are
   authoritative; rendered images are never committed.
+- **[acme/](acme/)** — Rob Pike's original paper *Acme: A User Interface for
+  Programmers* (HTML, PDF, troff source), archived from the pinned Plan 9 4e fork with
+  provenance and license notes. Background reading before the requirements.
 
 ## Reading order
 
 | # | Document | One-liner |
 |---|----------|-----------|
+| 0 | [acme/acme.html](acme/acme.html) | The original ACME paper (Pike) — what we are porting |
 | 1 | [requirements/01-overview.md](requirements/01-overview.md) | Vision, top-level requirements, glossary |
 | 2 | [requirements/02-editor-functional.md](requirements/02-editor-functional.md) | ACME behavior that must survive the port |
 | 3 | [requirements/03-namespace-and-9p.md](requirements/03-namespace-and-9p.md) | Mandatory mounts: DOM, browser, host FS, origin |
