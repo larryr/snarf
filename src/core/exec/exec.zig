@@ -172,6 +172,7 @@ const boot = @import("../boot.zig");
 test {
     _ = @import("builtins.zig");
     _ = @import("cmd_edit.zig");
+    _ = @import("cmd_look.zig");
     _ = @import("cmd_window.zig");
 }
 
@@ -275,7 +276,7 @@ test "exec: unknown word is a no-op" {
     const rng = wordRange(t, "Frobnicate");
     try execute(&h.ed, t, rng[0], rng[1], null);
     try testing.expectEqual(before_seq, h.ed.seq); // nothing marked
-    try testing.expectEqual(@as(usize, 0), h.ed.warnings.items.len); // no warning
+    try testing.expectEqual(@as(usize, 0), h.ed.warningText().len); // no warning
     // The buffer is untouched.
     const body = try Scene.bodyText(t);
     defer testing.allocator.free(body);
@@ -394,7 +395,7 @@ test "exec: Delete closes a dirty window immediately" {
     try testing.expectEqual(@as(usize, 1), c.w.items.len);
     try testing.expectEqual(w1, c.w.items[0]);
     try testing.expectEqual(c.r.max.y, w1.r.max.y); // extended down over the freed rect
-    try testing.expectEqual(@as(usize, 0), h.ed.warnings.items.len); // Delete never warns
+    try testing.expectEqual(@as(usize, 0), h.ed.warningText().len); // Delete never warns
 }
 
 test "exec: New/Newcol/Delcol mutate the tree" {
@@ -442,7 +443,7 @@ test "exec: New/Newcol/Delcol mutate the tree" {
         try execute(&h.ed, &c1.tag, rng[0], rng[1], null); // first strike: refuse
         try testing.expectEqual(cols_before, row.col.items.len); // still there
         try testing.expect(!c1.w.items[0].dirty); // struck
-        try testing.expect(std.mem.indexOf(u8, h.ed.warnings.items, "dirtyone modified") != null);
+        try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "dirtyone modified") != null);
 
         // Second Delcol (c1 now clean) closes the column; c0 grows to the right.
         try execute(&h.ed, &c1.tag, rng[0], rng[1], null);
