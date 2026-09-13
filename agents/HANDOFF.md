@@ -10,6 +10,12 @@ authorization for this file only). Prune freely — git keeps history.
   and `docs/requirements/02-editor-functional.md` (R-02 v4). Docs only; ready to merge
   after Larry's look. (`docs-acme-paper` on the remote is a stale, fully-merged branch —
   proxy blocks deletion; ignore.)
+- **`phase12b`** (worktree `../snarf-wt/phase12b`, 2026-09-13, larry's Mac, NOT yet
+  pushed) — owns `src/core/exec/{cmd_look,cmd_window,builtins}.zig`, new
+  `src/core/errors.zig`, `Editor.zig` (activecol + warning buckets + frameEnd flush),
+  `served/fsys.zig` (`new` walk → makeNewWindow), `src/accept.zig`. Contract:
+  `agents/contracts/phase12b-paper-fidelity.md`. Pipeline: fable spec → opus code →
+  sonnet tests → sonnet run → fable review, loop.
 
 ## Current state (update in place)
 
@@ -73,11 +79,12 @@ authorization for this file only). Prune freely — git keeps history.
   integration wave); +Errors window (rewire ed.warnings); host-command allow-list
   (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
   carve-out; OQ-BLD-2 ABI codegen. **Found 2026-09-13 by re-verifying the paper
-  (R-02 v4)**: `Look` builtin missing from exectab (R-EDIT-07, S-05 §4 list it);
-  `makenewwindow` placement not ported — `New` always uses the executing tag's column,
-  no active-column / emptiest-else-biggest window choice (R-EDIT-23); B2 bare-click
-  should expand to the *file-name-character* run, not alnum (R-EDIT-24); `+Errors`
-  must be per-directory `dir/+Errors` (R-EDIT-21) when the warnings rewire lands.
+  (R-02 v4), now IN FLIGHT as phase 12b**: `Look` builtin missing from exectab
+  (R-EDIT-07); `makenewwindow`/`activecol` not ported — applies to AUTO-created windows
+  (served `new` walk, future openfile/plumb), NOT to `New` (look.c:922 uses
+  `coladd(et->col)` — the Zig `New` is faithful); `+Errors` window per directory
+  (R-EDIT-21). (Two earlier claims were wrong and are withdrawn: B2 expansion already
+  uses `isexecc`; `New`'s column choice is correct.)
 - **Open questions**: OQ-IN-1 touch chord-paste; OQ-BLD-2 ABI codegen; OQ-EDIT-4
   vim-motion layer (design settled, S-02 §6 `kbd hold` — implementation DEFERRED by
   user, don't build unprompted).
