@@ -403,7 +403,7 @@ test "elog: out of sequence warns once and proceeds" {
     // Each of the two violations flushes the then-current pending head, so all
     // three records (10, 2, 1) end up in `log` (append order), with only the
     // unrelated final insert (100) left pending — but exactly ONE warning.
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, h.ed.warnings.items, "changes out of sequence"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, h.ed.warningText(), "changes out of sequence"));
     try testing.expectEqual(@as(usize, 3), h.elog.log.items.len);
     try testing.expectEqual(@as(usize, 10), h.elog.log.items[0].insert.q0);
     try testing.expectEqual(@as(usize, 2), h.elog.log.items[1].insert.q0);

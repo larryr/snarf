@@ -622,7 +622,7 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 2, .msec = 2000 });
     try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 0, .msec = 2000 });
     try testing.expectEqual(@as(usize, 2), col.w.items.len);
-    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "notes modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "notes modified") != null);
     try testing.expect(!w2.dirty);
     try testing.expect(w2.body.file.mod);
 
@@ -635,10 +635,27 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     try testing.expectEqual(col.r.max.y, w1.r.max.y);
     try ed.frameEnd(d);
 
+    // --- PHASE-12b SPOT-CHECK (R-P12b-6) -------------------------------------
+    // The frameEnd above now also drains the warning buffer (util.c:211-258), so
+    // the first strike's "notes modified" surfaces in a `+Errors` window. That is
+    // the ONLY change to this scene: same two-window-then-one sequence, same w1
+    // geometry at every assert above (all of which precede this flush).
+    try testing.expectEqual(@as(usize, 2), col.w.items.len);
+    const errw = col.w.items[1];
+    try testing.expectEqualStrings("+Errors", errw.body.file.name.items);
+    try testing.expectEqualStrings("notes modified\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &rbuf));
+    try testing.expect(!errw.dirty); // util.c:250
+    try testing.expect(!errw.filemenu); // util.c:99
+    try testing.expect(!ed.warningsPending()); // the buffer is drained
+    // The row has ONE column here, so "rightmost" is that column (util.c:98).
+    try testing.expectEqual(col, errw.col.?);
+
     // FROZEN-ACCEPT-9: B2 exec scene — tag Snarf against the body selection,
-    // live-tag Undo, two-strike Del, neighbor regrowth. NEW freeze (R-P2-7),
-    // spot-checks above.
-    try testing.expectEqual(@as(u64, 0xb52b86b54d50d100), hb.hash());
+    // live-tag Undo, two-strike Del, neighbor regrowth, AND (new in phase 12b)
+    // the `+Errors` window the two-strike warning now opens. RE-FROZEN per
+    // R-P12b-6; the previous hash was 0xb52b86b54d50d100 (phase 9 .. 12, when
+    // `ed.warnings` was an invisible sink). Spot-checks immediately above.
+    try testing.expectEqual(@as(u64, 0x8ca565d7961f44cf), hb.hash());
 }
 
 test "phase-9: B3 look scene — click cycles occurrences with wraparound" {

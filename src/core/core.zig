@@ -13,6 +13,12 @@ pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
+/// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
+/// helper — phase 12b, R-EDIT-23.
+pub const place = @import("place.zig");
+/// The `+Errors` window and the warning flush (util.c:79-258) — phase 12b,
+/// R-EDIT-21. Named for the C's concept, not for `ninep.errors`.
+pub const errors = @import("errors.zig");
 pub const exec = @import("exec/exec.zig");
 // Edit language (phase 10). One public type per line, matching the flat style
 // above; later 10x waves add ast/parse/addr/Elog/cmd here.
