@@ -6,6 +6,7 @@ see [`../spec/07-source-layout.md`](../spec/07-source-layout.md) §1).
 
 | File | What | Size |
 |------|------|-----:|
+| [`acme.md`](acme.md) | The paper as Markdown, generated from `acme.ms` by [`ms2md.py`](ms2md.py); same figures | 50 KiB |
 | [`acme.html`](acme.html) | The paper, HTML rendering (figures inline) | 100 KiB |
 | [`acme.pdf`](acme.pdf) | The paper, 10-page PDF | 114 KiB |
 | [`acme.ms`](acme.ms) | troff `-ms` source — the authoritative text | 49 KiB |
@@ -21,6 +22,10 @@ reference cannot rot and needs no external host (that site is unreachable from s
 our build sandboxes). Not copied: `acme.ps` (600 KiB PostScript, redundant with the PDF)
 and the raw Plan 9 `acme.fig1`/`acme.fig2` image files (the GIFs are their renderings).
 
+`acme.md` is a derived file, not part of the distribution: regenerate it with
+`python3 ms2md.py acme.ms acme.md` rather than editing it by hand (the converter handles
+exactly the `-ms` macros this paper uses).
+
 To re-fetch or verify:
 
 ```sh
@@ -34,6 +39,14 @@ Part of the Plan 9 4th Edition release, whose rights were transferred to the Pla
 Foundation and released under the MIT License (2021); the original Lucent Public
 License also applies to the 2002 distribution. Copyright © Lucent Technologies /
 Plan 9 Foundation. Redistributed unmodified.
+
+## Related papers
+
+Other Bell Labs writings that bear on ACME live in subdirectories, one per publication
+(`sam/`, `plumb/`, `8half/`, `man/`), each with its own README giving provenance and
+license. [`PAPERS-INDEX.md`](PAPERS-INDEX.md) lists everything found, copied or not, and
+its status: only Pike-authored papers are *definitive* references; everything else is
+supplementary.
 
 ## How we use it
 
