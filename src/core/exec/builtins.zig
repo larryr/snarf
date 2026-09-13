@@ -3,22 +3,28 @@
 //! dispatch table, not a struct-file. Ported from larryr/plan9port@337c6ac; cite
 //! as `exec.c:NN`.
 //!
-//! The C's 28-entry table reduces to the ten builtins that need no served
-//! namespace or session semantics: Cut, Del, Delcol, Delete, New, Newcol, Paste,
-//! Redo, Snarf, Undo (exec.c:98-130, alphabetical). Deferred per R-P9-7: the
+//! The C's 28-entry table reduces to the builtins that need no served namespace
+//! or session semantics: Cut, Del, Delcol, Delete, Look, New, Newcol, Paste,
+//! Redo, Snarf, Undo (exec.c:98-130, alphabetical), plus the port's own
+//! Reconnect and the Edit language. Deferred per R-P9-7: the
 //! external `run` path (unknown word ⇒ silent no-op) and Sort/Zerox/Exit (need
 //! multi-Text-per-File or session work). The command functions live in the
 //! sibling `cmd_edit.zig`/`cmd_window.zig`.
 //!
 //! The `mark` column mirrors exec.c exactly: only Cut/Paste mark here (Send is
 //! deferred); Snarf does NOT mark (no edit); Undo/Redo manage seq themselves;
-//! Del/New/Newcol/Delcol never mark.
+//! Del/Look/New/Newcol/Delcol never mark.
+//!
+//! `lookup` (exec.zig:111-119) is the C's LINEAR scan (exec.c:141-145), so table
+//! order is presentation only — it is kept alphabetical to match exec.c, not
+//! because any search depends on it (verified for R-P12b, §3a "verify").
 //!
 //! Imports: `std` + sibling core files only (S-07 §6 — never dev/shim).
 const std = @import("std");
 const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
 const cmd_edit = @import("cmd_edit.zig");
+const cmd_look = @import("cmd_look.zig");
 const cmd_origin = @import("cmd_origin.zig");
 const cmd_window = @import("cmd_window.zig");
 const edit = @import("../edit/edit.zig");
@@ -58,6 +64,9 @@ pub const exectab = [_]Entry{
     // exec.c:106 — Edit manages its own transaction (seq++ in the builtin,
     // File.mark lazily in the first Elog.apply), so mark=FALSE (R-P10-8).
     .{ .name = "Edit", .fn_ = edit.builtin, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:106
+    // exec.c:116 — Look searches the executing window's body (R-EDIT-07); both
+    // flags are XXX-unused (exec.c:1080-1081 `USED(_0); USED(_1);`).
+    .{ .name = "Look", .fn_ = cmd_look.look, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:116
     .{ .name = "New", .fn_ = cmd_window.new, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:117 (flag1/flag2 XXX unused)
     .{ .name = "Newcol", .fn_ = cmd_window.newcol, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:118 (flag1/flag2 XXX unused)
     // exec.c:119 — flag2 is the C's XXX==2, TRUTHY (dat.h:488-493): tobody=TRUE is
@@ -73,23 +82,38 @@ pub const exectab = [_]Entry{
 
 test "builtins: table shape and flags match exec.c" {
     const testing = std.testing;
-    // Grew by one row again (R-P12-7): Reconnect sits alphabetically between
-    // Paste and Redo. Earlier growth: Edit, between Delete and New (R-P10-8).
-    try testing.expectEqual(@as(usize, 12), exectab.len);
+    // Grew by one row again (R-P12b-1): Look sits alphabetically between Edit
+    // and New, exactly as exec.c:116 sits between :106 and :117. Earlier growth:
+    // Reconnect (R-P12-7), Edit (R-P10-8).
+    try testing.expectEqual(@as(usize, 13), exectab.len);
     // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Edit", "New", "Newcol", "Paste", "Reconnect", "Redo", "Snarf", "Undo" };
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Edit", "Look", "New", "Newcol", "Paste", "Reconnect", "Redo", "Snarf", "Undo" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
     // Cut marks + snarfs + cuts; Snarf marks NOT, snarfs, does not cut.
     try testing.expect(exectab[0].mark and exectab[0].flag1 and exectab[0].flag2); // Cut
-    try testing.expect(!exectab[10].mark and exectab[10].flag1 and !exectab[10].flag2); // Snarf
+    try testing.expect(!exectab[11].mark and exectab[11].flag1 and !exectab[11].flag2); // Snarf
     // Paste's flag2 (tobody) is the truthy XXX.
-    try testing.expect(exectab[7].mark and exectab[7].flag1 and exectab[7].flag2); // Paste
+    try testing.expect(exectab[8].mark and exectab[8].flag1 and exectab[8].flag2); // Paste
     // Undo/Redo differ only in flag1 (isundo).
-    try testing.expect(exectab[11].flag1 and !exectab[9].flag1); // Undo vs Redo
+    try testing.expect(exectab[12].flag1 and !exectab[10].flag1); // Undo vs Redo
     // Delete = Del with flag1 (skip-clean twin).
     try testing.expect(exectab[3].flag1 and !exectab[1].flag1);
     // Edit manages its own seq, so it never marks (R-P10-8).
     try testing.expect(!exectab[4].mark and std.mem.eql(u8, exectab[4].name, "Edit"));
+    // Look never marks and never edits; both flags are unused (exec.c:116).
+    try testing.expect(!exectab[5].mark and !exectab[5].flag1 and !exectab[5].flag2);
     // Reconnect touches the session, never a buffer: it marks nothing.
-    try testing.expect(!exectab[8].mark and !exectab[8].flag1 and !exectab[8].flag2);
+    try testing.expect(!exectab[9].mark and !exectab[9].flag1 and !exectab[9].flag2);
+}
+
+test "builtins: Look is named in the table and resolves to cmd_look.look (T6)" {
+    const testing = std.testing;
+    var found = false;
+    for (&exectab) |*e| {
+        if (std.mem.eql(u8, e.name, "Look")) {
+            found = true;
+            try testing.expectEqual(&cmd_look.look, e.fn_);
+        }
+    }
+    try testing.expect(found);
 }

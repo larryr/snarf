@@ -562,8 +562,8 @@ test "column: clean strikes all dirty windows in one pass" {
     try testing.expect(!c.clean(&ed));
     try testing.expect(!w1.dirty);
     try testing.expect(!w2.dirty);
-    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "one modified") != null);
-    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "two modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "one modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "two modified") != null);
 
     // The second call passes: both dirty flags already cleared.
     try testing.expect(c.clean(&ed));

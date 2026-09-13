@@ -36,11 +36,11 @@ const KF: u21 = 0xF000;
 const Khome: u21 = KF | 0x0D;
 const Kup: u21 = KF | 0x0E;
 const Kpgup: u21 = KF | 0x0F;
-const Kleft: u21 = KF | 0x11;
-const Kright: u21 = KF | 0x12;
+pub const Kleft: u21 = KF | 0x11;
+pub const Kright: u21 = KF | 0x12;
 const Kpgdown: u21 = KF | 0x13;
 const Kend: u21 = KF | 0x18;
-const Kdown: u21 = 0x80; // also Kview
+pub const Kdown: u21 = 0x80; // also Kview
 const Kbs: u21 = 0x08;
 const Kdel: u21 = 0x7f;
 /// Wheel-notch scroll runes (dat.h:562-563). `pub` so the Editor's wheel arm can

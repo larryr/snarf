@@ -26,7 +26,7 @@ const std = @import("std");
 const ninep = @import("ninep");
 const Editor = @import("../Editor.zig");
 const Window = @import("../Window.zig");
-const cmd_window = @import("../exec/cmd_window.zig");
+const place = @import("../place.zig");
 const xfid = @import("xfid.zig");
 
 const Server = ninep.server.Server;
@@ -166,17 +166,15 @@ pub const Fsys = struct {
     /// The column a walk-to-`new` mints its window in (R-P10-I): `ed.seltext`'s
     /// column, else the first column of `ed.row`, else an error (no column
     /// creation from a 9P walk in v1). No `cnewwindow` channel — a direct call.
+    /// The `cnewwindow` rendezvous (acme.c:869-880 `newwindowthread`): a 9P walk
+    /// to `new` mints a window with `makenewwindow(nil)` + `winsettag`. There is
+    /// no channel in the port — `place.makeNewWindow` runs inline — but the
+    /// PLACEMENT is now the C's (util.c:449-495, R-EDIT-23): active column, else
+    /// `seltext`'s, else the last one, and inside it the emptiest-or-biggest
+    /// spot. Before phase 12b this was an approximation (`seltext`'s column, else
+    /// the FIRST column, always stealing the bottom half).
     fn newWindow(self: *Fsys) OpError!*Window {
-        var col: ?*@import("../Column.zig") = null;
-        if (self.ed.seltext) |t| {
-            if (t.w) |wp| col = wp.col;
-        }
-        if (col == null) {
-            const row = self.ed.row orelse return error.IoError;
-            if (row.col.items.len == 0) return error.IoError;
-            col = row.col.items[0];
-        }
-        return cmd_window.makeWindow(col.?, "") catch return error.IoError;
+        return place.makeNewWindow(self.ed, null) catch return error.IoError;
     }
 
     fn fsysOf(ctx: *anyopaque) *Fsys {
@@ -669,6 +667,28 @@ test "served: walk new creates window" {
     var idbuf: [16]u8 = undefined;
     const idcol = try std.fmt.bufPrint(&idbuf, "{d:>11} ", .{newid});
     try testing.expect(std.mem.startsWith(u8, rr.body.rread.data, idcol));
+}
+
+test "served: walk new places the window per makeNewWindow's activecol (T15)" {
+    // A booted tree with a SECOND column; setting `ed.activecol` to it must
+    // steer the served `new` walk there too (place.makeNewWindow, util.c:
+    // 454-455), not just the first/only column the pre-12b approximation used.
+    const h = try Harness.create(testing.allocator, "one", "hello\n");
+    defer h.destroy();
+    try h.connect();
+
+    const c1 = h.tree.row.col.items[0];
+    const c2 = (try h.tree.row.add(-1)).?;
+    h.ed.activecol = c2;
+    try testing.expectEqual(@as(usize, 1), c1.w.items.len);
+    try testing.expectEqual(@as(usize, 0), c2.w.items.len);
+
+    const rw = try h.walk(0, 1, &.{"new"});
+    try testing.expect(rw.body == .rwalk);
+
+    try testing.expectEqual(@as(usize, 1), c1.w.items.len); // untouched
+    try testing.expectEqual(@as(usize, 1), c2.w.items.len); // the served window landed here
+    try testing.expectEqual(c2, h.ed.activecol.?);
 }
 
 test "served: root dir read lists sorted window dirs" {

@@ -27,7 +27,10 @@ const typing = @import("text/typing.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Row = @import("Row.zig");
+const Column = @import("Column.zig");
 const Window = @import("Window.zig");
+const errors = @import("errors.zig");
+const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Regx = @import("edit/Regx.zig");
@@ -104,6 +107,19 @@ seltext: ?*Text = null,
 /// by `getArg` (9c); written by the B1 press (9d) and Snarf; cleared by
 /// `dropTextRefs`.
 argtext: ?*Text = null,
+/// acme's `activecol` (dat.c:37): the column a new window goes to when nobody
+/// pointed at one — read by `place.makeNewWindow` (util.c:454-455) and written by
+/// exactly three events in the C:
+///   * a B1 PRESS on a Text that has a column (acme.c:659, "button 1 only");
+///   * any typed rune except `Kdown`/`Kleft`/`Kright` (acme.c:487-488 —
+///     "scrolling doesn't change activecol");
+///   * `colcloseall` nils it when the column it names is destroyed
+///     (cols.c:216-217) — the port does that from `Row.close` via `dropColRef`,
+///     the R-P9-13 dangling-pointer hygiene lineage.
+/// The C's fourth writer, the scrollbar drag arm (acme.c:640 `rowdragcol`/
+/// `coldragwin`), has no port (R-P8-5, drag deferred). A global in the C; a field
+/// here (S-07 P-3, no globals).
+activecol: ?*Column = null,
 /// The Text a mouse gesture is PINNED to, captured at B1-down and held until all
 /// buttons release (R-P8-11). While non-null every mouse sample routes here
 /// unconditionally, so a chord that drifts off the window still edits the Text it
@@ -127,11 +143,13 @@ snarf: std.ArrayList(u8) = .empty,
 /// pattern from an earlier `Edit`). Added by wave 10a-A2 (R-P10-5); owned by
 /// `ed.allocator`, `deinit`'ed below.
 edit_lastpat: std.ArrayList(u21) = .empty,
-/// v1 warning sink (R-P9-6): `warning()` appends formatted lines here. acme's
-/// `warning()` writes the `+Errors` window (util.c:259+) via `flushwarnings` —
-/// that needs the served namespace, so v1 buffers on the Editor. FLAG: rewire to
-/// +Errors in the served-tree phase.
-warnings: std.ArrayList(u8) = .empty,
+/// The buffered warning list — the C's `static Warning *warnings` (util.c:195),
+/// one bucket per directory context (R-EDIT-21). `warning()` appends to the `""`
+/// bucket (`warning(nil, …)`); `warningIn()` targets a directory. Drained by
+/// `errors.flushWarnings` from `frameEnd` into the `+Errors` windows — since
+/// phase 12b these messages are VISIBLE (they were an invisible sink through
+/// phase 12, R-P9-6). Read in tests through `warningText()`.
+warnings: std.ArrayList(errors.Warning) = .empty,
 /// The live colored B2/B3 sweep (`xselect`, text.c:1260-1341), non-null only while
 /// `mouse_state` is `.sweeping_b2`/`.sweeping_b3`. Paints a TEMPORARY colored
 /// overlay (never touches the frame's real `p0`/`p1`) that `select23End` fully
@@ -205,19 +223,58 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 pub fn deinit(self: *Editor) void {
     self.snarf.deinit(self.allocator);
     self.edit_lastpat.deinit(self.allocator);
+    for (self.warnings.items) |*wn| wn.deinit(self.allocator);
     self.warnings.deinit(self.allocator);
     self.regx.deinit();
     self.* = undefined;
 }
 
-/// `warning` (util.c:259+), v1 sink (R-P9-6): append a formatted line to
-/// `ed.warnings`. A warning must NEVER fail a command — OOM silently drops the
-/// message (the two-strike Del works regardless: the strike is `w.dirty=false`,
-/// not the message). The +Errors window / `flushwarnings` path is deferred.
+/// `warning(nil, fmt, …)` (util.c:260-273): buffer a formatted line for the
+/// plain `+Errors` window. A warning must NEVER fail a command — OOM silently
+/// drops the message (the two-strike Del works regardless: the strike is
+/// `w.dirty=false`, not the message).
 pub fn warning(ed: *Editor, comptime fmt: []const u8, args: anytype) void {
+    ed.warningIn("", fmt, args);
+}
+
+/// `warning(md, fmt, …)` (util.c:260-273) with a directory context — the
+/// `errorwinforwin` lineage (util.c:140-186): the message lands in
+/// `dir/+Errors` instead of `+Errors`. No live caller yet; the served tree and
+/// the host-command wave are the C's writers (`fsysrunproc`/`run`).
+pub fn warningIn(ed: *Editor, dir: []const u8, comptime fmt: []const u8, args: anytype) void {
     const line = std.fmt.allocPrint(ed.allocator, fmt, args) catch return;
     defer ed.allocator.free(line);
-    ed.warnings.appendSlice(ed.allocator, line) catch {};
+    const b = ed.warnBucket(dir) catch return;
+    b.text.appendSlice(ed.allocator, line) catch {};
+}
+
+/// `addwarningtext`'s bucket lookup (util.c:199-209): the bucket for `dir`,
+/// appended if this is the first message for that context.
+fn warnBucket(ed: *Editor, dir: []const u8) error{OutOfMemory}!*errors.Warning {
+    for (ed.warnings.items) |*wn| {
+        if (std.mem.eql(u8, wn.dir, dir)) return wn; // util.c:201-205
+    }
+    const owned = try ed.allocator.dupe(u8, dir);
+    errdefer ed.allocator.free(owned);
+    try ed.warnings.append(ed.allocator, .{ .dir = owned, .text = .empty });
+    return &ed.warnings.items[ed.warnings.items.len - 1];
+}
+
+/// The pending text of the plain (`""`) warning bucket — the accessor the tests
+/// read now that `warnings` is a bucket list. Empty when nothing is pending.
+pub fn warningText(ed: *Editor) []const u8 {
+    for (ed.warnings.items) |*wn| {
+        if (wn.dir.len == 0) return wn.text.items;
+    }
+    return "";
+}
+
+/// True while any bucket still holds an unflushed message.
+pub fn warningsPending(ed: *Editor) bool {
+    for (ed.warnings.items) |*wn| {
+        if (wn.text.items.len != 0) return true;
+    }
+    return false;
 }
 
 /// `textclose`'s backpointer hygiene (text.c:109/113): nil any of
@@ -234,6 +291,13 @@ pub fn dropTextRefs(ed: *Editor, w: *Window) void {
             if (t == tag or t == body) @field(ed, name) = null;
         }
     }
+}
+
+/// `colcloseall`'s backpointer hygiene (cols.c:216-217): nil `activecol` when the
+/// column it names is about to be destroyed. Called by `Row.close` before the
+/// column is freed (same lineage as `dropTextRefs`, R-P9-13).
+pub fn dropColRef(ed: *Editor, c: *Column) void {
+    if (ed.activecol == c) ed.activecol = null;
 }
 
 /// True when device point `(x,y)` lies inside the half-open rect `r`.
@@ -394,6 +458,7 @@ pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
         ed.gesture_text = t;
         ed.argtext = t; // acme.c:656
         ed.seltext = t; // acme.c:657
+        if (place.colOf(t)) |c| ed.activecol = c; // acme.c:658-659 "button 1 only"
         try ed.runGesture(t, ev);
     } else if (b == B2 or b == B3) {
         ed.gesture_text = t;
@@ -636,6 +701,11 @@ pub fn handleKey(ed: *Editor, r: u21) !void {
         hit.text
     else
         (ed.focus orelse ed.text orelse return);
+    // acme.c:486-488: typing claims the active column — but "scrolling doesn't
+    // change activecol", so the three arrow/paging runes the C names are excluded.
+    if (r != typing.Kdown and r != typing.Kleft and r != typing.Kright) {
+        if (place.colOf(t)) |c| ed.activecol = c;
+    }
     try t.typeRune(ed, r);
     ed.needs_flush = true;
 }
@@ -651,6 +721,10 @@ pub fn handleKey(ed: *Editor, r: u21) !void {
 /// undo without a per-frame tag rewrite. `setTag1`'s minimal-splice guard keeps a
 /// change cheap; the cache keeps an idle frame free of tag reads/allocs.
 pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
+    // The C's main loop drains `cwarn` (acme.c:512-515) before it redraws;
+    // running the flush FIRST means a freshly minted `+Errors` window has its
+    // live tag composed by the sweep below, in this same frame (util.c:211-258).
+    try errors.flushWarnings(ed);
     if (ed.row) |row| {
         for (row.col.items) |c| {
             for (c.w.items) |w| {
@@ -1174,6 +1248,96 @@ const TwoWin = struct {
     }
 };
 
+/// A booted scene with a SECOND column (`c2`, carrying window `w2`), for the
+/// `activecol` tests (T7-T9) that need two distinct columns.
+const TwoCol = struct {
+    fx: Frame.TestFixture,
+    tree: boot.Tree,
+    ed: Editor,
+    c2: *Column,
+    w2: *Window,
+
+    fn init() !*TwoCol {
+        const a = testing.allocator;
+        const h = try a.create(TwoCol);
+        errdefer a.destroy(h);
+        h.fx = try Frame.TestFixture.init();
+        h.tree = try boot.boot(a, h.fx.disp, h.fx.font, proto.Rect.make(0, 0, 600, 460), .{
+            .win_name = "one",
+            .body = "hello\n",
+        });
+        h.c2 = (try h.tree.row.add(-1)).?;
+        h.w2 = try h.tree.addWindow("two", "world\n"); // lands in the LAST column (c2)
+        h.ed = Editor.init(a);
+        h.ed.row = h.tree.row;
+        return h;
+    }
+    fn deinit(h: *TwoCol) void {
+        const a = testing.allocator;
+        h.ed.deinit();
+        h.tree.deinit();
+        h.fx.deinit();
+        a.destroy(h);
+    }
+};
+
+test "editor: B1 press sets activecol; B2/B3 elsewhere leave it (T7)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c1 = h.tree.row.col.items[0];
+    const w1 = c1.w.items[0];
+
+    try testing.expect(ed.activecol == null);
+    const p1 = center(w1.body.fr.r);
+    try ed.handleMouse(mev(p1.x, p1.y, B1));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p1.x, p1.y, 0));
+
+    // A B3 click in the OTHER column must not steer activecol away from c1.
+    const p2 = center(h.w2.body.fr.r);
+    try ed.handleMouse(mev(p2.x, p2.y, B3));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p2.x, p2.y, 0));
+
+    // Neither does a B2 click there.
+    try ed.handleMouse(mev(p2.x, p2.y, B2));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p2.x, p2.y, 0));
+}
+
+test "editor: typed runes set activecol; Kdown/Kleft/Kright do not (T8)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c1 = h.tree.row.col.items[0];
+    const w1 = c1.w.items[0];
+
+    ed.mouse_pt = center(w1.body.fr.r);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey('x');
+    try testing.expectEqual(c1, ed.activecol.?);
+
+    ed.activecol = null;
+    try ed.handleKey(typing.Kdown);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey(typing.Kleft);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey(typing.Kright);
+    try testing.expect(ed.activecol == null);
+}
+
+test "editor: closing the active column nils activecol (T9)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c2 = h.c2;
+
+    ed.activecol = c2;
+    try h.tree.row.close(ed, c2, true); // rows.c close -> dropColRef (cols.c:216-217)
+    try testing.expect(ed.activecol == null);
+}
+
 test "editor: hit-test routes clicks across two windows" {
     const h = try TwoWin.init();
     defer h.deinit();
@@ -1593,7 +1757,7 @@ test "exec: Del dirty two-strikes" {
     try testing.expectEqual(@as(usize, 2), c.w.items.len);
     try testing.expect(!w1.dirty);
     try testing.expect(w1.body.file.mod);
-    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "one modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "one modified") != null);
 
     // An edit between strikes re-arms dirty (text.c:378 hook).
     ed.seq += 1;

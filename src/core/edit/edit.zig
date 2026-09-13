@@ -191,7 +191,7 @@ const EH = struct {
         try testing.expectEqual(q1, h.text.q1);
     }
     fn warnings(h: *EH) []const u8 {
-        return h.ed.warnings.items;
+        return h.ed.warningText();
     }
 };
 
@@ -481,7 +481,8 @@ test "edit: builtin row" {
     const ei = edit_idx.?;
     try testing.expect(!builtins.exectab[ei].mark);
     try testing.expectEqualStrings("Delete", builtins.exectab[ei - 1].name);
-    try testing.expectEqualStrings("New", builtins.exectab[ei + 1].name);
+    // Phase 12b inserted Look (exec.c:116) between Edit (:106) and New (:117).
+    try testing.expectEqualStrings("Look", builtins.exectab[ei + 1].name);
 
     // Inline-arg path: sweeping "Edit ,d" in the tag runs `,d` against the BODY.
     {

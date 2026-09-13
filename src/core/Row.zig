@@ -174,6 +174,7 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
     var r = c.r; // rows.c:216
 
     if (dofree) {
+        ed.dropColRef(c); // cols.c:216-217 (colcloseall: `activecol = nil`)
         for (c.w.items) |w| ed.dropTextRefs(w); // R-P9-13; text.c:109/113
         c.deinit(); // colcloseall (cols.c:211-227): cascades tag + every window
         a.destroy(c);

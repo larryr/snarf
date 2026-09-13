@@ -49,6 +49,11 @@ maxlines: usize = 0,
 /// 9d lands, the `frameEnd` tag sweep. Distinct from `file.mod` (which survives a
 /// clean strike so the mod dot stays).
 dirty: bool = false,
+/// `w->filemenu` (dat.h:241; set TRUE by `wininit`, wind.c:81). Gates the
+/// Undo/Redo/Put words of the tag menu (wind.c:505-519). Only `+Errors` windows
+/// clear it in v1 (util.c:99) — acme also clears it for a window whose body is
+/// written by an external client (xfid.c:121/810).
+filemenu: bool = true,
 /// Cached tag-presence tuple for the `frameEnd` sweep (R-P9-4/§3f): the last
 /// `{undoSeq()!=0, redoSeq()!=0, file.mod}` `setTag1` was called for. The field
 /// only — the sweep that reads/updates it is wave 9d.
@@ -104,6 +109,8 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     try w.body.scrDraw(); // wind.c:75
     w.r = r; // wind.c:76
     try w.drawButton(); // wind.c:77-80
+    w.filemenu = true; // wind.c:81 (the field is default-true; set it explicitly
+    // because `Column.add` inits a raw heap Window and `init` assigns every field)
     w.maxlines = w.body.fr.maxlines; // wind.c:82
 }
 
@@ -329,10 +336,14 @@ pub fn setTag1(w: *Window) Error!void {
     defer new.deinit(a);
     try appendUtf8AsRunes(&new, a, w.body.file.name.items); // wind.c:500-502 name
     try appendAsciiRunes(&new, a, " Del Snarf"); // wind.c:503
-    // filemenu is true for a normal window in v1 (no dir/scratch windows yet):
-    if (w.body.file.undoSeq() != 0) try appendAsciiRunes(&new, a, " Undo"); // wind.c:506-508
-    if (w.body.file.redoSeq() != 0) try appendAsciiRunes(&new, a, " Redo"); // wind.c:510-512
-    // Put (wind.c:514-518) / Get (wind.c:520-522) FLAG-deferred: no putseq/isdir.
+    // wind.c:505: the whole Undo/Redo/Put menu hangs off `filemenu` (FALSE for
+    // the generated `+Errors` windows, util.c:99).
+    if (w.filemenu) {
+        if (w.body.file.undoSeq() != 0) try appendAsciiRunes(&new, a, " Undo"); // wind.c:506-508
+        if (w.body.file.redoSeq() != 0) try appendAsciiRunes(&new, a, " Redo"); // wind.c:510-512
+        // Put (wind.c:514-518) FLAG-deferred: no putseq. Get (wind.c:520-522) is
+        // outside the filemenu arm in the C but equally deferred (no isdir).
+    }
     try appendAsciiRunes(&new, a, " |"); // wind.c:524
     // user-suffix preservation: k = just past the old '|'; else append " Look "
     // for a fresh window (wind.c:526-535).
@@ -682,7 +693,7 @@ test "window: setTag1 recomposition" {
     }
 }
 
-test "window: clean two-strikes on dirty" {
+test "window: clean two-strikes on dirty, read via the pending-warnings accessor (T21)" {
     const a = testing.allocator;
     const h = try WinHarness.init("hello\n", win_rect);
     defer h.deinit();
@@ -702,17 +713,17 @@ test "window: clean two-strikes on dirty" {
     try testing.expect(!w.clean(&ed, false));
     try testing.expect(!w.dirty);
     try testing.expect(w.body.file.mod); // the mod dot remains
-    try testing.expect(std.mem.indexOf(u8, ed.warnings.items, "f modified") != null);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "f modified") != null);
 
     // Second strike passes (dirty already cleared).
     try testing.expect(w.clean(&ed, false));
 
     // A later body edit re-arms dirty, so the next Del warns again.
-    const warn_len = ed.warnings.items.len;
+    const warn_len = ed.warningText().len;
     h.body_file.mark(2);
     try w.body.insertAt(0, "Y", true);
     try testing.expect(w.dirty);
     try testing.expect(!w.clean(&ed, false));
     try testing.expect(!w.dirty);
-    try testing.expect(ed.warnings.items.len > warn_len); // warned again
+    try testing.expect(ed.warningText().len > warn_len); // warned again
 }

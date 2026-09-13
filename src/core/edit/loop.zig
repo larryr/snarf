@@ -338,7 +338,7 @@ const EH = struct {
         try testing.expectEqual(q1, h.text.q1);
     }
     fn warnings(h: *EH) []const u8 {
-        return h.ed.warnings.items;
+        return h.ed.warningText();
     }
 };
 

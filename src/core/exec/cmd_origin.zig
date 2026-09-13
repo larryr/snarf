@@ -54,7 +54,7 @@ test "Reconnect: with no hook installed it warns and does nothing else" {
     var t: Text = undefined;
 
     try reconnect(&ed, &t, null, null, false, false, "");
-    try testing.expectEqualStrings("Reconnect: no origin connection\n", ed.warnings.items);
+    try testing.expectEqualStrings("Reconnect: no origin connection\n", ed.warningText());
 }
 
 test "Reconnect: with a hook installed it re-dials and stays silent" {
@@ -75,7 +75,7 @@ test "Reconnect: with a hook installed it re-dials and stays silent" {
     try reconnect(&ed, &t, null, null, false, false, "");
     try testing.expectEqual(@as(usize, 1), spy.calls);
     // The outcome line comes from the platform's poll, not from the builtin.
-    try testing.expectEqual(@as(usize, 0), ed.warnings.items.len);
+    try testing.expectEqual(@as(usize, 0), ed.warningText().len);
 
     // Repeatable: a second Reconnect re-dials again (R-P12-7, no rate limit).
     try reconnect(&ed, &t, null, null, false, false, "");
