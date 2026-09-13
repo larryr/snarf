@@ -6,8 +6,10 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-05 late — phase 12 merged `34bb36c`, all branches cleaned;
-  remote has only `main`)*
+- **`docs/acme-papers`** (pushed `a0cf25c`, 2026-09-13, larry's Mac) — owns `docs/acme/**`
+  and `docs/requirements/02-editor-functional.md` (R-02 v4). Docs only; ready to merge
+  after Larry's look. (`docs-acme-paper` on the remote is a stale, fully-merged branch —
+  proxy blocks deletion; ignore.)
 
 ## Current state (update in place)
 
@@ -70,7 +72,12 @@ authorization for this file only). Prune freely — git keeps history.
   clipboard; Zerox; Sort; Exit; Shift-B3 reverse look + dot=addr ctl (small
   integration wave); +Errors window (rewire ed.warnings); host-command allow-list
   (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
-  carve-out; OQ-BLD-2 ABI codegen.
+  carve-out; OQ-BLD-2 ABI codegen. **Found 2026-09-13 by re-verifying the paper
+  (R-02 v4)**: `Look` builtin missing from exectab (R-EDIT-07, S-05 §4 list it);
+  `makenewwindow` placement not ported — `New` always uses the executing tag's column,
+  no active-column / emptiest-else-biggest window choice (R-EDIT-23); B2 bare-click
+  should expand to the *file-name-character* run, not alnum (R-EDIT-24); `+Errors`
+  must be per-directory `dir/+Errors` (R-EDIT-21) when the warnings rewire lands.
 - **Open questions**: OQ-IN-1 touch chord-paste; OQ-BLD-2 ABI codegen; OQ-EDIT-4
   vim-motion layer (design settled, S-02 §6 `kbd hold` — implementation DEFERRED by
   user, don't build unprompted).
@@ -134,6 +141,18 @@ authorization for this file only). Prune freely — git keeps history.
   the S-07 survey table — don't recount.
 
 ## Session log (newest first)
+
+### 2026-09-13 — acme paper → markdown, related papers, R-02 re-verification (local, larry's Mac)
+- `docs/acme/acme.md` generated from `acme.ms` by new `docs/acme/ms2md.py` (regenerate,
+  don't hand-edit). Subagent archived Pike's sam, plumb, 8½ papers + 28 Plan 9/plan9port
+  man pages under `docs/acme/{sam,plumb,8half,man}/` from the pinned MIT forks;
+  `docs/acme/PAPERS-INDEX.md` records copied/not-copied and the rule **only
+  Pike-authored = definitive**, everything else supplementary (user direction).
+- Re-verified paper semantics vs requirements + code: mouse language, chords, undo,
+  live tags, served tree all faithful. R-02 → v4: fixed R-EDIT-02 (live tag) and
+  R-EDIT-03 (B3 not B2 opens entries); added R-EDIT-20..25 (directory context, +Errors,
+  point-to-type, placement heuristics, single-click expansion, no-warp divergence).
+  Implementation gaps → backlog above. Branch `docs/acme-papers`, not merged.
 
 ### 2026-09-05 (later) — phase 12 built + merged (local, larry's Mac)
 - Origin-server logging landed first (user request): stdout/stderr split (`e69d451`),
