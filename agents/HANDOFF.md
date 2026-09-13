@@ -121,7 +121,13 @@ authorization for this file only). Prune freely — git keeps history.
   fork (`raw.githubusercontent.com/larryr/plan9/<full-sha>/…`; short SHAs 404 there).
 - **Reference forks** (pinned, cite by SHA — see CLAUDE.md): `larryr/plan9port@337c6ac`,
   `larryr/plan9@ed1a9c2`. Local full clones: `~/proj/plan9port`, `~/proj/plan9` (tips
-  already AT the pinned SHAs; macOS case-collision dirty entries are harmless). Remote:
+  already AT the pinned SHAs; macOS case-collision dirty entries are harmless).
+  **plan9port is BUILT on larry's Mac (2026-09-13, `./INSTALL`)**: `~/proj/plan9port/bin/`
+  holds 267 binaries incl. `devdraw` and `acme` (arm64 Mach-O) at the pinned SHA — the
+  peer for the ADR-0005 native-host spike and a live acme to compare behavior against.
+  Use `PLAN9=~/proj/plan9port`, `PATH=$PATH:$PLAN9/bin`. INSTALL rewrites `bin/9`,
+  `bin/9.rc`, `bin/9fs` in place (paths) — those dirty entries are expected; never
+  reset them. Homebrew no longer ships a plan9port formula. Remote:
   clone shallow to `/workspace/…`. WebFetch of raw.githubusercontent.com works for
   public spot-reads without attaching.
 - **Remote sandbox network**: ziglang.org, github releases, kroki.io blocked; apt +
