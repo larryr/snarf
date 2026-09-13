@@ -6,8 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-13 — phase 12b `96d7cb5` and docs/acme-papers `f6ef98a` merged;
-  remote has only `main`)*
+- **`phase12c`** (worktree `../snarf-wt/phase12c`, 2026-09-14, larry's Mac, local only) —
+  canvas fills the browser window + live resize at DPR 1 (R-GFX-05 resize half). Owns
+  `web/index.html`, `web/shim.js`, `tools/smoke_wasm.mjs`, `src/shim/abi.zig` (ABI v5:
+  `init(w,h)`, `EventKind.resize=8`), `src/dev/draw_backend.zig`, `src/dev/draw_canvas.zig`,
+  `src/dev/draw.zig` (refresh), `src/draw/Display.zig` (`getWindow`), `src/core/boot.zig`
+  (`Tree.resize`), `src/main_wasm.zig`. Contract `agents/contracts/phase12c-canvas-resize.md`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
