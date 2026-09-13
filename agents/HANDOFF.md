@@ -6,10 +6,8 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`docs/acme-papers`** (pushed `a0cf25c`, 2026-09-13, larry's Mac) — owns `docs/acme/**`
-  and `docs/requirements/02-editor-functional.md` (R-02 v4). Docs only; ready to merge
-  after Larry's look. (`docs-acme-paper` on the remote is a stale, fully-merged branch —
-  proxy blocks deletion; ignore.)
+- *(none as of 2026-09-13 — phase 12b `96d7cb5` and docs/acme-papers `f6ef98a` merged;
+  remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
@@ -157,9 +155,11 @@ authorization for this file only). Prune freely — git keeps history.
   live tags, served tree all faithful. R-02 → v4: fixed R-EDIT-02 (live tag) and
   R-EDIT-03 (B3 not B2 opens entries); added R-EDIT-20..25 (directory context, +Errors,
   point-to-type, placement heuristics, single-click expansion, no-warp divergence).
-  Implementation gaps → backlog above. Branch `docs/acme-papers`, not merged.
+  Implementation gaps → backlog above. Docs branch merged `f6ef98a`.
 - Phase 12b (same day, later): the three real gaps built and merged `96d7cb5` via the
-  full pipeline (see Current state). Docs branch `docs/acme-papers` still awaits Larry.
+  full pipeline (see Current state). Local `git push --delete` of merged remote branches
+  WORKED from larry's Mac this session (auto mode) — the classifier block noted under
+  Environment is not absolute; try it before falling back to `! <cmd>`.
 
 ### 2026-09-05 (later) — phase 12 built + merged (local, larry's Mac)
 - Origin-server logging landed first (user request): stdout/stderr split (`e69d451`),
