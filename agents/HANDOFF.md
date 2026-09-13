@@ -10,18 +10,21 @@ authorization for this file only). Prune freely — git keeps history.
   and `docs/requirements/02-editor-functional.md` (R-02 v4). Docs only; ready to merge
   after Larry's look. (`docs-acme-paper` on the remote is a stale, fully-merged branch —
   proxy blocks deletion; ignore.)
-- **`phase12b`** (worktree `../snarf-wt/phase12b`, 2026-09-13, larry's Mac, NOT yet
-  pushed) — owns `src/core/exec/{cmd_look,cmd_window,builtins}.zig`, new
-  `src/core/errors.zig`, `Editor.zig` (activecol + warning buckets + frameEnd flush),
-  `served/fsys.zig` (`new` walk → makeNewWindow), `src/accept.zig`. Contract:
-  `agents/contracts/phase12b-paper-fidelity.md`. Pipeline: fable spec → opus code →
-  sonnet tests → sonnet run → fable review, loop.
+- *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12 are MERGED to `main`; `main` is green.**
-  522/522 tests, node smoke 20/20, `zig fmt` clean, Zig 0.16.0, wasm ≈ 1554 KiB (watch —
-  +48 KiB in phase 12).
+- **Phases 1–12 and 12b are MERGED to `main`; `main` is green.**
+  547/547 tests, node smoke 20/20, `zig fmt` clean, Zig 0.16.0, wasm ≈ 1581 KiB (watch —
+  +48 KiB in phase 12, +27 KiB in 12b).
+- **Phase 12b MERGED (`96d7cb5`, 2026-09-13)** — see agents/reports/phase12b-paper-fidelity.md:
+  `Look` builtin; `activecol` + `makenewwindow` placement (new `core/place.zig`, wired to
+  the served `new` walk; `New` unchanged, faithful); `+Errors` windows (new
+  `core/errors.zig`, warnings flushed from `frameEnd` into `dir/+Errors` in the rightmost
+  column — **ed.warnings is now visible in the UI**, two-strike Del shows its message).
+  FROZEN-ACCEPT-9 re-frozen (spot-checked), FROZEN-ACCEPT-12B new. First full run of the
+  user's pipeline: fable spec → opus code → sonnet tests → sonnet gate → fable review →
+  orchestrator applies nits → merge. Worked first pass; keep it.
 - **Phase 12 MERGED (`34bb36c`, 2026-09-05)** — see agents/reports/phase12-origin-mount.md:
   browser mounts the origin at `/mnt/origin` (ABI v4 ws imports, WsTransport,
   tick-driven OriginMount in NEW module `src/origin/`, 10 s absence tolerance,
@@ -76,15 +79,10 @@ authorization for this file only). Prune freely — git keeps history.
   gap); Get/Put via namespace (origin/opfs targets) + Dump/Load; `/mnt/host` picker +
   `/dev/storage`; Worker+SAB (transport swap, R-P6-1); touch profile; /dev/snarf
   clipboard; Zerox; Sort; Exit; Shift-B3 reverse look + dot=addr ctl (small
-  integration wave); +Errors window (rewire ed.warnings); host-command allow-list
+  integration wave); host-command allow-list
   (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
-  carve-out; OQ-BLD-2 ABI codegen. **Found 2026-09-13 by re-verifying the paper
-  (R-02 v4), now IN FLIGHT as phase 12b**: `Look` builtin missing from exectab
-  (R-EDIT-07); `makenewwindow`/`activecol` not ported — applies to AUTO-created windows
-  (served `new` walk, future openfile/plumb), NOT to `New` (look.c:922 uses
-  `coladd(et->col)` — the Zig `New` is faithful); `+Errors` window per directory
-  (R-EDIT-21). (Two earlier claims were wrong and are withdrawn: B2 expansion already
-  uses `isexecc`; `New`'s column choice is correct.)
+  carve-out; OQ-BLD-2 ABI codegen; `colgrow` (R-P12b-3, the `<2 lines` arm after
+  makeNewWindow); `textbsinsert` backspace processing on +Errors output.
 - **Open questions**: OQ-IN-1 touch chord-paste; OQ-BLD-2 ABI codegen; OQ-EDIT-4
   vim-motion layer (design settled, S-02 §6 `kbd hold` — implementation DEFERRED by
   user, don't build unprompted).
@@ -160,6 +158,8 @@ authorization for this file only). Prune freely — git keeps history.
   R-EDIT-03 (B3 not B2 opens entries); added R-EDIT-20..25 (directory context, +Errors,
   point-to-type, placement heuristics, single-click expansion, no-warp divergence).
   Implementation gaps → backlog above. Branch `docs/acme-papers`, not merged.
+- Phase 12b (same day, later): the three real gaps built and merged `96d7cb5` via the
+  full pipeline (see Current state). Docs branch `docs/acme-papers` still awaits Larry.
 
 ### 2026-09-05 (later) — phase 12 built + merged (local, larry's Mac)
 - Origin-server logging landed first (user request): stdout/stderr split (`e69d451`),
