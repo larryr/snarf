@@ -85,6 +85,13 @@ std-only, still no node).
 > (module-side staging buffer; 0 = refused) and `wsPush(id, kind, ptr, len)`,
 > kind ∈ {open=1, data=2, close=3, error=4} — queued only, drained on
 > `tick()`/`wake()` (no JS→WASM re-entrancy). ABI version = 4 (3→4).
+>
+> Revision log: 2026-09-14 (phase 12c) — `canvasResize` shipped as the EVENT the
+> sketch above predicted, not as an import: `init()` grew the display size
+> (`init(w, h)`, device pixels) and `EventKind.resize = 8` (`a` = width,
+> `b` = height) carries every later window resize. The shim sizes the canvas
+> backing store from `window.innerWidth/innerHeight` — at devicePixelRatio 1
+> (R-P12c-6) — before it calls either. ABI version = 5 (4→5).
 
 ## 5. CI (sketch)
 

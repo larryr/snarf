@@ -102,7 +102,73 @@ pub const Tree = struct {
         std.debug.assert(cols.len > 0);
         return tree.addWinTo(cols[cols.len - 1], name, body);
     }
+
+    /// The screen is now `r`: repaint it and re-tile the whole window tree
+    /// (R-GFX-05). This is acme's `MResize` arm after the reattach
+    /// (acme.c:548-555) — `getwindow` has already run on the caller's side (the
+    /// entry point, R-P12c-1), leaving exactly three C statements here:
+    ///
+    ///   * `draw(screen, screen->r, display->white, nil, ZP)` (acme.c:551) — the
+    ///     white ground under everything;
+    ///   * `rowresize(&row, screen->clipr)` (acme.c:555) — `Row.resize`, which
+    ///     scales the columns proportionally and re-lays every window;
+    ///   * `iconinit()` (acme.c:552) and `scrlresize()` (acme.c:553) have NO
+    ///     Snarf analog: iconinit rebuilds the palette images, which for us are
+    ///     1×1 replicated solids that no size can invalidate (`Chrome.init`), and
+    ///     scrlresize rebuilds the scrollbar's temporary image, which our
+    ///     scrollbar does not use (it draws straight onto the display).
+    ///
+    /// SNARF DIVERGENCE (contract §3f) — the rect is clamped to a usable minimum
+    /// of 100 px wide by `3·font.height + 2·Border` tall before any of that. The
+    /// C does not clamp; VERIFIED by driving the real tree at absurd sizes
+    /// (phase 12c), the two axes fail differently:
+    ///
+    ///   * VERTICALLY the C degrades gracefully and so does the port.
+    ///     `colresize` forces every window to at least `Border+font->height`
+    ///     (cols.c:264) but then hands the LAST window `r1.max.y = r.max.y`
+    ///     (cols.c:257), which by then can lie ABOVE `r1.min.y` — a
+    ///     negative-height window rect. Nothing indexes out of range:
+    ///     `Text.resize` collapses a non-positive height to zero (text.c:78-79)
+    ///     and the backend drops the resulting empty draw rects (`drawclip`,
+    ///     draw.c:236-245). A 640×58 row resize was exercised directly and is
+    ///     clean; the tree merely tiles a taller region than the screen.
+    ///   * HORIZONTALLY the C is FATAL, not merely ugly: every `Text` carves
+    ///     `Scrollwid+Scrollgap` (16 px) off its left (text.c:85-87), and if what
+    ///     remains cannot hold one rune libframe takes `drawerror` — measured at
+    ///     the 9×18 font, a 25 px-wide Text still lays out and a 24 px-wide one
+    ///     dies in `frinsert` (frinsert.c:169-170, ported as a panic). Hence the
+    ///     100 px floor here, and — because a narrow row still scales its columns
+    ///     down past that bound — the separate per-COLUMN floor in `Row.resize`
+    ///     (see its divergence note). Screen clamp + column floor together cover
+    ///     every reachable browser size: 1×1 through 4 columns was exercised and
+    ///     no longer traps.
+    ///
+    /// Clamping keeps a 3-line minimum — row tag, column tag, one window line —
+    /// which is the smallest layout that is still acme. A browser window smaller
+    /// than that simply sees the top-left corner of a minimum-size editor.
+    pub fn resize(tree: *Tree, r: Rect) !void {
+        const chrome = tree.chrome;
+        const rr = clampScreen(r, chrome.font.height);
+        const screen = &chrome.display.image;
+        try screen.draw(rr, chrome.white, null, .{}); // acme.c:551
+        try tree.row.resize(rr); // acme.c:555 rowresize(&row, screen->clipr)
+    }
 };
+
+/// The minimum screen width the tree is laid out in (see `Tree.resize`). 100 px
+/// is the C's own idea of a viable column: `rowadd` refuses to split a column
+/// narrower than that (`if(Dx(r) < 100) return nil`, rows.c:74-75).
+const min_screen_width: i32 = 100;
+
+/// Clamp a screen rectangle up to the usable minimum, growing `max` only (the
+/// origin stays put, so a clamped screen still starts at the canvas corner).
+fn clampScreen(r: Rect, font_height: i32) Rect {
+    const min_h = 3 * font_height + 2 * Chrome.border; // rowtag + coltag + one body line
+    var rr = r;
+    if (rr.max.x - rr.min.x < min_screen_width) rr.max.x = rr.min.x + min_screen_width;
+    if (rr.max.y - rr.min.y < min_h) rr.max.y = rr.min.y + min_h;
+    return rr;
+}
 
 /// Assemble the tree over screen rect `r`: `Chrome.init` (the palette solids),
 /// a heap `Row` (rowtag + white ground), its first `Column` (columntag), and the

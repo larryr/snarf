@@ -428,6 +428,37 @@ pub const HeadlessBackend = struct {
         self.* = undefined;
     }
 
+    /// Reallocate the framebuffer to `w×h` (zeroed), reset `display_clipr` to the
+    /// new bounds, and mark the WHOLE screen dirty so the next flush repaints
+    /// everything — in the browser `canvas.width = …` CLEARS the canvas, so the
+    /// old presented pixels are gone and a partial dirty rect would leave the
+    /// rest blank (R-GFX-05, S-03 §5).
+    ///
+    /// Nothing else is dropped: the `images` map — every allocated image, font
+    /// cache included — survives verbatim, exactly as the kernel's reattach keeps
+    /// a client's images across a window resize (devdraw.c drawrefreshscreen has
+    /// no free path; only a client teardown frees ids). VERIFIED here rather than
+    /// assumed: image id 0 (`display_id`) has NO entry in `images` — `dstSurface`,
+    /// `view` and `imageInfoImpl` each special-case it to `self.fb` + `bounds()`
+    /// + `display_clipr` — so the display image is the framebuffer itself and is
+    /// re-described, not re-allocated, by this call. `displayInfoImpl` likewise
+    /// derives its rect from `bounds()` on every call and caches nothing, so the
+    /// `ctl` line devdraw composes from it reports the new size immediately.
+    ///
+    /// The old framebuffer is freed only after the new one is in hand: an OOM
+    /// leaves the backend exactly as it was.
+    pub fn resize(self: *Self, w: u32, h: u32) Error!void {
+        if (w == 0 or h == 0) return Error.BadRect; // a zero-area display is not a display
+        const fb = try self.allocator.alloc(u8, @as(usize, w) * @as(usize, h) * 4);
+        @memset(fb, 0);
+        self.allocator.free(self.fb);
+        self.fb = fb;
+        self.width = w;
+        self.height = h;
+        self.display_clipr = self.bounds();
+        self.dirty = self.bounds();
+    }
+
     fn bounds(self: *const Self) Rect {
         return Rect.init(0, 0, @intCast(self.width), @intCast(self.height));
     }

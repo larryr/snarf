@@ -92,6 +92,23 @@ every `refresh` reader. libdraw client's `getwindow()` equivalent re-reads `ctl`
 editor relays out. `devicePixelRatio` changes are resizes. The refresh file also carries
 `visibilitychange` hints so Snarf can stop drawing in hidden tabs.
 
+> Revision log: 2026-09-14 (phase 12c) — the resize half shipped AS SKETCHED, with
+> three as-built specifics. (1) The editor path does not read `refresh`: the shim
+> pushes `EventKind.resize` (ABI v5), the entry point resizes the backend, calls
+> `DevDraw.noteResize`, then `Display.getWindow()` (the `ctl` re-read) and
+> `Tree.resize` — contract R-P12c-1. `refresh` is the device-side contract for
+> OTHER clients. (2) `refresh` reports ONE rectangle as 16 bytes — `x0 y0 x1 y1`,
+> little-endian i32, the rect encoding every other verb in the file uses (G1) —
+> not the kernel's 5×4 big-endian `id`+rect record (devdraw.c:1250-1259): our only
+> producer is a whole-screen resize of image id 0, so the id field would be a
+> constant. It is NON-BLOCKING (nothing pending reads 0 bytes); the kernel's sleep
+> on `cl->refrend` (devdraw.c:1237-1248) needs the parked-read machinery that is
+> phase 13's work (R-9P-13). (3) `devicePixelRatio` > 1 is NOT yet a resize:
+> the backing store is sized in CSS pixels, because the bitmap font has one size
+> and a DPR-scaled store would halve the text's physical size on Retina
+> (R-P12c-6 — the remaining half of R-GFX-05, needs a 2× font asset).
+> `visibilitychange` hints remain unimplemented.
+
 ## 6. Performance notes (R-GFX-06)
 
 - All draw messages for one input event are batched into one `data` write; one `v` per

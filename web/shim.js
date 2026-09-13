@@ -1,15 +1,19 @@
 // Snarf JS shim — the single, hand-written boundary between the browser and the
 // WASM module (S-06 §4). It instantiates snarf.wasm, verifies the ABI version,
-// calls init(), drives tick() from requestAnimationFrame, and forwards raw input
-// events into the module via the pushEvent export (R-P6-10). The device import
-// surface fills in per S-06 §4 as devices land; phase 5 wired the pixel path
-// (env.blit) + diagnostics (env.consoleLog); phase 6 adds input capture; phase 12
-// adds the `ws` trio that carries 9P to the origin (R-P12-2).
+// sizes the canvas to the browser window and calls init(w, h), drives tick()
+// from requestAnimationFrame, and forwards raw input events into the module via
+// the pushEvent export (R-P6-10). The device import surface fills in per S-06 §4
+// as devices land; phase 5 wired the pixel path (env.blit) + diagnostics
+// (env.consoleLog); phase 6 adds input capture; phase 12 adds the `ws` trio that
+// carries 9P to the origin (R-P12-2); phase 12c makes the display follow the
+// window (R-GFX-05).
 
 // ABI generation this shim mirrors; must equal src/shim/abi.zig `version` and
-// the module's exported abi_version() (checked below). 3→4 this phase (R-P12-2).
-// Drift becomes a build error once the generated checksum lands (OQ-BLD-2).
-const ABI_VERSION = 4;
+// the module's exported abi_version() (checked below). 4→5 this phase
+// (R-GFX-05): init() grew its (w, h) display size, and EventKind.resize = 8
+// carries every later window resize. Drift becomes a build error once the
+// generated checksum lands (OQ-BLD-2).
+const ABI_VERSION = 5;
 
 // EventKind, a MECHANICAL mirror of src/shim/abi.zig `EventKind` (R-P6-10). All
 // input POLICY stays in Zig (ADR-0004); this shim only transliterates and tags.
@@ -21,6 +25,7 @@ const EK = {
   key: 5,
   mod_down: 6,
   mod_up: 7,
+  resize: 8,
 };
 
 // Modifier id, mirror of dev/profiles.zig `Mod` (enum(u8){alt,meta,ctrl,shift}).
@@ -221,8 +226,52 @@ const imports = {
   },
 };
 
+// The display size, in device pixels, from the browser window (R-GFX-05). The
+// canvas BACKING STORE is sized in CSS pixels: devicePixelRatio is deliberately
+// not applied (R-P12c-6 — the bitmap font has one size, so a DPR-scaled store
+// would halve the text's physical size on Retina; the browser upscales instead).
+// Integers, never below 1: a minimized or hidden window can report 0, and a
+// zero-area display is not a display.
+function viewportSize() {
+  return {
+    w: Math.max(1, Math.floor(window.innerWidth)),
+    h: Math.max(1, Math.floor(window.innerHeight)),
+  };
+}
+
+// Point the canvas backing store at `w×h`. NB: assigning canvas.width/height
+// CLEARS the canvas (even to the same value), so every caller must follow it
+// with a full repaint — which is exactly what the module does when it handles
+// the resize event (and what init() does at boot).
+function sizeCanvas(w, h) {
+  canvas.width = w;
+  canvas.height = h;
+}
+
+// Follow the browser window (R-GFX-05). Resize events fire in bursts while a
+// window edge is dragged, so they are coalesced to at most one per animation
+// frame; a burst that ends where it started costs nothing (the size check).
+// `orientationchange` is the same event on a phone.
+function installResize(pushEvent) {
+  let queued = false;
+  function onResize() {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const { w, h } = viewportSize();
+      if (w === canvas.width && h === canvas.height) return;
+      sizeCanvas(w, h); // clears the canvas; the module repaints everything
+      pushEvent(EK.resize, w, h, 0, Math.floor(performance.now()) >>> 0);
+    });
+  }
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
+}
+
 // Device-space (x,y) from a pointer event, relative to the canvas top-left
-// (getBoundingClientRect; DPR assumed 1 until canvasResize/DPR land — R-P5-3).
+// (getBoundingClientRect). CSS px == device px because the backing store is
+// sized in CSS pixels (viewportSize above), so no DPR scaling is needed here.
 function xyOf(e) {
   const r = canvas.getBoundingClientRect();
   return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
@@ -354,10 +403,15 @@ async function boot() {
     );
   }
 
-  init();
+  // Size the display to the browser window BEFORE init: the module builds its
+  // framebuffer and lays out the window tree from these numbers (R-GFX-05).
+  const { w, h } = viewportSize();
+  sizeCanvas(w, h);
+  init(w, h);
 
-  // Route browser input into the module (R-P6-10).
+  // Route browser input into the module (R-P6-10), and window resizes with it.
   installInput(pushEvent);
+  installResize(pushEvent);
 
   // Frame pump; `wake` is reserved for the future Worker + inbound ring (R-P6-1).
   function frame(nowMs) {

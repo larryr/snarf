@@ -15,11 +15,14 @@
 //! into `WsTransport.pushRecord`, so they need no import here.
 const builtin = @import("builtin");
 
-/// Bumped whenever the import/export surface changes (3→4 this phase, R-P12-2:
-/// the `ws` import trio + the `wsStage`/`wsPush` exports). `web/shim.js` carries
-/// the mirror of this value; the two must match, and the wasm module re-exports
-/// it via `abi_version()` so the shim can check before calling `init()`.
-pub const version: u32 = 4;
+/// Bumped whenever the import/export surface changes (4→5 this phase, R-GFX-05:
+/// `init` grew its `(w, h)` display size and `EventKind.resize` joined the event
+/// mirror, so a v4 shim — which calls `init()` with no arguments and never
+/// reports a window resize — is a real incompatibility, not a cosmetic one).
+/// `web/shim.js` carries the mirror of this value; the two must match, and the
+/// wasm module re-exports it via `abi_version()` so the shim can check before
+/// calling `init()`.
+pub const version: u32 = 5;
 
 /// The kind tag of a raw input event crossing the ABI (R-P6-10). `web/shim.js`
 /// mirrors these integers when it calls `pushEvent(kind, a, b, c, t)`; the wasm
@@ -36,6 +39,12 @@ pub const EventKind = enum(u8) {
     key = 5,
     mod_down = 6,
     mod_up = 7,
+    /// The browser window changed size (R-GFX-05, S-03 §5): `a` = width,
+    /// `b` = height, both in DEVICE pixels of the canvas backing store (at
+    /// devicePixelRatio 1 those are CSS pixels — R-P12c-6 defers DPR > 1), `c`
+    /// unused. The shim has already resized the canvas, which CLEARS it, so the
+    /// module owes a full repaint on the next flush.
+    resize = 8,
 };
 
 /// The kind tag of an inbound WebSocket record crossing the ABI (R-P12-2).
@@ -134,8 +143,8 @@ pub fn wsClose(id: u32) void {
     }
 }
 
-test "abi version is present and bumped to 4" {
-    try @import("std").testing.expectEqual(@as(u32, 4), version);
+test "abi version is present and bumped to 5" {
+    try @import("std").testing.expectEqual(@as(u32, 5), version);
 }
 
 test "abi WsKind integer values match the shim mirror" {
@@ -155,4 +164,5 @@ test "abi EventKind integer values match the shim mirror" {
     try t.expectEqual(@as(u8, 5), @intFromEnum(EventKind.key));
     try t.expectEqual(@as(u8, 6), @intFromEnum(EventKind.mod_down));
     try t.expectEqual(@as(u8, 7), @intFromEnum(EventKind.mod_up));
+    try t.expectEqual(@as(u8, 8), @intFromEnum(EventKind.resize));
 }
