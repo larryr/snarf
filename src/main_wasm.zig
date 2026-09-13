@@ -338,15 +338,22 @@ export fn tick(now_ms: u32) void {
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
 }
 
-/// Advance the origin connection and turn a state change into EXACTLY one
-/// warning line (R-P12-5/6/7). `now_ms` is the animation-frame clock: freestanding
-/// wasm has no `std.Io` and no OS, so this is the module's only source of time and
-/// the 10 s dial budget is counted in these ticks. A failure here never touches
-/// the editor — an absent `/mnt/origin` is a supported state, not an error.
+/// Advance the origin connection and turn a state change into EXACTLY one line
+/// (R-P12-5/6/7). A successful mount is expected behavior, not an error, so it
+/// goes to the browser console only (user decision 2026-09-14 — it used to open a
+/// `+Errors` window on every boot once warnings became visible in phase 12b);
+/// failure and loss remain `+Errors` warnings. `now_ms` is the animation-frame
+/// clock: freestanding wasm has no `std.Io` and no OS, so this is the module's
+/// only source of time and the 10 s dial budget is counted in these ticks. A
+/// failure here never touches the editor — an absent `/mnt/origin` is a supported
+/// state, not an error.
 fn pollOrigin(a: *App, now_ms: u32) void {
     switch (a.origin.poll(now_ms)) {
         .none => {},
-        .mounted => a.editor.warning("/mnt/origin: mounted\n", .{}),
+        .mounted => {
+            const msg = "/mnt/origin: mounted";
+            consoleLog(msg.ptr, msg.len);
+        },
         .failed => |why| a.editor.warning("/mnt/origin: not mounted ({s})\n", .{why}),
         .lost => |why| a.editor.warning("/mnt/origin: disconnected ({s})\n", .{why}),
     }

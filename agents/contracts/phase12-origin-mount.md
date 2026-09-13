@@ -175,3 +175,8 @@ or resumable RPC state machine in `client.zig`, see gaps); `Namespace.unmount(pr
 before a second runtime-managed mount; `fs/` create/remove (Ops growth, lifts R5);
 host-command allow-list (ADR); `Tauth` before any non-loopback bind; Worker+SAB
 transport swap (R-P6-1 says this is a transport move, not a redesign).
+
+**Amendment 2026-09-14 (user decision):** the `mounted` event is NOT a warning. Once phase 12b
+made warnings visible it opened a `+Errors` window on every boot; a successful mount is
+expected behavior, so it now logs to the browser console only (`main_wasm.zig pollOrigin`).
+`failed`/`lost` stay as `+Errors` warnings.
