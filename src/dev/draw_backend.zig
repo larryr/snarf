@@ -1256,3 +1256,53 @@ test "headless: setClipr and imageInfo" {
     // Unknown id ⇒ UnknownImage.
     try testing.expectError(Error.UnknownImage, be.imageInfo(999));
 }
+
+test "headless: resize grows and shrinks the framebuffer (T1)" {
+    var hb = try HeadlessBackend.init(testing.allocator, 640, 480);
+    defer hb.deinit();
+
+    try hb.resize(800, 600);
+    try testing.expectEqual(@as(usize, 800 * 600 * 4), hb.fb.len);
+    for (hb.fb) |b| try testing.expectEqual(@as(u8, 0), b);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), hb.display_clipr);
+    try testing.expectEqual(@as(u32, 800), hb.width);
+    try testing.expectEqual(@as(u32, 600), hb.height);
+    const info = hb.backend().displayInfo();
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), info.r);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), info.clipr);
+    try testing.expect(hb.dirty != null);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), hb.dirty.?);
+
+    // Shrink.
+    try hb.resize(320, 200);
+    try testing.expectEqual(@as(usize, 320 * 200 * 4), hb.fb.len);
+    for (hb.fb) |b| try testing.expectEqual(@as(u8, 0), b);
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), hb.display_clipr);
+    const info2 = hb.backend().displayInfo();
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), info2.r);
+    try testing.expect(hb.dirty != null);
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), hb.dirty.?);
+
+    // Zero on either axis is rejected (contract §3c / harness note).
+    try testing.expectError(Error.BadRect, hb.resize(0, 480));
+    try testing.expectError(Error.BadRect, hb.resize(640, 0));
+}
+
+test "headless: images survive a resize and stay drawable (T2)" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocWhiteMask(be, 1);
+    try allocSolid(be, 5, BLUE, RGBA32);
+
+    try hb.resize(96, 72);
+
+    // The image allocated before the resize is still present and drawable —
+    // no ImageExists/UnknownImage, and the pixels land where expected.
+    try be.draw(display_id, 5, 1, Rect.init(0, 0, 10, 10), .{}, .{});
+    try testing.expectEqual(@as(u32, 0x0000FFFF), hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0x0000FFFF), hb.pixelAt(9, 9));
+    // Outside the drawn rect but inside the new, larger bounds: untouched.
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(50, 50));
+}

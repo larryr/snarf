@@ -166,3 +166,13 @@ test "abi EventKind integer values match the shim mirror" {
     try t.expectEqual(@as(u8, 7), @intFromEnum(EventKind.mod_up));
     try t.expectEqual(@as(u8, 8), @intFromEnum(EventKind.resize));
 }
+
+test "abi: EventKind.resize is 8 and version is 5 (T9)" {
+    // Traceability pin for contract §4 T9 — the facts themselves are already
+    // covered above ("abi version is present and bumped to 5",
+    // "abi EventKind integer values match the shim mirror"); this test just
+    // names them together as the T9 acceptance point.
+    const t = @import("std").testing;
+    try t.expectEqual(@as(u8, 8), @intFromEnum(EventKind.resize));
+    try t.expectEqual(@as(u32, 5), version);
+}

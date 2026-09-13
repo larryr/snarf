@@ -1363,3 +1363,89 @@ test "devdraw: clunk resets fonts" {
     try testing.expect(r2.body == .rwrite);
     try testing.expectEqual(@as(usize, 1), h.dd.fonts.count());
 }
+
+// ===========================================================================
+// Phase 12c — resize (R-GFX-05, contract §3d). Deliberately still NO
+// dependency on src/draw (G7): the ctl line is checked field-by-field here,
+// the way a real client (`Display.parseConnInfo`) would decode it, without
+// importing that module.
+// ===========================================================================
+
+/// Extract field `idx` (0-based) of a 144-byte connection line: 11 columns +
+/// one trailing space, so field `idx` starts at `idx*12` (devdraw.c:1197-1204).
+fn fieldAt(line: []const u8, idx: usize) []const u8 {
+    const start = idx * 12;
+    return std.mem.trim(u8, line[start..][0..11], " ");
+}
+
+fn parseFieldInt(line: []const u8, idx: usize) !i64 {
+    return std.fmt.parseInt(i64, fieldAt(line, idx), 10);
+}
+
+test "devdraw: ctl reflects a backend resize after noteResize (T3)" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+
+    try h.hb.resize(800, 600);
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 800, 600));
+
+    const r1 = try h.read(1, 0, 256);
+    try testing.expect(r1.body == .rread);
+    const line = r1.body.rread.data;
+
+    // Fields 4-7: display image rect. Fields 8-11: clipr. (ground-truth table)
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 4));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 5));
+    try testing.expectEqual(@as(i64, 800), try parseFieldInt(line, 6));
+    try testing.expectEqual(@as(i64, 600), try parseFieldInt(line, 7));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 8));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 9));
+    try testing.expectEqual(@as(i64, 800), try parseFieldInt(line, 10));
+    try testing.expectEqual(@as(i64, 600), try parseFieldInt(line, 11));
+
+    // Idempotent, like the un-resized case: a second read is unchanged.
+    const r2 = try h.read(1, 0, 256);
+    try testing.expectEqualStrings(line, r2.body.rread.data);
+}
+
+test "devdraw: refresh reports the pending rect exactly once (T4)" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect(); // ctl on fid 1, connection busy
+
+    // Walk root → "1" → "refresh" (fid 2), open OREAD.
+    const w = try h.walk(0, 2, &.{ "1", "refresh" });
+    try testing.expect(w.body == .rwalk);
+    const o = try h.open(2, msg.OREAD);
+    try testing.expect(o.body == .ropen);
+
+    // Nothing pending: 0 bytes, with or without a resize having happened.
+    const r0 = try h.read(2, 0, 256);
+    try testing.expect(r0.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r0.body.rread.data.len);
+
+    try h.hb.resize(800, 600);
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 800, 600));
+
+    // First read after noteResize: exactly refresh_rec_len bytes, the rect.
+    const r1 = try h.read(2, 0, 256);
+    try testing.expect(r1.body == .rread);
+    try testing.expectEqual(@as(usize, refresh_rec_len), r1.body.rread.data.len);
+    const data = r1.body.rread.data;
+    try testing.expectEqual(@as(i32, 0), std.mem.readInt(i32, data[0..4], .little));
+    try testing.expectEqual(@as(i32, 0), std.mem.readInt(i32, data[4..8], .little));
+    try testing.expectEqual(@as(i32, 800), std.mem.readInt(i32, data[8..12], .little));
+    try testing.expectEqual(@as(i32, 600), std.mem.readInt(i32, data[12..16], .little));
+
+    // Reported exactly once: reading again with nothing new pending ⇒ 0 bytes.
+    const r2 = try h.read(2, 0, 256);
+    try testing.expect(r2.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r2.body.rread.data.len);
+
+    // A read at a non-zero offset never returns the rect, pending or not.
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 1024, 768));
+    const r3 = try h.read(2, 8, 256);
+    try testing.expect(r3.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r3.body.rread.data.len);
+}

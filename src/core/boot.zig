@@ -311,3 +311,117 @@ test "boot: setTag1 fresh tag is byte-identical to name ++ tag_suffix" {
     // The body File is owned by the Window (R-P9-5).
     try testing.expect(w.owns_body);
 }
+
+// ===========================================================================
+// Phase 12c — Tree.resize (R-GFX-05, contract §3f).
+// ===========================================================================
+
+test "boot: resize grows the tree to fill a larger screen (T6)" {
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var tree = try boot(testing.allocator, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "scratch",
+        .body = "hello\n",
+    });
+    defer tree.deinit();
+
+    const c = tree.row.col.items[0];
+    const w = c.w.items[0];
+    const bottom_before = w.body.fr.r.max.y;
+
+    try tree.resize(proto.Rect.make(0, 0, 1024, 768));
+
+    try testing.expectEqual(proto.Rect.make(0, 0, 1024, 768), tree.row.r);
+
+    // The single column spans the full new width.
+    try testing.expectEqual(@as(usize, 1), tree.row.col.items.len);
+    try testing.expectEqual(@as(i32, 0), c.r.min.x);
+    try testing.expectEqual(@as(i32, 1024), c.r.max.x);
+
+    // The window's body reaches the bottom of the new screen: it grew, and it
+    // is within one text line of the screen bottom — `Text.resize` quantizes
+    // a non-keepextra resize down to a whole number of lines (text.c:80-81),
+    // so exact pixel equality to 768 is not guaranteed, only "as close as a
+    // whole line allows".
+    try testing.expect(w.body.fr.r.max.y > bottom_before);
+    try testing.expect(w.body.fr.r.max.y <= 768);
+    try testing.expect(768 - w.body.fr.r.max.y < fx.font.height);
+
+    // No rect exceeds the screen.
+    try testing.expect(tree.row.r.max.x <= 1024 and tree.row.r.max.y <= 768);
+    try testing.expect(c.r.max.x <= 1024 and c.r.max.y <= 768);
+    try testing.expect(w.r.max.x <= 1024 and w.r.max.y <= 768);
+    try testing.expect(w.tag.fr.r.max.x <= 1024 and w.body.fr.r.max.x <= 1024);
+}
+
+test "boot: shrink with two columns, two windows in one column (T7)" {
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var tree = try boot(testing.allocator, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "hello\n",
+    });
+    defer tree.deinit();
+
+    // Second column, then a second window stacked into the FIRST column (so
+    // one column carries both windows and the other carries none — the more
+    // demanding shape for the shrink).
+    _ = (try tree.row.add(-1)).?;
+    _ = try tree.addWinTo(tree.row.col.items[0], "two", "world\n");
+    try testing.expectEqual(@as(usize, 2), tree.row.col.items.len);
+    try testing.expectEqual(@as(usize, 2), tree.row.col.items[0].w.items.len);
+
+    try tree.resize(proto.Rect.make(0, 0, 400, 300));
+
+    try testing.expectEqual(proto.Rect.make(0, 0, 400, 300), tree.row.r);
+
+    const c0 = tree.row.col.items[0];
+    const c1 = tree.row.col.items[1];
+
+    // Columns keep left-to-right order and neither overlaps the screen.
+    try testing.expect(c0.r.min.x >= 0);
+    try testing.expect(c0.r.max.x <= c1.r.min.x);
+    try testing.expect(c1.r.max.x <= 400);
+    try testing.expect(c0.r.max.y <= 300 and c1.r.max.y <= 300);
+
+    // Every window in the doubly-occupied column stays within the screen.
+    for (c0.w.items) |w| {
+        try testing.expect(w.r.min.x >= c0.r.min.x and w.r.max.x <= c0.r.max.x);
+        try testing.expect(w.r.max.y <= 300);
+    }
+}
+
+test "boot: degenerate resize clamps to the usable minimum (T8)" {
+    // SNARF DIVERGENCE (contract §3f, R-P12c chosen ruling): clamp, don't
+    // error — acme.c has no analog for a screen this small, but a browser
+    // window can shrink there and a trap is not acceptable (see the doc
+    // comment on `Tree.resize`).
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var tree = try boot(testing.allocator, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "scratch",
+        .body = "hello\n",
+    });
+    defer tree.deinit();
+
+    // No error: clamping, not rejection.
+    try tree.resize(proto.Rect.make(0, 0, 50, 20));
+
+    // 100 px wide, 3*font.height + 2*Border tall — 18*3 + 2*2 = 58 at the 9x18
+    // font (min_screen_width / clampScreen in this file).
+    try testing.expectEqual(proto.Rect.make(0, 0, 100, 58), tree.row.r);
+
+    // Every column is at least scrollwid+scrollgap+font.height (34px) wide.
+    const min_col: i32 = Chrome.scrollwid + Chrome.scrollgap + fx.font.height;
+    try testing.expectEqual(@as(i32, 34), min_col);
+    for (tree.row.col.items) |c| {
+        try testing.expect(c.r.max.x - c.r.min.x >= min_col);
+    }
+
+    // The tree is still consistent: still one column, one window, reachable.
+    try testing.expectEqual(@as(usize, 1), tree.row.col.items.len);
+    try testing.expectEqual(@as(usize, 1), tree.row.col.items[0].w.items.len);
+}
