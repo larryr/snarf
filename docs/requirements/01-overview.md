@@ -1,7 +1,7 @@
 # R-01 — Overview & Vision
 
-Status: **Draft v2** (iterated: /dev/draw and mouse-emulation decisions folded back in — see
-revision log)
+Status: **Draft v3** (iterated: /dev/draw, mouse-emulation, and two-hosts decisions folded
+back in — see revision log)
 
 ## 1. What Snarf is
 
@@ -39,6 +39,7 @@ program scripted against it — can use.
 | R-OV-06 | The full three-button mouse language, **including chords**, SHALL be usable on hardware without three physical buttons (trackpads, touch screens) via the emulation model in [05-input.md](05-input.md) (decision ADR-0004). |
 | R-OV-07 | Snarf SHALL be buildable on macOS and Linux with the Zig toolchain alone (decision ADR-0001; requirements in [06-platform-and-build.md](06-platform-and-build.md)). |
 | R-OV-08 | External dependencies are biased strongly toward **Zig standard library only** (decision ADR-0002; constraints in [07-constraints-non-goals.md](07-constraints-non-goals.md)). |
+| R-OV-09 | **Two hosts, one core** (decision ADR-0005): Snarf SHALL run on the browser host (R-OV-04 namespaces, zero install) AND on a **native host** whose display and input server is **plan9port `devdraw` or a `drawfcall.h`-compatible server**, both beneath the same unchanged editor core. ACME behaviors a host cannot honour (mouse warping, process execution, uncapturable keys) are recorded *per host*; the native host is expected to honour the paper where the browser cannot. The native host is a backlog commitment, not an option. |
 
 ## 4. Glossary
 
@@ -75,3 +76,7 @@ Requirements (this directory) say **what** and **why**; specifications
 - **v2** — iterated per ADR-0003/ADR-0004: added R-OV-05 (draw contract) and strengthened
   R-OV-06 to make *chords* explicitly mandatory on button-less hardware; added R-OV-03's
   prohibition on ad-hoc JS calls after the architecture review.
+- **v3** (2026-09-14) — ADR-0005: added R-OV-09 (two hosts, one core; native host =
+  plan9port `devdraw` or compatible). Prompted by the R-02 v4 paper re-verification
+  showing which paper behaviors the browser sandbox can never honour (R-EDIT-25 warping,
+  processes, key capture). The browser host and its vision statement (§2) stand.

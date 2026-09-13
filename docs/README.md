@@ -38,7 +38,7 @@ file system, and the origin server as one namespace.
 | 13 | [spec/05-editor-core.md](spec/05-editor-core.md) | Piece table, mouse language, Edit engine |
 | 14 | [spec/06-build-toolchain.md](spec/06-build-toolchain.md) | zig build graph, shim ABI, CI |
 | 15 | [spec/07-source-layout.md](spec/07-source-layout.md) | ACME C survey → Zig module structure, C→Zig map |
-| — | [spec/adr/](spec/adr/) | ADR-0001..0004 |
+| — | [spec/adr/](spec/adr/) | ADR-0001..0005 |
 
 ## Rendering the diagrams
 
