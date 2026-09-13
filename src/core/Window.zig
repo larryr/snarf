@@ -693,7 +693,7 @@ test "window: setTag1 recomposition" {
     }
 }
 
-test "window: clean two-strikes on dirty" {
+test "window: clean two-strikes on dirty, read via the pending-warnings accessor (T21)" {
     const a = testing.allocator;
     const h = try WinHarness.init("hello\n", win_rect);
     defer h.deinit();

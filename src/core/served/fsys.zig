@@ -669,6 +669,28 @@ test "served: walk new creates window" {
     try testing.expect(std.mem.startsWith(u8, rr.body.rread.data, idcol));
 }
 
+test "served: walk new places the window per makeNewWindow's activecol (T15)" {
+    // A booted tree with a SECOND column; setting `ed.activecol` to it must
+    // steer the served `new` walk there too (place.makeNewWindow, util.c:
+    // 454-455), not just the first/only column the pre-12b approximation used.
+    const h = try Harness.create(testing.allocator, "one", "hello\n");
+    defer h.destroy();
+    try h.connect();
+
+    const c1 = h.tree.row.col.items[0];
+    const c2 = (try h.tree.row.add(-1)).?;
+    h.ed.activecol = c2;
+    try testing.expectEqual(@as(usize, 1), c1.w.items.len);
+    try testing.expectEqual(@as(usize, 0), c2.w.items.len);
+
+    const rw = try h.walk(0, 1, &.{"new"});
+    try testing.expect(rw.body == .rwalk);
+
+    try testing.expectEqual(@as(usize, 1), c1.w.items.len); // untouched
+    try testing.expectEqual(@as(usize, 1), c2.w.items.len); // the served window landed here
+    try testing.expectEqual(c2, h.ed.activecol.?);
+}
+
 test "served: root dir read lists sorted window dirs" {
     const h = try Harness.create(testing.allocator, "one", "a\n"); // id 1
     defer h.destroy();

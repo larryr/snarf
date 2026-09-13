@@ -170,10 +170,15 @@ pub fn flushWarnings(ed: *Editor) Text.Error!void {
 }
 
 // ===========================================================================
-// Tests. The named `+Errors` tests (T16-T20 of the phase-12b contract) are
-// written separately; these smoke tests only keep the pure helpers reachable.
+// Tests (T16-T20, phase-12b contract §4), plus the smoke tests for the pure
+// helpers. Booted trees (`boot.zig`) give a real `Row` to look up/mint into.
 // ===========================================================================
 const testing = std.testing;
+const draw = @import("draw");
+const Frame = draw.Frame;
+const proto = draw.proto;
+const Chrome = @import("Chrome.zig");
+const boot = @import("boot.zig");
 
 test "errors: errorName joins the directory" {
     const a = testing.allocator;
@@ -189,4 +194,129 @@ test "errors: trimSlash drops one trailing slash but keeps root" {
     try testing.expectEqualStrings("/a/b", trimSlash("/a/b/"));
     try testing.expectEqualStrings("/a/b", trimSlash("/a/b"));
     try testing.expectEqualStrings("/", trimSlash("/"));
+}
+
+test "errors: lookFile ignores one trailing slash on either side (T16)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+    const w = tree.row.col.items[0].w.items[0];
+    try w.body.file.setName("/a/b/");
+
+    try testing.expectEqual(w, lookFile(tree.row, "/a/b").?);
+    try testing.expectEqual(w, lookFile(tree.row, "/a/b/").?);
+    try testing.expect(lookFile(tree.row, "/a/c") == null);
+}
+
+test "errors: dirName splits the directory from the window name (T17)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+    const w = tree.row.col.items[0].w.items[0];
+
+    try w.body.file.setName("/a/b/c.zig");
+    try testing.expectEqualStrings("/a/b", dirName(w));
+    try w.body.file.setName("c.zig");
+    try testing.expectEqualStrings("", dirName(w));
+    try w.body.file.setName("/x/");
+    try testing.expectEqualStrings("/x", dirName(w));
+}
+
+test "errors: flushWarnings mints +Errors in the rightmost column and appends (T18)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+    _ = (try tree.row.add(-1)).?; // a second column: the RIGHTMOST one now
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    ed.warning("x\n", .{});
+    try flushWarnings(&ed);
+    try testing.expect(!ed.warningsPending());
+
+    const rightmost = tree.row.col.items[tree.row.col.items.len - 1];
+    try testing.expectEqual(@as(usize, 1), rightmost.w.items.len);
+    const errw = rightmost.w.items[0];
+    try testing.expectEqualStrings("+Errors", errw.body.file.name.items);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("x\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+    try testing.expect(!errw.dirty);
+
+    // A second warning appends to the SAME window — no second +Errors.
+    ed.warning("y\n", .{});
+    try flushWarnings(&ed);
+    try testing.expectEqualStrings("x\ny\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+    try testing.expectEqual(@as(usize, 1), rightmost.w.items.len);
+}
+
+test "errors: warningIn targets a directory bucket; both windows land rightmost (T19)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+    _ = (try tree.row.add(-1)).?; // second column, the rightmost
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    ed.warningIn("/a/b", "z\n", .{});
+    ed.warning("w\n", .{});
+    try flushWarnings(&ed);
+
+    const rightmost = tree.row.col.items[tree.row.col.items.len - 1];
+    try testing.expectEqual(@as(usize, 2), rightmost.w.items.len);
+    var found_dir = false;
+    var found_plain = false;
+    for (rightmost.w.items) |w| {
+        if (std.mem.eql(u8, w.body.file.name.items, "/a/b/+Errors")) found_dir = true;
+        if (std.mem.eql(u8, w.body.file.name.items, "+Errors")) found_plain = true;
+    }
+    try testing.expect(found_dir);
+    try testing.expect(found_plain);
+}
+
+test "errors: flushWarnings grows a column in an empty row (T20)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var chrome = try Chrome.init(a, fx.disp, fx.font);
+    defer chrome.deinit();
+    var row: Row = undefined;
+    try row.init(chrome, proto.Rect.make(0, 0, 600, 460));
+    defer row.deinit();
+    try testing.expectEqual(@as(usize, 0), row.col.items.len);
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = &row;
+
+    ed.warning("boom\n", .{});
+    try flushWarnings(&ed);
+
+    try testing.expectEqual(@as(usize, 1), row.col.items.len); // util.c:95-97
+    const c = row.col.items[0];
+    try testing.expectEqual(@as(usize, 1), c.w.items.len);
+    try testing.expectEqualStrings("+Errors", c.w.items[0].body.file.name.items);
 }

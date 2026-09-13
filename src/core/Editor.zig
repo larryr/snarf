@@ -1248,6 +1248,96 @@ const TwoWin = struct {
     }
 };
 
+/// A booted scene with a SECOND column (`c2`, carrying window `w2`), for the
+/// `activecol` tests (T7-T9) that need two distinct columns.
+const TwoCol = struct {
+    fx: Frame.TestFixture,
+    tree: boot.Tree,
+    ed: Editor,
+    c2: *Column,
+    w2: *Window,
+
+    fn init() !*TwoCol {
+        const a = testing.allocator;
+        const h = try a.create(TwoCol);
+        errdefer a.destroy(h);
+        h.fx = try Frame.TestFixture.init();
+        h.tree = try boot.boot(a, h.fx.disp, h.fx.font, proto.Rect.make(0, 0, 600, 460), .{
+            .win_name = "one",
+            .body = "hello\n",
+        });
+        h.c2 = (try h.tree.row.add(-1)).?;
+        h.w2 = try h.tree.addWindow("two", "world\n"); // lands in the LAST column (c2)
+        h.ed = Editor.init(a);
+        h.ed.row = h.tree.row;
+        return h;
+    }
+    fn deinit(h: *TwoCol) void {
+        const a = testing.allocator;
+        h.ed.deinit();
+        h.tree.deinit();
+        h.fx.deinit();
+        a.destroy(h);
+    }
+};
+
+test "editor: B1 press sets activecol; B2/B3 elsewhere leave it (T7)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c1 = h.tree.row.col.items[0];
+    const w1 = c1.w.items[0];
+
+    try testing.expect(ed.activecol == null);
+    const p1 = center(w1.body.fr.r);
+    try ed.handleMouse(mev(p1.x, p1.y, B1));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p1.x, p1.y, 0));
+
+    // A B3 click in the OTHER column must not steer activecol away from c1.
+    const p2 = center(h.w2.body.fr.r);
+    try ed.handleMouse(mev(p2.x, p2.y, B3));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p2.x, p2.y, 0));
+
+    // Neither does a B2 click there.
+    try ed.handleMouse(mev(p2.x, p2.y, B2));
+    try testing.expectEqual(c1, ed.activecol.?);
+    try ed.handleMouse(mev(p2.x, p2.y, 0));
+}
+
+test "editor: typed runes set activecol; Kdown/Kleft/Kright do not (T8)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c1 = h.tree.row.col.items[0];
+    const w1 = c1.w.items[0];
+
+    ed.mouse_pt = center(w1.body.fr.r);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey('x');
+    try testing.expectEqual(c1, ed.activecol.?);
+
+    ed.activecol = null;
+    try ed.handleKey(typing.Kdown);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey(typing.Kleft);
+    try testing.expect(ed.activecol == null);
+    try ed.handleKey(typing.Kright);
+    try testing.expect(ed.activecol == null);
+}
+
+test "editor: closing the active column nils activecol (T9)" {
+    const h = try TwoCol.init();
+    defer h.deinit();
+    const ed = &h.ed;
+    const c2 = h.c2;
+
+    ed.activecol = c2;
+    try h.tree.row.close(ed, c2, true); // rows.c close -> dropColRef (cols.c:216-217)
+    try testing.expect(ed.activecol == null);
+}
+
 test "editor: hit-test routes clicks across two windows" {
     const h = try TwoWin.init();
     defer h.deinit();

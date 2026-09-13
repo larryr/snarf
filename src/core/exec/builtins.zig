@@ -105,3 +105,15 @@ test "builtins: table shape and flags match exec.c" {
     // Reconnect touches the session, never a buffer: it marks nothing.
     try testing.expect(!exectab[9].mark and !exectab[9].flag1 and !exectab[9].flag2);
 }
+
+test "builtins: Look is named in the table and resolves to cmd_look.look (T6)" {
+    const testing = std.testing;
+    var found = false;
+    for (&exectab) |*e| {
+        if (std.mem.eql(u8, e.name, "Look")) {
+            found = true;
+            try testing.expectEqual(&cmd_look.look, e.fn_);
+        }
+    }
+    try testing.expect(found);
+}

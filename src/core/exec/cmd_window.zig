@@ -144,6 +144,7 @@ const draw = @import("draw");
 const Frame = draw.Frame;
 const proto = draw.proto;
 const boot = @import("../boot.zig");
+const Chrome = @import("../Chrome.zig");
 
 fn genLines(a: std.mem.Allocator, count: usize) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
@@ -199,4 +200,179 @@ test "cmd_window: makeWindow creates a named empty owned window" {
     try testing.expectEqual(@as(usize, 0), w.body.file.buffer.len()); // empty body
     try testing.expect(w.owns_body); // the window frees its own body File
     try testing.expectEqualStrings("fresh", w.body.file.name.items);
+}
+
+// ===========================================================================
+// `makeNewWindow` placement tests (T10-T14, phase-12b contract §4). Live in
+// `cmd_window.zig` alongside the builtins (per `place.zig`'s own doc note),
+// using the same booted-tree pattern as the tests above.
+// ===========================================================================
+
+test "makeNewWindow: no activecol/seltext uses the LAST column (T10)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "seed\n",
+    });
+    defer tree.deinit();
+    const c2 = (try tree.row.add(-1)).?; // second (LAST) column
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+    try testing.expect(ed.activecol == null);
+    try testing.expect(ed.seltext == null);
+
+    const before = c2.w.items.len;
+    const w = try place.makeNewWindow(&ed, null);
+    try testing.expectEqual(c2, w.col.?); // landed in the LAST column
+    try testing.expectEqual(before + 1, c2.w.items.len);
+    try testing.expectEqual(c2, ed.activecol.?); // util.c:466
+}
+
+test "makeNewWindow: activecol wins over t's own column (T11)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "seed\n",
+    });
+    defer tree.deinit();
+    const c1 = tree.row.col.items[0];
+    const c2 = (try tree.row.add(-1)).?;
+    const w2 = try tree.addWindow("two", "seed\n"); // lands in c2
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+    ed.activecol = c1; // util.c:454-455 wins outright
+
+    const before = c1.w.items.len;
+    const w = try place.makeNewWindow(&ed, &w2.body); // t lives in c2
+    try testing.expectEqual(c1, w.col.?);
+    try testing.expectEqual(before + 1, c1.w.items.len);
+    try testing.expectEqual(@as(usize, 1), c2.w.items.len); // c2 untouched
+}
+
+test "makeNewWindow: a big empty spot is used as-is (T12)" {
+    // A TALL column with a short 2-line body: `blank = maxlines - nlines` is
+    // comfortably >15 (util.c:483-486), so the new window is carved out of the
+    // TOP of the empty space, `nlines*font.height` down from the body's top —
+    // nowhere near the window's vertical midpoint (which the split arm, T13,
+    // would use instead).
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 860), .{
+        .win_name = "one",
+        .body = "line1\nline2\n",
+    });
+    defer tree.deinit();
+    const c = tree.row.col.items[0];
+    const w1 = c.w.items[0];
+    try testing.expect(w1.body.fr.maxlines - w1.body.fr.nlines > 15);
+
+    const before_min_y = w1.body.fr.r.min.y;
+    const before_nlines = w1.body.fr.nlines;
+    const midpoint = @divTrunc(w1.r.min.y + w1.r.max.y, 2);
+    const expected_y = before_min_y + @as(i32, @intCast(before_nlines)) * fx.font.height;
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    const w = try place.makeNewWindow(&ed, null);
+    try testing.expectEqual(c, w.col.?);
+    try testing.expectEqual(@as(usize, 2), c.w.items.len);
+
+    // Distinguishes the empty-space arm from the split-midpoint arm: the new
+    // window starts well ABOVE the old window's midpoint.
+    try testing.expect(w.r.min.y < midpoint - 50);
+    // Within a small band of the exact computed y (coladd's own line-boundary
+    // clamp, cols.c:100-125, can shift it by a fraction of a line).
+    try testing.expect(w.r.min.y >= expected_y - Chrome.border);
+    try testing.expect(w.r.min.y <= expected_y + fx.font.height);
+}
+
+test "makeNewWindow: split arm bisects the biggest window; a tie picks the LOWER one (T13)" {
+    // Two windows, geometry left alone but their Frame line-counts overridden
+    // to force an EXACT tie with no blank space (`el <= 3`, util.c:483):
+    // the `>=` comparison (util.c:475/479) must pick the SECOND (lower) window
+    // as both `bigw` and `emptyw`, so the split lands at window 2's midpoint.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "seed\n",
+    });
+    defer tree.deinit();
+    const c = tree.row.col.items[0];
+    const w1 = c.w.items[0];
+    const w2 = try tree.addWindow("two", "seed\n");
+
+    w1.body.fr.maxlines = 20;
+    w1.body.fr.nlines = 18; // blank = 2
+    w2.body.fr.maxlines = 20;
+    w2.body.fr.nlines = 18; // blank = 2 — a genuine tie with w1
+
+    const expected_y = @divTrunc(w2.r.min.y + w2.r.max.y, 2);
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    const w = try place.makeNewWindow(&ed, null);
+    try testing.expectEqual(c, w.col.?);
+    try testing.expectEqual(@as(usize, 3), c.w.items.len);
+    try testing.expect(w.r.min.y >= expected_y - fx.font.height);
+    try testing.expect(w.r.min.y <= expected_y + fx.font.height);
+    // w2 (the victim) shrank; w1 is untouched by the split.
+    try testing.expectEqual(w1.r, w1.r); // w1 identity unchanged (sanity)
+    try testing.expect(w2.r.max.y - w2.r.min.y < 200); // w2 visibly shrank from a full column
+}
+
+test "makeNewWindow: t's own window wins when it is not much smaller (T14)" {
+    // Same forced-full-tie setup as T13, but `t` names window 1's own body and
+    // window 1 is in `c` and not much smaller than `bigw` (util.c:489-490,
+    // `Dy(t->w->r) > 2*Dy(bigw->r)/3`) — window 1 is seeded with enough lines
+    // that `coladd`'s "shrink to just fit its content" clamp does not carve it
+    // down to a sliver, so the natural half-split easily clears the 2/3 bar.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    const seed1 = try genLines(a, 30);
+    defer a.free(seed1);
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = seed1,
+    });
+    defer tree.deinit();
+    const c = tree.row.col.items[0];
+    const w1 = c.w.items[0];
+    const w2 = try tree.addWindow("two", "seed\n");
+    try testing.expect(dy(w1.r) > @divTrunc(2 * dy(w2.r), 3)); // qualifies (util.c:489)
+
+    w1.body.fr.maxlines = 20;
+    w1.body.fr.nlines = 18; // blank = 2
+    w2.body.fr.maxlines = 20;
+    w2.body.fr.nlines = 18; // blank = 2 (tie; bigw would default to w2)
+
+    const expected_y = @divTrunc(w1.r.min.y + w1.r.max.y, 2);
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    const w = try place.makeNewWindow(&ed, &w1.body); // t names w1
+    try testing.expectEqual(c, w.col.?);
+    try testing.expect(w.r.min.y >= expected_y - fx.font.height);
+    try testing.expect(w.r.min.y <= expected_y + fx.font.height);
+}
+
+fn dy(r: proto.Rect) i32 {
+    return r.max.y - r.min.y;
 }

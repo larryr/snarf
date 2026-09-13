@@ -635,7 +635,7 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     try testing.expectEqual(col.r.max.y, w1.r.max.y);
     try ed.frameEnd(d);
 
-    // --- PHASE-12b SPOT-CHECK (R-P12b-6) -------------------------------------
+    // --- PHASE-12b SPOT-CHECK (R-P12b-6, T23) --------------------------------
     // The frameEnd above now also drains the warning buffer (util.c:211-258), so
     // the first strike's "notes modified" surfaces in a `+Errors` window. That is
     // the ONLY change to this scene: same two-window-then-one sequence, same w1
@@ -744,6 +744,89 @@ test "phase-9: B3 look scene — click cycles occurrences with wraparound" {
     try testing.expectEqual(offs[0] + 6, t.q1);
     try testing.expect(t.q0 >= t.org and t.q0 < t.org + t.fr.nchars);
     try ed.frameEnd(d);
+}
+
+test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightmost column (T22)" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "hello\n",
+    });
+    defer tree.deinit();
+    // A second column — the RIGHTMOST one — with a placeholder window, so
+    // the +Errors window's placement there (not column 0) is load-bearing.
+    const c2 = (try tree.row.add(-1)).?;
+    _ = try tree.addWindow("placeholder", ""); // lands in the LAST column (c2)
+
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    ed.but2col = tree.chrome.but2col;
+    ed.but3col = tree.chrome.but3col;
+    try ed.frameEnd(d);
+
+    const c1 = tree.row.col.items[0];
+    const w1 = c1.w.items[0];
+
+    // Dirty window 1 (a recorded, named edit).
+    ed.seq += 1;
+    w1.body.file.mark(ed.seq);
+    try w1.body.insertAt(0, "X", true);
+    try testing.expect(w1.dirty);
+
+    // ONE B2 click on "Del" in w1's tag: the two-strike clean warns and the
+    // window SURVIVES (wind.c:666-685).
+    var tgbuf: [128]u8 = undefined;
+    const tagtxt = w1.tag.file.buffer.read(0, w1.tag.file.buffer.len(), &tgbuf);
+    const del_at = std.mem.indexOf(u8, tagtxt, "Del").? + 1;
+    const tag_del = w1.tag.fr.ptOfChar(del_at);
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 2, .msec = 1000 });
+    try ed.handleMouse(.{ .x = tag_del.x, .y = tag_del.y, .buttons = 0, .msec = 1000 });
+    try testing.expectEqual(@as(usize, 1), c1.w.items.len); // survives the first strike
+    try testing.expect(!w1.dirty);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "one modified") != null);
+
+    // frameEnd drains the buffered warning into a `+Errors` window (util.c:
+    // 211-258), minted in the RIGHTMOST column (util.c:98, R-EDIT-21).
+    try ed.frameEnd(d);
+
+    // --- spot-checks (R-P2-7), BEFORE freezing -------------------------------
+    try testing.expectEqual(@as(usize, 2), c2.w.items.len); // placeholder + +Errors
+    const errw = c2.w.items[c2.w.items.len - 1];
+    try testing.expectEqualStrings("+Errors", errw.body.file.name.items);
+    var rbuf: [64]u8 = undefined;
+    try testing.expectEqualStrings("one modified\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &rbuf));
+    try testing.expect(!errw.dirty); // util.c:250
+    try testing.expect(!errw.filemenu); // util.c:99
+    try testing.expect(!ed.warningsPending()); // the buffer is drained
+    try testing.expectEqual(c2, errw.col.?); // the RIGHTMOST column, not c1
+
+    // FROZEN-ACCEPT-12B: two-column scene, a two-strike Del warning on a
+    // window in column 0, drained by frameEnd into a `+Errors` window minted
+    // in the rightmost column (column 1) — name/body/dirty/filemenu/placement
+    // all pinned by the spot-checks immediately above. Frozen 2026-09-13;
+    // re-freeze only with orchestrator sign-off (R-P2-7).
+    try testing.expectEqual(@as(u64, 0xa4af36d064fbd9c9), hb.hash());
 }
 
 test "phase-10: served tree scene" {
