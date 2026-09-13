@@ -26,7 +26,7 @@ const std = @import("std");
 const ninep = @import("ninep");
 const Editor = @import("../Editor.zig");
 const Window = @import("../Window.zig");
-const cmd_window = @import("../exec/cmd_window.zig");
+const place = @import("../place.zig");
 const xfid = @import("xfid.zig");
 
 const Server = ninep.server.Server;
@@ -166,17 +166,15 @@ pub const Fsys = struct {
     /// The column a walk-to-`new` mints its window in (R-P10-I): `ed.seltext`'s
     /// column, else the first column of `ed.row`, else an error (no column
     /// creation from a 9P walk in v1). No `cnewwindow` channel — a direct call.
+    /// The `cnewwindow` rendezvous (acme.c:869-880 `newwindowthread`): a 9P walk
+    /// to `new` mints a window with `makenewwindow(nil)` + `winsettag`. There is
+    /// no channel in the port — `place.makeNewWindow` runs inline — but the
+    /// PLACEMENT is now the C's (util.c:449-495, R-EDIT-23): active column, else
+    /// `seltext`'s, else the last one, and inside it the emptiest-or-biggest
+    /// spot. Before phase 12b this was an approximation (`seltext`'s column, else
+    /// the FIRST column, always stealing the bottom half).
     fn newWindow(self: *Fsys) OpError!*Window {
-        var col: ?*@import("../Column.zig") = null;
-        if (self.ed.seltext) |t| {
-            if (t.w) |wp| col = wp.col;
-        }
-        if (col == null) {
-            const row = self.ed.row orelse return error.IoError;
-            if (row.col.items.len == 0) return error.IoError;
-            col = row.col.items[0];
-        }
-        return cmd_window.makeWindow(col.?, "") catch return error.IoError;
+        return place.makeNewWindow(self.ed, null) catch return error.IoError;
     }
 
     fn fsysOf(ctx: *anyopaque) *Fsys {

@@ -1,6 +1,7 @@
 //! Window/column builtins: `del` (Del/Delete), `new` (New), `newcol` (Newcol),
-//! `delcol` (Delcol), plus the `colOf`/`rowOf` tree resolvers and the shared
-//! empty-window creation helper. namespace module (S-07 P-1). Ported from
+//! `delcol` (Delcol). The `colOf`/`rowOf` tree resolvers and the shared
+//! empty-window creation helper now live in `core/place.zig` (phase 12b) and are
+//! aliased/wrapped below. namespace module (S-07 P-1). Ported from
 //! larryr/plan9port@337c6ac acme/exec.c (:349-410 newcol/delcol/del) + look.c
 //! (:901-942 new); cite as `exec.c:NN` / `look.c:NN`.
 //!
@@ -13,65 +14,27 @@
 const std = @import("std");
 const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
-const File = @import("../File.zig");
-const Buffer = @import("../Buffer.zig");
 const Window = @import("../Window.zig");
 const Column = @import("../Column.zig");
-const Row = @import("../Row.zig");
 const exec = @import("exec.zig");
+const place = @import("../place.zig");
 
-/// `t->col` (dat.h): the Column a Text belongs to. A window text ⇒ the window's
-/// column; a columntag ⇒ its own Column (via `@fieldParentPtr`); anything else
-/// (a rowtag) ⇒ null.
-fn colOf(et: *Text) ?*Column {
-    if (et.w) |w| return w.col;
-    if (et.what == .columntag) {
-        const c: *Column = @fieldParentPtr("tag", et);
-        return c;
-    }
-    return null;
-}
-
-/// `t->row` (dat.h): the Row a Text belongs to. A rowtag ⇒ its own Row (via
-/// `@fieldParentPtr`); otherwise the row of `colOf(et)`.
-fn rowOf(et: *Text) ?*Row {
-    if (et.what == .rowtag) {
-        const r: *Row = @fieldParentPtr("tag", et);
-        return r;
-    }
-    const c = colOf(et) orelse return null;
-    return c.row;
-}
+/// `t->col` / `t->row` (dat.h). The canonical definitions moved to
+/// `core/place.zig` in phase 12b (`makenewwindow` and `Editor`'s `activecol`
+/// writers need them too); aliased here so the builtins below read unchanged.
+const colOf = place.colOf;
+const rowOf = place.rowOf;
 
 /// The New/Newcol empty-window creation helper (look.c:921-926 `coladd(col, nil,
-/// nil, -1)` + `winsettag`). Mirrors `boot.addWinTo`: heap a body `File` over "",
-/// hand it to the Column (which takes ownership, `owns_body`, R-P9-5), set the
-/// name, compose the tag (`setTag1`), park the caret at the tag end, and fill both
-/// frames. This is the seam the namespace phase's `openfile` replaces.
+/// nil, -1)` + `winsettag`) — `place.mintWindow` at the C's default `y == -1`.
 ///
-/// `pub` per ruling R-P10-I (agents/contracts/phase10-served.md): the served
-/// tree's walk-to-`new` (`served/fsys.zig`) calls this directly — there is no
-/// `cnewwindow` channel, so a 9P walk mints a window through the same helper New
-/// uses (column chosen by the caller: `ed.seltext`'s, else the first column).
+/// `pub` per ruling R-P10-I (agents/contracts/phase10-served.md). NOTE (phase
+/// 12b): the served tree's walk-to-`new` no longer calls this — acme.c:877 runs
+/// `makenewwindow(nil)`, so `served/fsys.zig` goes through `place.makeNewWindow`
+/// now. `New`/`Newcol` keep THIS path, faithfully: look.c:922 and exec.c:352-364
+/// both place into the EXECUTING tag's own column (R-P12b-2).
 pub fn makeWindow(c: *Column, name: []const u8) Text.Error!*Window {
-    const a = c.chrome.allocator;
-    const f = try a.create(File);
-    var transferred = false;
-    errdefer if (!transferred) a.destroy(f);
-    f.* = File.init(a, try Buffer.initFromBytes(a, ""));
-    errdefer if (!transferred) f.deinit();
-
-    const w = try c.add(&c.row.?.winid, f, -1); // coladd (steal / fill)
-    w.owns_body = true; // the Window now owns and frees this body File
-    transferred = true; // f is reachable from the tree; its deinit chain frees it
-
-    try w.body.file.setName(name);
-    try w.setTag1();
-    const nc = w.tag.file.buffer.len();
-    try w.tag.setSelect(nc, nc);
-    try w.body.fill();
-    try w.tag.fill();
-    return w;
+    return place.mintWindow(c, -1, name);
 }
 
 /// `del` (exec.c:397-410), Del (flag1=false) and Delete (flag1=true). Close the
