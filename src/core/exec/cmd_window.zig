@@ -325,13 +325,14 @@ test "makeNewWindow: split arm bisects the biggest window; a tie picks the LOWER
     defer ed.deinit();
     ed.row = tree.row;
 
+    const w1_before = w1.r;
     const w = try place.makeNewWindow(&ed, null);
     try testing.expectEqual(c, w.col.?);
     try testing.expectEqual(@as(usize, 3), c.w.items.len);
     try testing.expect(w.r.min.y >= expected_y - fx.font.height);
     try testing.expect(w.r.min.y <= expected_y + fx.font.height);
     // w2 (the victim) shrank; w1 is untouched by the split.
-    try testing.expectEqual(w1.r, w1.r); // w1 identity unchanged (sanity)
+    try testing.expectEqual(w1_before, w1.r); // w1's rect unchanged by the split
     try testing.expect(w2.r.max.y - w2.r.min.y < 200); // w2 visibly shrank from a full column
 }
 

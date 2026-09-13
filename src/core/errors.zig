@@ -158,7 +158,10 @@ pub fn flushWarnings(ed: *Editor) Text.Error!void {
 
     for (list.items) |*wn| {
         if (wn.text.items.len == 0) continue;
-        const w = try errorWin(ed, wn.dir); // util.c:219 errorwin(warn->md, 'E')
+        // util.c:219 errorwin(warn->md, 'E'). DIVERGENCE: the C is fatal when no
+        // column can be made (util.c:96 error()); here one unplaceable bucket is
+        // dropped so a too-narrow rightmost column can never wedge the frame loop.
+        const w = errorWin(ed, wn.dir) catch continue;
         const t = &w.body;
         const q0 = t.file.buffer.len(); // util.c:241
         try t.insertAt(q0, wn.text.items, true); // util.c:243 textbsinsert (see above)
