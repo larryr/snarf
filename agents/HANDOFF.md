@@ -85,6 +85,12 @@ authorization for this file only). Prune freely — git keeps history.
   (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
   carve-out; OQ-BLD-2 ABI codegen; `colgrow` (R-P12b-3, the `<2 lines` arm after
   makeNewWindow); `textbsinsert` backspace processing on +Errors output.
+- **COMMITTED, not optional — native host spike (ADR-0005, R-OV-09, 2026-09-14)**: the
+  core natively + an adapter from our `/dev/draw`,`/dev/mouse`,`/dev/kbd` device files to
+  plan9port `devdraw`'s pipe protocol (`include/drawfcall.h` at the pinned SHA), drawing
+  the boot scene in a real window WITH `Tmoveto` warping. Spike first (proves the R-OV-03
+  boundary), then native 9P servers for files + processes. Runs after 12c. Do not let
+  this rot: if a session finds it still unstarted three phases from now, raise it.
 - **Open questions**: OQ-IN-1 touch chord-paste; OQ-BLD-2 ABI codegen; OQ-EDIT-4
   vim-motion layer (design settled, S-02 §6 `kbd hold` — implementation DEFERRED by
   user, don't build unprompted).
