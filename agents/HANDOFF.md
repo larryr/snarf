@@ -69,7 +69,15 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: phase 13 (`agents/contracts/phase13-opfs.md`, DRAFT)**: `/mnt/opfs` — in-module
+- **NEXT after 12c: directory windows (user-queued 2026-09-14)** — R-EDIT-03 + paper
+  §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
+  columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
+  `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:
+  (a) ninep.Client async ticket for walk/open/read/clunk (the standing gate for reading
+  through ANY mount); (b) `Namespace` must synthesize directory listings for mount-point
+  directories (`/`, `/mnt`) — the kernel did this for acme, our mount table must.
+  Then phase 13:
+- **phase 13 (`agents/contracts/phase13-opfs.md`, DRAFT)**: `/mnt/opfs` — in-module
   9P device server over the Origin Private File System (R-9P-09), `fsOp` import (ABI v5),
   parked async ops; grows `ninep.server.Ops` with create/remove (lifts phase-1 R5).
   User's stated direction: later EXPORT `/mnt/opfs` over 9P to other machines (Tauth
