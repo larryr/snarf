@@ -6,18 +6,22 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase12e`** (worktree `../snarf-wt/phase12e`, 2026-09-14, larry's Mac, local only) —
-  STRUCTURE-ONLY: `core/Gesture.zig` carve-out from `Editor.zig`, warnings bodies →
-  `errors.zig`, `origin/handshake.zig` split + `Client.seedQid`, `main_wasm` → `origin_glue.zig`,
-  size pass (measure only). Owns those files + `src/accept.zig` field paths. Zero behavior
-  change; any golden move = defect. Contract `agents/contracts/phase12e-structure.md`.
+- *(none as of 2026-09-14 — phase 12e merged; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b, 12c, 12d are MERGED to `main`; `main` is green.**
-  573/573 tests, node smoke 26/26, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1605 KiB
-  (watch — +48 KiB in phase 12, +27 in 12b, +10 in 12c, +14 in 12d).
+- **Phases 1–12, 12b, 12c, 12d, 12e are MERGED to `main`; `main` is green.**
+  575/575 tests, node smoke 26/26, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1610 KiB
+  ReleaseSafe (user decision 2026-09-14: KEEP ReleaseSafe default; ReleaseSmall measured at
+  194 KiB — revisit when a remote deploy makes size matter).
+- **Phase 12e MERGED (2026-09-14, structure-only)** — see agents/reports/phase12e-structure.md:
+  `Editor.zig` 824→383 pre-test lines via NEW `core/Gesture.zig` (mousethread state+arms),
+  `core/textselect.zig` (sweep/chord loop), `core/snarf.zig`; warning buckets in
+  `errors.zig`; `origin/handshake.zig` split from `OriginMount.zig` (319); `Client.seedQid`;
+  `origin_glue.zig` from `main_wasm.zig` (373). Pure move (540 test names identical, no
+  golden moved). **Gesture carve-out debt CLOSED.** Remaining over-cap (untouched by design):
+  `dev/draw.zig` 806, `ninep/client.zig` 672, `core/Window.zig` 536 — split when touched.
 - **Phase 12d MERGED (`6d13dda`, 2026-09-14)** — see agents/reports/phase12d-unions.md:
   union mount table (`bind .before/.after/.replace`, `unmount`, `unbindTarget` — the phase-12
   GAP is CLOSED), NEW `ninep/nsdir.zig` (`walk` first-success over members, `DirReader`
@@ -117,8 +121,9 @@ authorization for this file only). Prune freely — git keeps history.
   clipboard; Zerox; Sort; Exit; Shift-B3 reverse look + dot=addr ctl (small
   integration wave); host-command allow-list
   (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
-  carve-out; OQ-BLD-2 ABI codegen; `colgrow` (R-P12b-3, the `<2 lines` arm after
-  makeNewWindow); `textbsinsert` backspace processing on +Errors output.
+  OQ-BLD-2 ABI codegen; `colgrow` (R-P12b-3, the `<2 lines` arm after
+  makeNewWindow); `textbsinsert` backspace processing on +Errors output; ASCII-only
+  `isalnum` (Plan 9 is Latin-1); `zig build small` artifact for size tracking.
 - **COMMITTED, not optional — native host spike (ADR-0005, R-OV-09, 2026-09-14)**: the
   core natively + an adapter from our `/dev/draw`,`/dev/mouse`,`/dev/kbd` device files to
   plan9port `devdraw`'s pipe protocol (`include/drawfcall.h` at the pinned SHA), drawing
