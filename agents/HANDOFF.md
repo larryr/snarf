@@ -6,7 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 12c merged `e351203`; remote has only `main`)*
+- **`phase12d`** (worktree `../snarf-wt/phase12d`, 2026-09-14, larry's Mac, local only) —
+  union directories + synthetic root + `/n/origin` rename. Owns `src/ninep/mount.zig`, NEW
+  `src/ninep/nsdir.zig` (+ maybe `nspath.zig`), `src/origin/OriginMount.zig`,
+  `src/main_wasm.zig`, `src/core/exec/cmd_origin.zig`, `tools/smoke_wasm.mjs`, `README.md`,
+  `docs/spec/02-namespaces.md`, `docs/requirements/{01,03}*.md`, diagrams. Contract
+  `agents/contracts/phase12d-unions.md`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
