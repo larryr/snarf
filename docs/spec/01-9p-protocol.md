@@ -87,10 +87,53 @@ sequence diagram below shows the common walk/open/read flow against `/mnt/host`:
 
 Diagram source: [diagrams/9p-session.puml](diagrams/9p-session.puml)
 
+### 4.1 Tickets and jobs — the client side of "never block" (R-9P-13)
+
+The server side above is only half the rule. The editor runs on the browser's main
+thread, so **no 9P operation it issues may block** — not just reads of parkable files.
+Two situations make a synchronous RPC impossible: a file that parks server-side (the
+reply never comes), and a transport with no pump at all (`/n/origin`'s frames arrive on
+a later tick, through `wsPush`). One mechanism covers every T-message:
+
+- **`begin(client, T-message, buf) → Ticket`** — send now, do not wait. A slot keyed by
+  the freshly allocated tag records the caller's borrowed `buf`. `begin` may pump, but
+  only for the SEND.
+- **`check(client, ticket) → ?Reply`** — **never pumps and never blocks.** It drains
+  whatever frames the transport has *right now* (a `WouldBlock` ends the drain), routes
+  each by tag into its slot, then reports this ticket: `null` = still pending, a decoded
+  reply = done (and the ticket is consumed), an `Rerror` = the mapped error
+  (`"interrupted"` for a flushed ticket).
+- **`cancel(client, ticket)`** — `Tflush` the ticket and consume it either way, handling
+  both server orderings (flushed-reply-then-`Rflush`, or the data racing ahead).
+
+Invariant: a live tag is always in the pending table, so a synchronous op still in
+flight routes a foreign reply into its ticket rather than failing — an out-of-order
+`Rread` for a standing `/dev/mouse` ticket is absorbed while a `Tstat` is outstanding.
+A **read ticket** is the mode of this mechanism that copies the `Rread` *payload* to the
+front of the caller's buffer; every other ticket takes the *raw reply frame*, so its
+`buf` must be sized for the reply (and a `Tread` issued that way can only ask for
+`buf.len − 11` bytes).
+
+**Jobs.** Multi-message operations are state machines over tickets: one message in
+flight, one state advanced per `step()`, results in fields, `deinit` cancelling anything
+outstanding and clunking anything opened. The four the editor needs are walk a namespace
+path (the union walk of S-02 §1.1), stat it, read a whole file, and list a directory
+(`unionread`, S-02 §1.2). Nothing in the editor may reach a mounted file any other way.
+The synchronous walk/read helpers survive only for pumped in-process transports and for
+tests, where a `runSync(job, pump)` loop drives a job to completion — and that loop's
+pump must drive **every** server the job can reach, precisely because `check` refuses to
+pump on its own.
+
 > Revision log: 2026-07-19 — §4 implemented (phase 6): framework-level parked-read
 > FIFO with re-run completion (Server.completeReads), Tflush answering the parked tag
 > Rerror "interrupted" BEFORE Rflush, clunk/version sweeps. Devices signal parking
 > via error.WouldBlockRead (never a wire string).
+>
+> 2026-09-14 — §4.1 added (phase 13a): R-9P-13 extended from "blocking reads" to every
+> 9P operation the editor issues. `src/ninep/tickets.zig` holds the generic ticket (the
+> phase-6 read ticket becomes its `.payload` mode, byte-identical — a raw-frame slot
+> cannot carry it, since `beginRead` asks for the caller's whole buffer);
+> `src/ninep/nsjob.zig` (walk) + `src/ninep/nsio.zig` (stat/read/list) hold the jobs.
 
 ## 5. Errors (canonical strings)
 
