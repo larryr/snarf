@@ -134,8 +134,11 @@ pub fn syntheticStat(name: []const u8, full_path: []const u8) Stat {
 /// The synthetic check also runs when every member walk failed: a mount point
 /// can be a directory that no server has (`/n` when `/` is served by something
 /// that never heard of it), exactly as devroot supplies `/mnt` for the kernel.
-pub fn walk(ns: *const Namespace, path: []const u8) Error!Handle {
-    if (path.len == 0 or path[0] != '/') return error.BadPath;
+pub fn walk(ns: *const Namespace, path_in: []const u8) Error!Handle {
+    if (path_in.len == 0 or path_in[0] != '/') return error.BadPath;
+    // One trailing '/' is tolerated ("/n/" == "/n"), matching `DirReader.open`'s
+    // canonicalization so the two entry points agree on synthetic directories.
+    const path = if (path_in.len > 1 and path_in[path_in.len - 1] == '/') path_in[0 .. path_in.len - 1] else path_in;
     const res = ns.resolve(path) catch |e| switch (e) {
         error.BadPath => return error.BadPath,
         error.NotMounted => return syntheticHandle(ns, path) orelse error.NotMounted,

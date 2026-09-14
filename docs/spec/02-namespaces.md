@@ -66,12 +66,13 @@ be created in them (a `bind`/`mount` is what puts something there).
 |--------|------|------|
 | `/dev/draw`, `/dev/mouse`, `/dev/kbd`, `/dev/cons`, `/dev/cursor` | both | in-module device servers (S-03, S-04) |
 | `/dev/dom` | browser | the hosting page (§2) — **browser-only, low priority** |
-| `/dev/snarf`, `/dev/storage`, `/dev/notify`, `/dev/location`, `/dev/title`, `/dev/log` | browser | browser feature files (§3) |
+| `/dev/snarf` | both | clipboard (§3): browser = async Clipboard API; native = `devdraw` `Trdsnarf`/`Twrsnarf` (ADR-0005 §2) |
+| `/dev/storage`, `/dev/notify`, `/dev/location`, `/dev/title`, `/dev/log` | browser | browser feature files (§3) |
 | `/dev/ns` | both | this table, `ns(1)` style, read-only |
-| `/mnt/host` | browser | File System Access grants (§4) |
+| `/mnt/host` | both | the host file system (§4): browser = File System Access grants; native = a real 9P file server (ADR-0005 §2) |
 | `/mnt/opfs` | browser | Origin Private File System (§4) |
 | `/mnt/snarf-self` | both | Snarf's own served tree (§6) |
-| `/n/origin` | browser | the origin server's 9P export (§5) |
+| `/n/origin` | both | the origin server's 9P export (§5); transport-agnostic (WebSocket in the browser, any 9P transport natively) |
 | `/bin` | both | command union; the origin's `bin/` is bound in with `-a` (§5) |
 
 "Host" is where the mount can exist at all: **browser** (needs the page), **native**
@@ -115,7 +116,7 @@ the escape hatch that keeps tree-walking cheap.
 
 | File | Host | Semantics |
 |------|------|-----------|
-| `/dev/snarf` | browser | Read: entire clipboard as text (async Clipboard API; permission error → `Rerror "permission denied"`). Write (OTRUNC): replace clipboard on clunk (writes buffered until `Tclunk`, matching Plan 9's snarf semantics and the Clipboard API's single-shot writes). |
+| `/dev/snarf` | both | Read: entire clipboard as text (browser: async Clipboard API; native: `devdraw` `Trdsnarf`; permission error → `Rerror "permission denied"`). Write (OTRUNC): replace clipboard on clunk (writes buffered until `Tclunk`, matching Plan 9's snarf semantics and the Clipboard API's single-shot writes). |
 | `/dev/storage/` | browser | Writable tree persisted to IndexedDB. Ordinary create/read/write/remove; survives reloads. Quota errors → `Rerror "quota exceeded"`. Intended for `Dump` files (R-EDIT-16), settings, etc. |
 | `/dev/notify` | browser | Write `title` on first line, body on the rest → Notification (permission requested on first use). |
 | `/dev/location` | browser | Read: current URL + one `key value` line per component. Write: URL → navigate (top-level navigation prompts a confirm since it destroys the session). |
@@ -123,7 +124,7 @@ the escape hatch that keeps tree-walking cheap.
 | `/dev/log` | browser | Append-only (`QTAPPEND`); each write becomes one `console.log` line. |
 | `/dev/input/ctl` | both | Read: active input profile + capabilities. Write: `profile native|modifier|touch|chordbar`, `map <modifier> <button>` (S-04). |
 
-## 4. `/mnt/host` and `/mnt/opfs` — host storage (R-9P-09) — Host: **browser**
+## 4. `/mnt/host` and `/mnt/opfs` — host storage (R-9P-09) — Host: `/mnt/host` **both**, `/mnt/opfs` **browser**
 
 (The native host reaches the file system through a native 9P file server instead; ADR-0005.)
 
@@ -138,7 +139,7 @@ the escape hatch that keeps tree-walking cheap.
   → read-only snapshot files) and `export <path>` (download). 
 - `/mnt/opfs`: the Origin-Private File System, always available, fully writable, no prompts.
 
-## 5. `/n/origin` — origin 9P export (R-9P-10) — Host: **browser**
+## 5. `/n/origin` — origin 9P export (R-9P-10) — Host: **both** (WebSocket transport is the browser's)
 
 Mounted at boot when the WebSocket endpoint (S-01 §3.2) connects; otherwise absent.
 `/n` is Plan 9's directory for network-mounted services (`ns(1)`, `srv(4)`: `/n/<service>`)
