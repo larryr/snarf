@@ -230,6 +230,9 @@ pub const PendingLook = struct {
     q0: usize,
     q1: usize,
     reverse: bool,
+    /// `e->jump` (look.c:735/741), carried across the park so the warp
+    /// decision made at click time survives the asynchronous verdict.
+    jump: bool,
     /// Absolute, cleaned. Owned; BORROWED by the job, so it must not move.
     name: []u8,
     /// The `:addr` runes. Owned.
@@ -240,7 +243,7 @@ pub const PendingLook = struct {
 /// look.c:783 — the `expandfile` arm of `expand`. Returns TRUE when the look is
 /// handled (opened, parked or diagnosed) and the caller must NOT run the
 /// literal search; FALSE for the C's `Isntfile`, which falls through.
-pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!bool {
+pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool, jump: bool) Text.Error!bool {
     dropPending(ed); // one at a time: a newer B3 supersedes the older
     const a = ed.allocator;
     const cand = expandFile(t, q0, q1) orelse return false;
@@ -267,7 +270,7 @@ pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Tex
     // window the click happened in — no name to check the existence of.
     if (name.len == 0) {
         if (t.w == null) return false;
-        _ = openfile.openFile(ed, t, .{ .name = "", .addr = addr, .q0 = cand.q0, .q1 = cand.q1 }) catch return false;
+        _ = openfile.openFile(ed, t, .{ .name = "", .addr = addr, .jump = jump, .q0 = cand.q0, .q1 = cand.q1 }) catch return false;
         return true;
     }
 
@@ -281,7 +284,7 @@ pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Tex
     // look.c:704-705: "if it's already a window name, it's a file" — no
     // existence check at all, so this arm stays synchronous.
     if (errors.lookFile(row, abs) != null) {
-        _ = openfile.openFile(ed, t, .{ .name = abs, .addr = addr, .q0 = cand.q0, .q1 = cand.q1 }) catch return false;
+        _ = openfile.openFile(ed, t, .{ .name = abs, .addr = addr, .jump = jump, .q0 = cand.q0, .q1 = cand.q1 }) catch return false;
         return true;
     }
 
@@ -297,6 +300,7 @@ pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Tex
         .q0 = q0,
         .q1 = q1,
         .reverse = reverse,
+        .jump = jump,
         .name = try a.dupe(u8, abs),
         .addr = if (addr) |ap| try a.dupe(u21, ap) else null,
         .job = undefined,
@@ -326,12 +330,13 @@ pub fn stepPending(ed: *Editor) Text.Error!void {
         const q0 = pl.q0;
         const q1 = pl.q1;
         const reverse = pl.reverse;
+        const jump = pl.jump;
         dropPending(ed);
-        return look.literal(ed, t, q0, q1, reverse);
+        return look.literal(ed, t, q0, q1, reverse, jump);
     };
     if (st == .pending) return;
     const t = pl.t;
-    _ = openfile.openFile(ed, t, .{ .name = pl.name, .addr = pl.addr }) catch {};
+    _ = openfile.openFile(ed, t, .{ .name = pl.name, .addr = pl.addr, .jump = pl.jump }) catch {};
     dropPending(ed);
 }
 

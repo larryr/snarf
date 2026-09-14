@@ -45,6 +45,18 @@ pub fn build(b: *std.Build) void {
             .{ .name = "shim", .module = shim },
         },
     });
+    // The NATIVE host's device layer (ADR-0005, phase 15): 9P devices that
+    // forward to a plan9port `devdraw` child process over its `drawfcall` pipe.
+    // Same layer as `dev` — it IS a host boundary, so `core` must never import
+    // it (S-07 §6). It imports `dev` for one thing: the shared `/dev/mouse`
+    // record formatter, so the two hosts cannot drift in what a record is.
+    const host = b.addModule("host", .{
+        .root_source_file = b.path("src/host/host.zig"),
+        .imports = &.{
+            .{ .name = "ninep", .module = ninep },
+            .{ .name = "dev", .module = dev },
+        },
+    });
     // `/mnt/origin` boot glue (R-P12-5/6/7): the WebSocket transport (`shim`)
     // joined to the mount table and 9P client (`ninep`). Same layer as `dev` —
     // it sees the browser boundary, so `core` must never import it. Its own
@@ -99,9 +111,12 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_wasm.step);
     b.getInstallStep().dependOn(&install_web.step);
 
-    // --- snarf-headless: native harness (everything except shim, S-07 §6). ---
+    // --- snarf-native: the NATIVE HOST (ADR-0005). The same editor core, in a
+    //     real window, through a plan9port `devdraw` child process. Everything
+    //     except `shim` (S-07 §6); `core`/`draw`/`ninep` are the SAME module
+    //     objects the wasm build consumes — no -D forks, no host #ifdefs. ---
     const native = b.addExecutable(.{
-        .name = "snarf-headless",
+        .name = "snarf-native",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main_native.zig"),
             .target = target,
@@ -111,12 +126,15 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "draw", .module = draw },
                 .{ .name = "ninep", .module = ninep },
                 .{ .name = "dev", .module = dev },
+                .{ .name = "host", .module = host },
             },
         }),
     });
     b.installArtifact(native);
+    const native_step = b.step("native", "Build the native host (snarf-native)");
+    native_step.dependOn(&b.addInstallArtifact(native, .{}).step);
     const run_native = b.addRunArtifact(native);
-    const run_step = b.step("run-native", "Run the native headless harness");
+    const run_step = b.step("run-native", "Run the native host: the editor in a devdraw window");
     run_step.dependOn(&run_native.step);
 
     // --- zig build serve: the origin server (S-02 §5, S-06 §3) — static
@@ -165,6 +183,12 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, target, optimize, "src/dev/dev.zig", &.{
         .{ .name = "ninep", .module = ninep },
         .{ .name = "shim", .module = shim },
+    });
+    // The native host's device layer (phase 15). CI has no window, so these are
+    // codec + scripted-peer tests only: no child process, no thread.
+    addModuleTests(b, test_step, target, optimize, "src/host/host.zig", &.{
+        .{ .name = "ninep", .module = ninep },
+        .{ .name = "dev", .module = dev },
     });
     // The `/mnt/origin` state machine over a scripted browser (R-P12-9a).
     addModuleTests(b, test_step, target, optimize, "src/origin/origin.zig", &.{

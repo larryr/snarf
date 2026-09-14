@@ -11,14 +11,18 @@
 //! file?" with `access()` mid-call, Snarf parks a `StatJob` and resolves it on a
 //! later frame, so a look that is NOT a file runs its literal search a frame or
 //! two late. Permanently dropped:
-//! the `e.jump`/`moveto` mouse warp on a hit (look.c:219, R-P8-6 lineage) and
 //! winlock/unlock (look.c:206-207/220-221, single-threaded). `winsettag` on a hit
 //! (look.c:418) is covered for free by the frameEnd tag sweep (R-P9-4).
+//!
+//! The `e.jump`/`moveto` warp on a hit (look.c:219) is NO LONGER dropped
+//! (phase 15, R-P15-3): it is issued as a `/dev/mouse` write through
+//! `warp.zig`, which the native host honours and the browser host ignores.
 const std = @import("std");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const select = @import("text/select.zig");
 const expand = @import("expand.zig");
+const warp = @import("warp.zig");
 
 /// look3 (look.c:82-229, minus the deferred arms above). `[q0,q1)` are absolute
 /// rune coords in `t`. A bare click inside `t`'s own selection captures it
@@ -35,22 +39,25 @@ const expand = @import("expand.zig");
 pub fn look(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
     var e0 = q0;
     var e1 = q1;
+    var jump = true; // look.c:735 `e->jump = TRUE`
     if (q1 == q0 and t.q1 > t.q0 and t.q0 <= q0 and q0 <= t.q1) {
         // look.c:738-743: a bare click inside the current selection ⇒ the
-        // selection itself is the needle. (The `e->jump=FALSE` tag tweak only fed
-        // the dropped `moveto` warp, so it is irrelevant here.)
+        // selection itself is the needle, and a bare click in a TAG does not
+        // warp (look.c:741-742 `if(t->what == Tag) e->jump = FALSE`) — the
+        // pointer is already where the user put it.
         e0 = t.q0;
         e1 = t.q1;
+        if (t.what == .tag) jump = false;
     }
-    if (try expand.startLook(ed, t, e0, e1, reverse)) return; // look.c:783
-    return literal(ed, t, e0, e1, reverse);
+    if (try expand.startLook(ed, t, e0, e1, reverse, jump)) return; // look.c:783
+    return literal(ed, t, e0, e1, reverse, jump);
 }
 
 /// The literal (within-window search) arm of `look3`: the alnum expansion
 /// (look.c:786-791) and `search` (look.c:200-221's else branch). Reached
 /// directly when the text is not a file name, and from `expand.stepPending`
 /// when the parked existence check says it is not.
-pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
+pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool, jump: bool) Text.Error!void {
     var e0 = q0;
     var e1 = q1;
     const nc = t.file.buffer.len();
@@ -84,8 +91,9 @@ pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.
     defer ed.allocator.free(needle);
     for (needle, 0..) |*r, i| r.* = t.file.buffer.runeAt(e0 + i);
 
-    // look.c:218: search `ct`; the `e.jump`/`moveto` warp on a hit is dropped.
-    _ = try search(ed, ct, needle, reverse);
+    // look.c:218-219: search `ct`, and on a hit with `e.jump` warp the pointer
+    // onto the match (R-P15-3; a no-op on a host that cannot warp).
+    if (try search(ed, ct, needle, reverse) and jump) warp.toSelection(ed, ct);
 }
 
 /// `search` (look.c:313-441) as a plain `Buffer.runeAt` scan. The C's `fbuf`
@@ -177,6 +185,7 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Chrome = @import("Chrome.zig");
+const ninep = @import("ninep"); // T9 only: mounts warp.MouseSink at /dev
 
 const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
 
@@ -375,4 +384,80 @@ test "look: b3 in the tag searches the body" {
     try testing.expectEqual(body, h.ed.seltext.?);
     try testing.expectEqual(tag_q0, tag.q0);
     try testing.expectEqual(tag_q1, tag.q1);
+}
+
+// --------------------------------------------------------------------------
+// T9 (phase15-native-spike.md §4): a real Look hit issues exactly one
+// `/dev/mouse` write, carrying the hit's point, through the namespace — not a
+// direct call to `warp.to`/`warp.toSelection`, but `look()` itself.
+//
+// TWO TRAPS this test must dodge (phase-15 report, "Public API for the test
+// writer"):
+//   (a) the click must NOT be treated as a file name, or `expand.startLook`
+//       parks a `StatJob` and the warp lands a frame or two later via
+//       `Load.addressAndShow` instead of synchronously here. `startLook`
+//       reaches its namespace/StatJob arm only after `ed.row orelse return
+//       false` (expand.zig) — `WinHarness` never sets `ed.row` (no boot, no
+//       Row), so `startLook` always bails there and `look()` falls straight
+//       through to the literal search arm, every time, regardless of the
+//       clicked text.
+//   (b) the Text must be windowed and LAID OUT, or `ptOfChar` answers with the
+//       frame's origin for every offset instead of the hit's real position —
+//       `WinHarness` + `w.resize` (as the b3-in-tag test above already relies
+//       on) gives a live `Frame` that `Text.show` (called from `search`'s
+//       `landHit`) actually lays text into.
+// --------------------------------------------------------------------------
+
+fn pumpMouseSink(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+test "look: a literal hit warps the pointer through a real /dev/mouse write (T9)" {
+    const a = testing.allocator;
+
+    // The /dev/mouse capture, mounted through a genuine 9P round trip (the
+    // same rig `warp.zig`'s own namespace test uses) — not a bare function
+    // call to `warp.to`, so this exercises the real `look -> search ->
+    // warp.toSelection -> namespace -> write` path end to end.
+    var sink: warp.MouseSink = .{};
+    const pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(a, pipe.serverEnd(), &warp.MouseSink.ops, &sink, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpMouseSink };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/dev", &cl, root.fid);
+
+    // A real, windowed, laid-out body (trap b). "target" is the sole
+    // occurrence, so the forward search re-finds it after one lap.
+    const h = try WinHarness.init("wibble target wibble", proto.Rect.make(0, 20, 300, 380));
+    defer h.deinit();
+    _ = try h.w.resize(proto.Rect.make(0, 20, 300, 380), false, false);
+    h.ed.ns = &ns;
+
+    const body = &h.w.body;
+    // An explicit, non-empty range (not a bare click) naming "target" at
+    // [7,13) — `ed.row == null` (trap a) means this never risks the parked
+    // StatJob path regardless of how file-name-like the text looks.
+    try look(&h.ed, body, 7, 13, false);
+
+    try testing.expectEqual(@as(usize, 7), body.q0);
+    try testing.expectEqual(@as(usize, 13), body.q1);
+    try testing.expectEqual(body, h.ed.seltext.?);
+
+    // Exactly one warp write reached the namespace, and it names the SAME
+    // point `warp.toSelection` computes from the body's now-laid-out frame
+    // (look.c:219's `moveto(mousectl, addpt(frptofchar(...), Pt(4, height-4)))`).
+    try testing.expectEqual(@as(usize, 1), sink.writes);
+    const pt = body.fr.ptOfChar(body.fr.p0);
+    const fh: i32 = body.fr.font.height;
+    var want: [warp.rec_len]u8 = undefined;
+    warp.format(pt.x + 4, pt.y + fh - 4, &want);
+    try testing.expectEqualStrings(&want, &sink.last);
 }
