@@ -6,7 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 14a merged `afff8ac`; remote has only `main`)*
+- **`phase14b`** (worktree `../snarf-wt/phase14b`, 2026-09-14, larry's Mac, local only) —
+  OPFS device: NEW `src/dev/opfs*.zig` (parked `Ops` over a `Requester` vtable), `src/opfs_glue.zig`,
+  `fsOp` import + `fsStage`/`fsPush` exports (**ABI v6**), `web/shim.js` (+ maybe `web/opfs.js`),
+  `ns_boot.zig` mount `/mnt/opfs`, smoke stub, S-02 §4 / S-06 §4 / R-03 docs. Owns those files.
+  Contract `agents/contracts/phase14b-opfs.md` (supersedes the 2026-09-02 draft
+  `phase14-opfs.md`, which stays as history).
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
