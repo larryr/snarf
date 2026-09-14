@@ -670,6 +670,79 @@ pub const FailServer = struct {
     }
 };
 
+/// A tree that mounts and OPENs fine but whose directory READ always fails —
+/// phase12e T6 needs a union member that fails at `unionread`'s per-member
+/// `read`, not at `open` (sysfile.c:340's `catch 0` arm treats a failing read
+/// the same as end-of-file: the component is skipped, not surfaced as an
+/// error).
+pub const FailReadTree = struct {
+    fn attach(_: *anyopaque, _: *server.Server, _: *server.Fid, _: []const u8) errors.OpError!Qid {
+        return .{ .path = 1, .qtype = .{ .dir = true } };
+    }
+    fn walk1(_: *anyopaque, _: *server.Server, _: *server.Fid, _: []const u8) errors.OpError!Qid {
+        return error.FileDoesNotExist;
+    }
+    fn open(_: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) errors.OpError!Qid {
+        if ((mode & 3) != msg.OREAD) return error.PermissionDenied;
+        return fid.qid;
+    }
+    fn read(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, _: []u8) server.ReadError!usize {
+        return error.IoError;
+    }
+    fn write(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, _: []const u8) errors.OpError!usize {
+        return error.PermissionDenied;
+    }
+    fn statOp(_: *anyopaque, _: *server.Server, fid: *server.Fid) errors.OpError!Stat {
+        return .{ .qid = fid.qid, .mode = Stat.DMDIR | 0o555, .length = 0, .name = "/", .uid = "", .gid = "", .muid = "" };
+    }
+    pub const ops = server.Ops{
+        .attach = attach,
+        .walk1 = walk1,
+        .open = open,
+        .read = read,
+        .write = write,
+        .stat = statOp,
+    };
+};
+
+/// One `FailReadTree` behind a `chan.Pipe`, ready to mount (phase12e T6).
+pub const FailReadServer = struct {
+    pipe: *chan.Pipe,
+    srv: *server.Server,
+    client: *Client,
+    root_fid: u32,
+    dummy: *u8,
+    allocator: std.mem.Allocator,
+
+    fn pump(ctx: *anyopaque) anyerror!void {
+        const s: *server.Server = @ptrCast(@alignCast(ctx));
+        _ = try s.poll();
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !FailReadServer {
+        const pipe = try chan.Pipe.init(allocator, 16384);
+        const dummy = try allocator.create(u8);
+        dummy.* = 0;
+        const srv = try allocator.create(server.Server);
+        srv.* = try server.Server.init(allocator, pipe.serverEnd(), &FailReadTree.ops, dummy, 8192);
+        const cl = try allocator.create(Client);
+        cl.* = try Client.init(allocator, pipe.clientEnd(), 8192);
+        cl.pump = .{ .ctx = srv, .run = pump };
+        _ = try cl.version(8192);
+        const root = try cl.attach("larry", "");
+        return .{ .pipe = pipe, .srv = srv, .client = cl, .root_fid = root.fid, .dummy = dummy, .allocator = allocator };
+    }
+
+    pub fn deinit(self: *FailReadServer) void {
+        self.client.deinit();
+        self.allocator.destroy(self.client);
+        self.srv.deinit();
+        self.allocator.destroy(self.srv);
+        self.pipe.deinit();
+        self.allocator.destroy(self.dummy);
+    }
+};
+
 test "nsdir: union walk takes the first member that has the name (T6, T7, T8)" {
     const a = testing.allocator;
     var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
@@ -846,6 +919,32 @@ test "nsdir: a union member that fails to open is skipped (T11)" {
     const h = try walk(&ns, "/bin/rc");
     defer close(&ns, h);
     try testing.expectEqual(good.client, h.fid.client);
+}
+
+test "nsdir: a union member whose OPEN succeeds but READ fails is skipped (phase12e T6)" {
+    const a = testing.allocator;
+    var t = FakeTree{ .names = &.{"rc"}, .tag = "ok\n" };
+    var good = try FakeServer.init(a, &t);
+    defer good.deinit();
+    var bad = try FailReadServer.init(a);
+    defer bad.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    // The failing-read member goes FIRST: if it were not skipped, its error
+    // would end the union read instead of falling through to the good
+    // member's entry (sysfile.c:340 `catch 0` arm).
+    try ns.bind("/bin", bad.client, bad.root_fid, .after);
+    try ns.bind("/bin", good.client, good.root_fid, .after);
+
+    var dr = try DirReader.open(a, &ns, "/bin");
+    defer dr.close();
+    var buf: [512]u8 = undefined;
+    const n = try dr.read(0, &buf);
+    const st = try Stat.decode(buf[0..n]);
+    try testing.expectEqualStrings("rc", st.name);
+    try testing.expectEqual(st.encodedSize(), n);
+    try testing.expectEqual(@as(usize, 0), try dr.read(n, &buf));
 }
 
 test "nsdir: offset continuation matches a byte-identical single read (T12)" {

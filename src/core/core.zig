@@ -4,6 +4,14 @@
 const std = @import("std");
 
 pub const Editor = @import("Editor.zig");
+/// The mouse gesture machine (`mousethread`, acme.c:576-672) — carved out of
+/// `Editor.zig` in phase 12e; `Editor` forwards `handleMouse`/`hitTest` to it.
+pub const Gesture = @import("Gesture.zig");
+/// `textselect` + its chord loop (text.c:1001-1384), the half of the gesture
+/// machine that runs against one Text. Entered only via `Gesture.handleMouse`.
+pub const textselect = @import("textselect.zig");
+/// The snarf buffer's single-Text `cut`/`paste` cores (exec.c:947-1073).
+pub const snarf = @import("snarf.zig");
 pub const Buffer = @import("Buffer.zig");
 pub const File = @import("File.zig");
 pub const Text = @import("text/Text.zig");

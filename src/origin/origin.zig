@@ -8,8 +8,12 @@
 const std = @import("std");
 
 pub const OriginMount = @import("OriginMount.zig");
+/// The hand-driven version+attach+bin-walk handshake `OriginMount.poll`
+/// dispatches into (phase 12e carve-out).
+pub const handshake = @import("handshake.zig");
 
 test {
     std.testing.refAllDecls(@This());
     _ = OriginMount;
+    _ = handshake;
 }

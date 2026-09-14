@@ -522,11 +522,11 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     const win2 = tree.row.col.items[0].w.items[1];
     // Point into w1's body and type:
     const p1 = w1.body.fr.r;
-    ed.mouse_pt = .{ .x = p1.min.x + 5, .y = p1.min.y + 5 };
+    ed.gesture.mouse_pt = .{ .x = p1.min.x + 5, .y = p1.min.y + 5 };
     try ed.handleKey('A');
     // Point into w2's body and type:
     const p2 = win2.body.fr.r;
-    ed.mouse_pt = .{ .x = p2.min.x + 5, .y = p2.min.y + 5 };
+    ed.gesture.mouse_pt = .{ .x = p2.min.x + 5, .y = p2.min.y + 5 };
     try ed.handleKey('B');
     try ed.frameEnd(d);
     var rbuf: [128]u8 = undefined;
@@ -610,7 +610,7 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     // Second window; point-to-type an 'X' into it (dirties it, R-P6-8 typing run).
     const w2 = try tree.addWindow("notes", "");
     try ed.frameEnd(d);
-    ed.mouse_pt = .{ .x = w2.body.fr.r.min.x + 5, .y = w2.body.fr.r.min.y + 5 };
+    ed.gesture.mouse_pt = .{ .x = w2.body.fr.r.min.x + 5, .y = w2.body.fr.r.min.y + 5 };
     try ed.handleKey('X');
     try ed.frameEnd(d); // the tag sweep adds " Undo" to w2's tag (after "Snarf")
     try testing.expect(w2.dirty);
@@ -1144,7 +1144,7 @@ test "phase-12c: resize scene — grow then shrink keeps the tiling and the text
     // Type a rune with the pointer in the body — the tree is still live and
     // routes input after growing.
     const p = w.body.fr.r;
-    ed.mouse_pt = .{ .x = p.min.x + 5, .y = p.min.y + 5 };
+    ed.gesture.mouse_pt = .{ .x = p.min.x + 5, .y = p.min.y + 5 };
     try ed.handleKey('Z');
     try ed.frameEnd(d);
     var rbuf: [256]u8 = undefined;
