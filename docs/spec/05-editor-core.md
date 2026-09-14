@@ -30,7 +30,10 @@ behavior. Directory windows (R-EDIT-03) render namespace `Tread`-of-directory re
 - entries are sorted rune-wise, then by length (`dircmp`, text.c:121-133);
 - a directory window gets **narrower tabs** — `fr.maxtab = min(maxtab, TABDIR) *
   stringwidth("0")`, with `TABDIR = 3` (text.c:21) and `maxtab = 4` (acme.c:145-146),
-  i.e. 27 px at the 9×18 font (text.c:148);
+  i.e. 27 px at the 9×18 font (text.c:148); an ordinary window gets
+  `maxtab * stringwidth("0")` = **36 px** from `textinit`/`textredraw`
+  (text.c:53-60), NOT libframe's `frinit` default of `8 * stringwidth("0")` = 72
+  (frinit.c:12) — `Text.init` applies the override, phase 16c;
 - each entry's width is its `stringwidth`, bumped by one `stringwidth("0")` when the
   remainder to the next tab stop is under one, then rounded up to a tab stop; the
   column width is the maximum of those;

@@ -98,9 +98,26 @@ pub const DevInput9 = struct {
         });
     }
 
+    /// plan9port's `Kdown`/`Kview` (include/keyboard.h:27-28 at the pinned
+    /// `larryr/plan9port@337c6ac`). devdraw is a plan9port program, so this is
+    /// what it puts on the wire for the down arrow.
+    const p9p_kdown: u32 = 0x80;
+    /// The 4e tree's spelling of the same key, `Spec|0x00`
+    /// (`larryr/plan9@ed1a9c2` sys/include/keyboard.h:24,32).
+    const kdown: u32 = 0xF800;
+
     /// Enqueue one keyboard rune (`Rrdkbd4`). Runes devdraw cannot express as
     /// UTF-8 (its function-key range is above the Unicode max) are dropped.
-    pub fn pushRune(self: *Self, r: u32) !void {
+    ///
+    /// TRANSLATED ON THE WAY IN (16b item 13): R-P6-7 makes the 4e tree's
+    /// `keyboard.h` the contract for `/dev/kbd`, and the two headers differ on
+    /// exactly one constant — `Kdown`/`Kview`. Every other K-rune is identical
+    /// in both, and `Kcmd` (p9p-only, 0xF100) has no 4e meaning to collide
+    /// with, so it passes through untouched. Doing the mapping HERE, in the
+    /// host adapter, is what keeps `core` free of a per-host spelling
+    /// (ADR-0005: the adapter absorbs the backend's dialect).
+    pub fn pushRune(self: *Self, r_in: u32) !void {
+        const r = if (r_in == p9p_kdown) kdown else r_in;
         if (r > 0x10FFFF) return;
         var buf: [4]u8 = undefined;
         const n = std.unicode.utf8Encode(@intCast(r), &buf) catch return;
@@ -351,4 +368,34 @@ test "dev_input: kbd is not writable, mouse is" {
     var mfid = testFid(.mouse);
     const st = try DevInput9.ops.stat(&d, &srv, &mfid);
     try testing.expectEqual(@as(u32, 0o666), st.mode);
+}
+
+test "dev_input: devdraw's p9p Kdown becomes the 4e Kdown on the way in (16b item 13)" {
+    // R-P6-7: `/dev/kbd` speaks the 4e tree's keyboard.h. devdraw is a
+    // plan9port program and sends `Kdown = 0x80` (p9p include/keyboard.h:27);
+    // 4e spells it `Spec|0x00` = 0xF800 (plan9 sys/include/keyboard.h:24,32),
+    // which is what `web/shim.js`, `dev/profiles.zig` and `core/text/typing.zig`
+    // all use. Everything else in the two headers is identical.
+    var c = Conn.init(testing.allocator);
+    defer c.deinit();
+    var d = DevInput9.init(testing.allocator, &c);
+    defer d.deinit();
+    var srv: Server = undefined;
+    var fid = testFid(.kbd);
+    var buf: [32]u8 = undefined;
+
+    try d.pushRune(0x80); // what devdraw actually sends for the down arrow
+    const n = try DevInput9.ops.read(&d, &srv, &fid, 0, &buf);
+    var want: [4]u8 = undefined;
+    const wn = try std.unicode.utf8Encode(0xF800, &want);
+    try testing.expectEqualSlices(u8, want[0..wn], buf[0..n]);
+
+    // Kleft is the same constant in both headers and passes through untouched,
+    // and so does p9p's own Kcmd (0xF100), which 4e does not define.
+    for ([_]u32{ 0xF011, 0xF100, 'a' }) |r| {
+        try d.pushRune(r);
+        const m = try DevInput9.ops.read(&d, &srv, &fid, 0, &buf);
+        const wm = try std.unicode.utf8Encode(@intCast(r), &want);
+        try testing.expectEqualSlices(u8, want[0..wm], buf[0..m]);
+    }
 }

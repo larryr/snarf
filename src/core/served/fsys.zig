@@ -599,9 +599,11 @@ test "served: ctl line exact" {
     const rr = try h.read(1, 0, 4096);
     try testing.expect(rr.body == .rread);
 
-    // maxtab is 72 for the 9x18 body frame (Frame contract). dx = Dx(body.fr.r),
+    // maxtab is 36 for the 9x18 body frame since phase 16c — textinit's
+    // `maxtab*stringwidth("0")` = 4x9 (text.c:53-60), where the frame used to
+    // keep libframe's frinit default of 8x9 = 72. dx = Dx(body.fr.r),
     // hand-derived from the booted scene.
-    try testing.expectEqual(@as(i32, 72), w.body.fr.maxtab);
+    try testing.expectEqual(@as(i32, 36), w.body.fr.maxtab);
     const dx: u32 = @intCast(w.body.fr.r.max.x - w.body.fr.r.min.x);
 
     var expbuf: [256]u8 = undefined;
@@ -612,7 +614,7 @@ test "served: ctl line exact" {
         @as(u32, 0), // isdir
         @as(u32, @intFromBool(w.dirty)), // dirty (false at boot)
         dx,
-        @as(u32, 72), // maxtab
+        @as(u32, 36), // maxtab (16c: acme's 4x9, was libframe's 8x9=72)
         @as(u32, 0), // undo pending
         @as(u32, 0), // redo pending
     });
@@ -638,7 +640,7 @@ test "served: ctl line exact" {
         @as(u32, 0),
         @as(u32, 1), // dirty now true
         dx,
-        @as(u32, 72),
+        @as(u32, 36), // maxtab (16c)
         @as(u32, 1), // undo pending now true
         @as(u32, 0),
     });
@@ -831,18 +833,18 @@ test "served: ctl reports isdir 1 and the 27px dir tab width for a real director
         @as(u32, 1), // isdir (wind.c:695, LIVE since phase 13b)
         @as(u32, @intFromBool(w.dirty)),
         dx,
-        @as(u32, 27), // maxtab: TABDIR-narrowed (text.c:148), not the libframe 72
+        @as(u32, 27), // maxtab: TABDIR-narrowed (text.c:148), below the normal 36
         @as(u32, 0),
         @as(u32, 0),
     });
     try testing.expectEqualStrings(exp, rr.body.rread.data);
 
     // A normal (non-dir) window in the SAME tree still reports isdir 0 and the
-    // libframe default maxtab — "served: ctl line exact" pins this alone; this
-    // leg confirms it holds with a dir sibling in the same served tree.
+    // ordinary 36px tab — "served: ctl line exact" pins this alone; this leg
+    // confirms it holds with a dir sibling in the same served tree.
     const w2 = try h.tree.addWindow("two", "hi\n");
     try testing.expect(!w2.isdir);
-    try testing.expectEqual(@as(i32, 72), w2.body.fr.maxtab);
+    try testing.expectEqual(@as(i32, 36), w2.body.fr.maxtab);
 }
 
 test "served: /mnt/snarf-self/ns renders every mount in order; empty with no namespace (T14)" {

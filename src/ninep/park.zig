@@ -38,6 +38,7 @@ const std = @import("std");
 const msg = @import("msg.zig");
 const errors = @import("errors.zig");
 const server = @import("server.zig");
+const server_mut = @import("server_mut.zig");
 
 const Server = server.Server;
 
@@ -164,24 +165,44 @@ pub fn retryParkedPath(srv: *Server, path: u64) server.Error!usize {
     return retryFiltered(srv, path);
 }
 
-/// NOTE (review nit, 14a): a nested retry (an `Ops.write` that calls
-/// `completeReads` while this loop is mid-pass) may remove an entry at an
-/// index below the outer `i`; the outer pass then skips one entry, which is
-/// simply retried on the next pass — never dispatched twice, never lost.
+/// THE PASS WALKS TAGS, NOT INDICES (14a review nit, fixed in 16b). A nested
+/// retry — an `Ops.write` that calls `completeReads` while this loop is
+/// mid-pass, which R-P6-5 explicitly supports — may remove an entry BELOW the
+/// cursor; everything after it shifts left, and an index walk then steps over
+/// the entry that moved into the vacated slot. It was never dispatched twice
+/// and never lost (the next pass picked it up), but "every parked entry is
+/// retried exactly once per pass" was not true.
+///
+/// So the tags parked when the pass BEGINS are snapshotted, and each is looked
+/// up by tag when its turn comes: an entry a nested pass already answered is
+/// simply gone (`orelse continue`), and one that merely moved is found where it
+/// now is. `max_parked` bounds the snapshot, so it is a fixed 128-byte array
+/// and this function still allocates nothing.
+///
+/// A request that parks DURING the pass is not in the snapshot and waits for
+/// the next `retryParked` — which its own completion will trigger. Retrying
+/// something that blocked moments ago inside this very pass would be wasted
+/// work anyway.
 fn retryFiltered(srv: *Server, path: ?u64) server.Error!usize {
+    var snapshot: [max_parked]u16 = undefined;
+    var n: usize = 0;
+    for (srv.parked.items.items) |e| {
+        if (n == snapshot.len) break; // cannot happen: the queue IS bounded
+        snapshot[n] = e.tag;
+        n += 1;
+    }
+
     var replies: usize = 0;
-    var i: usize = 0;
-    while (i < srv.parked.count()) {
+    for (snapshot[0..n]) |tag| {
+        const i = srv.parked.indexOfTag(tag) orelse continue; // answered by a nested pass
         const e = srv.parked.items.items[i];
-        if (e.busy or !matchesPath(srv, e.frame, path)) {
-            i += 1; // not ours (or already in flight one frame up the stack)
-            continue;
-        }
+        // Not ours, or already in flight one frame up the stack.
+        if (e.busy or !matchesPath(srv, e.frame, path)) continue;
         // Re-decode the OWNED frame: the read `count` clamp, the write payload
         // and every bounds check are recomputed exactly as on first arrival.
         const m = msg.decode(e.frame) catch {
             srv.parked.removeAt(srv.allocator, i);
-            try srv.replyError(e.tag, error.BadMessage); // cannot happen: it decoded once
+            try srv.replyError(tag, error.BadMessage); // cannot happen: it decoded once
             replies += 1;
             continue;
         };
@@ -190,19 +211,13 @@ fn retryFiltered(srv: *Server, path: ?u64) server.Error!usize {
         // payload (R-P6-5 / O11 D6).
         srv.parked.items.items[i].busy = true;
         const outcome = srv.dispatchT(m, srv.pbuf) catch |err| {
-            if (srv.parked.indexOfTag(e.tag)) |j| srv.parked.items.items[j].busy = false;
+            if (srv.parked.indexOfTag(tag)) |j| srv.parked.items.items[j].busy = false;
             return err;
         };
         // Look the entry up again by TAG: a nested retry may have shifted it.
-        const j = srv.parked.indexOfTag(e.tag) orelse {
-            i += 1;
-            continue;
-        };
+        const j = srv.parked.indexOfTag(tag) orelse continue;
         srv.parked.items.items[j].busy = false;
-        if (outcome == .blocked) {
-            i += 1; // still blocked — stays parked, in place, unanswered
-            continue;
-        }
+        if (outcome == .blocked) continue; // still blocked — stays parked, unanswered
         srv.parked.removeAt(srv.allocator, j);
         replies += 1;
     }
@@ -226,6 +241,7 @@ fn matchesPath(srv: *Server, frame: []const u8, path: ?u64) bool {
 /// `srv.c` implements with its deferred `or->flush[]` list (:862, :751).
 pub fn flushTag(srv: *Server, oldtag: u16) server.Error!bool {
     const i = srv.parked.indexOfTag(oldtag) orelse return false;
+    server_mut.discardParkedWalk(srv, srv.parked.items.items[i].frame);
     srv.parked.removeAt(srv.allocator, i);
     try srv.replyError(oldtag, error.Interrupted);
     return true;
@@ -238,6 +254,7 @@ pub fn sweepFid(srv: *Server, fid: u32) server.Error!void {
     while (i < srv.parked.count()) {
         const e = srv.parked.items.items[i];
         if (fidOfFrame(e.frame) == fid) {
+            server_mut.discardParkedWalk(srv, e.frame);
             srv.parked.removeAt(srv.allocator, i); // shift left; do not advance i
             try srv.replyError(e.tag, error.Interrupted);
         } else i += 1;
@@ -315,6 +332,16 @@ const AllOps = struct {
     /// While `block_stat` is set, this many additional calls succeed anyway
     /// (each one consumes one), before reverting to WouldBlock. T8 only.
     stat_budget: usize = 0,
+    /// Every fid number the framework has handed to `Ops.clunk`, in order —
+    /// including the tentative-newfid discard (`server_mut.discardNewfid`).
+    clunked: [8]u32 = .{0} ** 8,
+    n_clunked: usize = 0,
+    /// 16b item 9: when set, the next `write` unblocks `stat` and drives ONE
+    /// path-filtered retry from INSIDE the outer pass (the R-P6-5 nesting).
+    nest_path: ?u64 = null,
+    /// How many times `stat` has actually been dispatched (blocked calls
+    /// included) — the "exactly once per pass" witness.
+    stat_calls: usize = 0,
 
     fn qidOf(path: u64) Qid {
         return .{ .path = path, .qtype = .{ .dir = path == 1 } };
@@ -338,13 +365,19 @@ const AllOps = struct {
         if (self.block_read) return error.WouldBlock;
         return 0;
     }
-    fn write(ctx: *anyopaque, _: *Server, _: *Fid, _: u64, data: []const u8) OpBlockError!usize {
+    fn write(ctx: *anyopaque, srv: *Server, _: *Fid, _: u64, data: []const u8) OpBlockError!usize {
         const self: *AllOps = @ptrCast(@alignCast(ctx));
         if (self.block_write) return error.WouldBlock;
+        if (self.nest_path) |p| {
+            self.nest_path = null;
+            self.block_stat = false;
+            _ = retryParkedPath(srv, p) catch {};
+        }
         return data.len;
     }
     fn stat(ctx: *anyopaque, _: *Server, fid: *Fid) OpBlockError!Stat {
         const self: *AllOps = @ptrCast(@alignCast(ctx));
+        self.stat_calls += 1;
         if (self.block_stat) {
             if (self.stat_budget > 0) {
                 self.stat_budget -= 1;
@@ -372,12 +405,21 @@ const AllOps = struct {
         if (self.block_wstat) return error.WouldBlock;
     }
 
+    fn clunk(ctx: *anyopaque, _: *Server, fid: *Fid) void {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.n_clunked < self.clunked.len) {
+            self.clunked[self.n_clunked] = fid.fid;
+            self.n_clunked += 1;
+        }
+    }
+
     const ops = Ops{
         .attach = attach,
         .walk1 = walk1,
         .open = open,
         .read = read,
         .write = write,
+        .clunk = clunk,
         .stat = stat,
         .create = create,
         .remove = remove,
@@ -679,4 +721,92 @@ test "park: a parked request whose fid vanishes without a Tclunk sweep gets the 
     const fresh = try h.transact(.{ .tag = 42, .body = .{ .tstat = .{ .fid = 0 } } });
     try testing.expect(fresh.body == .rerror);
     try testing.expectEqualStrings("unknown fid", fresh.body.rerror.ename);
+}
+
+test "park: a discarded tentative newfid is announced to the server (16b item 1)" {
+    // A never-installed newfid is invisible on the WIRE ("the newfid is not
+    // created", `5/walk`) but the server may already hold per-fid state for
+    // that number. lib9p closes it — `rwalk` does
+    // `closefid(removefid(pool, newfid))`, which runs the pool's `destroy`
+    // hook — and so do we, on the failure path and on the flush of a parked
+    // walk alike. [lib9p/srv.c:334-343 rwalk; lib9p/fid.c:64 closefid]
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+
+    // (a) Failed walk on a fresh newfid: clunked, exactly once.
+    const bad = try h.transact(.{ .tag = 50, .body = .{ .twalk = msg.Body.Twalk.init(0, 5, &.{"nope"}) } });
+    try testing.expect(bad.body == .rerror);
+    try testing.expectEqual(@as(usize, 1), h.fake.n_clunked);
+    try testing.expectEqual(@as(u32, 5), h.fake.clunked[0]);
+
+    // (b) Clone in place (fid == newfid) must NOT be clunked: the live fid
+    //     keeps that number (srv.c:320-323 increfs instead).
+    h.fake.n_clunked = 0;
+    const same = try h.transact(.{ .tag = 51, .body = .{ .twalk = msg.Body.Twalk.init(0, 0, &.{"nope"}) } });
+    try testing.expect(same.body == .rerror);
+    try testing.expectEqual(@as(usize, 0), h.fake.n_clunked);
+
+    // (c) A PARKED walk that is flushed: the framework never re-enters
+    //     `handleWalk`, so the discard happens in `flushTag`.
+    h.fake.block_walk = true;
+    try h.feed(.{ .tag = 52, .body = .{ .twalk = msg.Body.Twalk.init(0, 6, &.{"f"}) } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+    try testing.expectEqual(@as(usize, 0), h.fake.n_clunked); // not yet: it may still come back
+
+    try h.feed(.{ .tag = 53, .body = .{ .tflush = .{ .oldtag = 52 } } });
+    const interrupted = (try h.popMsg()).?;
+    try testing.expect(interrupted.body == .rerror);
+    try testing.expectEqualStrings("interrupted", interrupted.body.rerror.ename);
+    try testing.expect((try h.popMsg()).?.body == .rflush);
+    try testing.expectEqual(@as(usize, 1), h.fake.n_clunked);
+    try testing.expectEqual(@as(u32, 6), h.fake.clunked[0]);
+}
+
+test "park: a nested retry cannot make the outer pass skip an entry (16b item 9)" {
+    // R-P6-5 supports a handler driving its own retry. When that nested pass
+    // removes an entry BELOW the outer cursor, everything after it shifts left
+    // — and the old index walk stepped over whatever moved into the vacated
+    // slot. Walking a snapshot of TAGS instead visits every entry that was
+    // parked when the pass began, exactly once.
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+
+    const rw = try h.transact(.{ .tag = 10, .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } });
+    try testing.expect(rw.body == .rwalk);
+    const ro = try h.transact(.{ .tag = 11, .body = .{ .topen = .{ .fid = 1, .mode = msg.ORDWR } } });
+    try testing.expect(ro.body == .ropen);
+
+    h.fake.block_stat = true;
+    h.fake.block_write = true;
+    // Park order: [A Tstat fid1 (qid path 2)] [B Twrite fid1] [C Tstat fid0
+    // (qid path 1)]. The nested pass is filtered on path 2, so it can reach A
+    // and NOT C — which is exactly the shape that used to lose C.
+    try h.feed(.{ .tag = 70, .body = .{ .tstat = .{ .fid = 1 } } });
+    try h.feed(.{ .tag = 71, .body = .{ .twrite = .{ .fid = 1, .offset = 0, .data = "x" } } });
+    try h.feed(.{ .tag = 72, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expectEqual(@as(usize, 3), h.srv.parkedCount());
+    try testing.expect((try h.popMsg()) == null);
+
+    // One UNFILTERED pass. A is still blocked when its turn comes; B's handler
+    // then unblocks `stat` and drives the nested path-2 retry, which answers A
+    // and removes it from index 0.
+    h.fake.block_write = false;
+    h.fake.nest_path = 2;
+    h.fake.stat_calls = 0;
+    try testing.expectEqual(@as(usize, 2), try retryParked(&h.srv)); // B and C; A's reply is the nested pass's
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount()); // C is NOT skipped
+
+    // All three answered, and each Tstat ran once per pass that reached it:
+    // A blocked on its outer turn and succeeded in the nested pass, C once.
+    var seen = [_]bool{ false, false, false };
+    for (0..3) |_| {
+        const r = (try h.popMsg()).?;
+        try testing.expect(r.body != .rerror);
+        seen[r.tag - 70] = true;
+    }
+    try testing.expect(seen[0] and seen[1] and seen[2]);
+    try testing.expectEqual(@as(usize, 3), h.fake.stat_calls);
 }

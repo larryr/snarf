@@ -7,6 +7,8 @@
 #   make test       full native test suite (core+draw+ninep, no browser)
 #   make smoke      node smoke test against the built wasm
 #   make check      test + fmt check
+#   make small      ReleaseSmall wasm into zig-out/small (size tracking only; default stays ReleaseSafe)
+#   make sizes      print the ReleaseSafe and ReleaseSmall wasm sizes side by side
 #   make clean      remove build outputs and the zig cache
 #
 # Override: make run PORT=9000 BIND=0.0.0.0 EXPORT=/some/dir
@@ -25,7 +27,7 @@ else
   OPEN = xdg-open
 endif
 
-.PHONY: all build run serve test smoke fmt check clean
+.PHONY: all build run serve test smoke fmt check clean small sizes
 
 all: build
 
@@ -54,6 +56,17 @@ fmt:
 	$(ZIG) fmt --check src build.zig
 
 check: test fmt
+
+# Phase 16d: a ReleaseSmall artifact for size tracking. The DEFAULT build stays
+# ReleaseSafe (user decision 2026-09-14); this exists so the safe/small ratio is
+# one command away. Modules share one optimize mode per build, hence a separate
+# prefix rather than a second build.zig step.
+small:
+	$(ZIG) build -Doptimize=ReleaseSmall --prefix zig-out/small
+
+sizes: build small
+	@printf '%-14s %10s bytes\n' ReleaseSafe  $$(wc -c < zig-out/www/snarf.wasm)
+	@printf '%-14s %10s bytes\n' ReleaseSmall $$(wc -c < zig-out/small/www/snarf.wasm)
 
 clean:
 	rm -rf zig-out .zig-cache

@@ -377,3 +377,56 @@ test "makeNewWindow: t's own window wins when it is not much smaller (T14)" {
 fn dy(r: proto.Rect) i32 {
     return r.max.y - r.min.y;
 }
+
+test "makeNewWindow: a squeezed new window is grown by colgrow, wired at util.c:494-495 (16b item 11 integration)" {
+    // The `but == 1` arm itself is `column: grow gives a starved window lines
+    // from its neighbours (16b item 11)` in Column.zig — this test pins the
+    // ONE-LINE wire in `makeNewWindow` that calls it (util.c:494-495
+    // `if(w->body.fr.maxlines < 2) colgrow(w->col, w, 1)`), by comparing the
+    // real call against a CONTROL that lands the new window at the identical
+    // split point via `mintWindow` alone, with no `colgrow` call at all.
+    //
+    // A 600x125 column with one 30-line window, split against itself (`t`
+    // names its own body, so `makeNewWindow`'s victim is that same window —
+    // util.c:489-490): the plain split leaves the new window at ONE line
+    // (verified below via the control), which is exactly `makenewwindow`'s
+    // trigger. Hand-computed against the 9x18 test font; a font/geometry
+    // change may need new numbers, not a different assertion.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    const seed = try genLines(a, 30);
+    defer a.free(seed);
+    const rect = proto.Rect.make(0, 0, 600, 125);
+
+    // CONTROL: identical column, identical landing spot, `mintWindow` alone —
+    // no `colgrow` in the path at all.
+    {
+        var tree = try boot.boot(a, fx.disp, fx.font, rect, .{ .win_name = "one", .body = seed });
+        defer tree.deinit();
+        const c = tree.row.col.items[0];
+        const w1 = c.w.items[0];
+        const mid = @divTrunc(w1.r.min.y + w1.r.max.y, 2);
+        const w = try place.mintWindow(c, mid, "");
+        try testing.expect(w.body.fr.maxlines < 2); // the scenario genuinely needs growth
+    }
+
+    // REAL: the same scenario through `makeNewWindow`, which wires `colgrow`
+    // in when the freshly split window comes out under two lines.
+    var tree = try boot.boot(a, fx.disp, fx.font, rect, .{ .win_name = "one", .body = seed });
+    defer tree.deinit();
+    const c = tree.row.col.items[0];
+    const w1 = c.w.items[0];
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+    const w = try place.makeNewWindow(&ed, &w1.body);
+
+    try testing.expect(w.body.fr.maxlines >= 2); // colgrow fixed what the split alone would not
+    try testing.expectEqual(@as(usize, 2), c.w.items.len);
+    // Still tiled, in order, no overlap (colgrow's own invariant, cross-checked here).
+    try testing.expect(c.w.items[0] == w1 and c.w.items[1] == w);
+    try testing.expect(w1.r.max.y <= w.r.min.y);
+    try testing.expect(w.r.max.y <= c.r.max.y);
+}

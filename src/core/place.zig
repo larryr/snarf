@@ -155,8 +155,9 @@ pub fn makeNewWindow(ed: *Editor, t: ?*Text) Text.Error!*Window {
         y = @divTrunc(victim.r.min.y + victim.r.max.y, 2); // util.c:491
     }
     const w = try mintWindow(c, y, ""); // util.c:493 coladd(c, nil, nil, y)
-    // DEFERRED colgrow (cols.c:333+) R-P12b-3: the C follows with
-    // `if(w->body.fr.maxlines < 2) colgrow(w->col, w, 1)` (util.c:494).
+    // util.c:494-495: a window that came out under two body lines is grown at
+    // its neighbours' expense (R-P12b-3, ported in 16b — `core/colgrow.zig`).
+    if (w.body.fr.maxlines < 2) try c.grow(w);
     return w;
 }
 

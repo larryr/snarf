@@ -97,6 +97,11 @@ pub const Pending = struct {
         /// tag — and by `beginDiscard`/`discardClunk`.
         discard,
     },
+    /// A tombstone standing in for a Tclunk carries the fid number it is
+    /// releasing; `dispatch` recycles it when the reply finally lands, so a
+    /// later Twalk can never reuse the number ahead of the server's own
+    /// processing of the Tclunk. Null on every other slot. See `discardClunk`.
+    discard_fid: ?u32 = null,
 
     /// What the slot wants copied out of the reply — see the header note.
     pub const Mode = enum { frame, payload };
@@ -203,8 +208,19 @@ fn abandon(c: *Client, tag: u16) void {
 /// request until `Client.deinit` — bounded by the number of abandoned requests,
 /// and `Client.version` clears the whole table when a session restarts.
 pub fn beginDiscard(c: *Client, t: Message) Error!void {
+    return beginDiscardFid(c, t, null);
+}
+
+/// `beginDiscard` with a fid number the tombstone owns: it is recycled by
+/// `dispatch` when the reply arrives, not by the caller.
+fn beginDiscardFid(c: *Client, t: Message, fid: ?u32) Error!void {
     const tag = c.allocTag();
-    try c.pending.put(c.allocator, tag, .{ .buf = c.rbuf[0..0], .mode = .frame, .state = .discard });
+    try c.pending.put(c.allocator, tag, .{
+        .buf = c.rbuf[0..0],
+        .mode = .frame,
+        .state = .discard,
+        .discard_fid = fid,
+    });
     errdefer _ = c.pending.remove(tag);
     var m = t;
     m.tag = tag;
@@ -212,22 +228,29 @@ pub fn beginDiscard(c: *Client, t: Message) Error!void {
 }
 
 /// Release `fid` server-side WITHOUT waiting — the only clunk a job's `deinit`
-/// may use (`Client.clunk` is an `rpc`). The Tclunk goes out on a tombstone and
-/// the number is recycled immediately: a Tclunk releases the fid even when the
-/// reply is an Rerror [`5/clunk`], so the server holds nothing either way, and
-/// the Rclunk lands on the tombstone instead of poisoning a later `check`.
-/// Best effort — a transport that refuses the send leaves the fid to the
-/// session teardown.
+/// may use (`Client.clunk` is an `rpc`). The Tclunk goes out on a tombstone, so
+/// the Rclunk lands there instead of poisoning a later `check`, and the fid
+/// NUMBER is recycled by `dispatch` when that reply arrives — Rclunk or Rerror
+/// alike, since a Tclunk releases the fid either way [`5/clunk`: "even if the
+/// clunk returns an error, the fid is no longer valid"].
 ///
-/// ASSUMPTION (review nit, phase 13a): recycling the number before the Rclunk
-/// is safe only because every peer processes one connection's frames in order
-/// (`ninep.server.poll` is sequential; `snarf-origin` runs one blocking pump per
-/// connection), so a reused fid in the next Twalk always lands after the Tclunk.
-/// A reordering server (a threaded ADR-0005 native host) would need the
-/// tombstone to carry the fid and `dispatch` to free it on the Rclunk instead.
+/// WHY NOT RECYCLE IT AT ONCE (13a review nit, closed in 16b). Handing the
+/// number back before the Rclunk is only safe while every peer processes one
+/// connection's frames in order (`ninep.server.poll` is sequential;
+/// `snarf-origin` runs one blocking pump per connection): a reordering server —
+/// a threaded ADR-0005 native host, say — could see the next Twalk's `newfid`
+/// before it had processed the Tclunk and answer `"fid in use"`. Waiting for
+/// the reply costs nothing on an in-order server (the Rclunk is the very next
+/// frame it sends for that request) and removes the assumption entirely.
+///
+/// Best effort — a transport that refuses the send recycles the number at once
+/// and leaves the server side to the session teardown.
 pub fn discardClunk(c: *Client, fid: u32) void {
-    beginDiscard(c, .{ .tag = 0, .body = .{ .tclunk = .{ .fid = fid } } }) catch {};
-    c.freeFid(fid);
+    beginDiscardFid(c, .{ .tag = 0, .body = .{ .tclunk = .{ .fid = fid } } }, fid) catch {
+        c.freeFid(fid); // nothing was sent; nothing will answer
+        return;
+    };
+    _ = c.fids.remove(fid); // the qid cache dies now; the NUMBER waits
 }
 
 // --- read tickets (the phase-6 API, R-P6-4) -------------------------------
@@ -282,8 +305,13 @@ pub fn dispatch(c: *Client, frame: []const u8, reply: Message) Error!void {
     const entry = c.pending.getPtr(reply.tag) orelse return error.ProtocolError;
     if (entry.state == .discard) {
         // The owed reply finally came; nobody wants it. Drop it and release
-        // the tag — the tombstone has done its job.
+        // the tag — the tombstone has done its job. A tombstone that stands in
+        // for a Tclunk also owns the fid NUMBER, which becomes reusable only
+        // now: the server has demonstrably finished with it (`5/clunk` — the
+        // fid is released whether the reply is Rclunk or Rerror).
+        const fid = entry.discard_fid;
         _ = c.pending.remove(reply.tag);
+        if (fid) |f| c.freeFid(f);
         return;
     }
     if (entry.state != .waiting) return; // already resolved; ignore duplicate.
@@ -385,6 +413,9 @@ const ScriptedTransport = struct {
     sent: std.ArrayListUnmanaged([]u8) = .empty,
     replies: std.ArrayListUnmanaged([]u8) = .empty,
     reply_idx: usize = 0,
+    /// 16b item 8: when set, `writeMsg` refuses instead of sending — nothing
+    /// goes out, so nothing will ever answer.
+    fail_write: bool = false,
 
     fn init(allocator: std.mem.Allocator) ScriptedTransport {
         return .{ .allocator = allocator };
@@ -412,6 +443,7 @@ const ScriptedTransport = struct {
 
     fn writeMsg(ctx: *anyopaque, frame: []const u8) transport.Error!void {
         const self: *ScriptedTransport = @ptrCast(@alignCast(ctx));
+        if (self.fail_write) return error.Closed;
         const copy = self.allocator.dupe(u8, frame) catch return error.Closed;
         self.sent.append(self.allocator, copy) catch {
             self.allocator.free(copy);
@@ -618,4 +650,57 @@ test "tickets: cancel on an un-pumped client tombstones both tags; late replies 
         try testing.expectEqual(@as(usize, 0), client.pending.count());
         try testing.expectError(error.ProtocolError, check(&client, t0));
     }
+}
+
+test "tickets: discardClunk holds the fid number until the reply lands (16b item 8)" {
+    // 13a review nit: recycling the number at once assumed a server that
+    // processes one connection's frames in order. It now waits for the reply —
+    // Rclunk or Rerror alike, since `5/clunk` releases the fid either way.
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    const fid = client.allocFid();
+    const other = client.allocFid();
+    try testing.expect(fid != other);
+
+    discardClunk(&client, fid);
+    // A Tclunk went out on a tombstone, and the number is NOT back in the pool
+    // yet: the next allocFid must not hand it out.
+    try testing.expectEqual(msg.Kind.tclunk, (try st.sentMsg(0)).body.kind());
+    const during = client.allocFid();
+    try testing.expect(during != fid);
+
+    // The Rclunk arrives (on the tombstone's tag) — now the number recycles.
+    const tclunk_tag = (try st.sentMsg(0)).tag;
+    try st.pushReply(.{ .tag = tclunk_tag, .body = .rclunk });
+    try drainReady(&client);
+    try testing.expectEqual(fid, client.allocFid());
+
+    // An Rerror answer releases the fid just the same (`5/clunk`).
+    const second = client.allocFid();
+    discardClunk(&client, second);
+    const tag2 = (try st.sentMsg(1)).tag;
+    try st.pushReply(.{ .tag = tag2, .body = .{ .rerror = .{ .ename = "unknown fid" } } });
+    try drainReady(&client);
+    try testing.expectEqual(second, client.allocFid());
+}
+
+test "tickets: discardClunk recycles the fid at once when the send itself fails (16b item 8)" {
+    // "Best effort — a transport that refuses the send recycles the number at
+    // once and leaves the server side to the session teardown": nothing went
+    // out, so nothing will ever answer the tombstone.
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    const fid = client.allocFid();
+    st.fail_write = true;
+    discardClunk(&client, fid);
+
+    try testing.expectEqual(@as(usize, 0), st.sent.items.len); // nothing sent
+    try testing.expectEqual(@as(usize, 0), client.pending.count()); // no tombstone left behind
+    try testing.expectEqual(fid, client.allocFid()); // recycled immediately
 }

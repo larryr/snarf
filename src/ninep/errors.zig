@@ -25,6 +25,13 @@ pub const OpError = error{
     QuotaExceeded,
     UnknownFid,
     WalkNoDir,
+    /// A read whose offset the server will not honour: a NEGATIVE offset, or a
+    /// directory read at an offset that is neither 0 nor the end of what a
+    /// previous read of the same fid returned. `5/read` makes reading a
+    /// directory at an arbitrary offset undefined; lib9p answers this string
+    /// rather than a slice of a stat record. [lib9p/srv.c:11 Ebadoffset,
+    /// :467-478 sread]
+    BadOffset,
     FidOpen,
     AuthNotRequired,
     // Draw-device errors (S-03 §2; phase-2 addition, ruling OQ-1 in
@@ -80,6 +87,7 @@ pub fn errorString(e: OpError) []const u8 {
         error.QuotaExceeded => "quota exceeded",
         error.UnknownFid => "unknown fid",
         error.WalkNoDir => "walk in non-directory",
+        error.BadOffset => "bad offset",
         error.FidOpen => "cannot clone open fid",
         error.AuthNotRequired => "authentication not required",
         error.BadDraw => "bad draw message",
@@ -118,6 +126,7 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "quota exceeded")) return error.QuotaExceeded;
     if (eq(u8, s, "unknown fid")) return error.UnknownFid;
     if (eq(u8, s, "walk in non-directory")) return error.WalkNoDir;
+    if (eq(u8, s, "bad offset")) return error.BadOffset;
     if (eq(u8, s, "cannot clone open fid")) return error.FidOpen;
     if (eq(u8, s, "authentication not required")) return error.AuthNotRequired;
     if (eq(u8, s, "bad draw message")) return error.BadDraw;
@@ -154,6 +163,7 @@ test "errors: round-trip every member" {
         error.QuotaExceeded,
         error.UnknownFid,
         error.WalkNoDir,
+        error.BadOffset,
         error.FidOpen,
         error.AuthNotRequired,
         error.BadDraw,

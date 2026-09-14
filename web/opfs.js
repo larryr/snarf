@@ -17,10 +17,19 @@
 // the module's "no JS→WASM re-entrancy" rule requires. The module's own
 // `fsPush` may call back into `fsOp` (a walk's next component); that is fine,
 // because `fsOp` only enqueues.
+//
+// WRITABLES (record version 2). A FileSystemWritableFileStream writes to a
+// swap file until it is closed, so creating one per `write` cost three platform
+// round trips for every 9P Twrite and committed the file N times over. One
+// stream is now kept open PER PATH across a write sequence; the module closes
+// it with the `close` op (issued from DevOpfs's clunk of a fid that wrote).
+// That op is a hint, not a fence: every operation that must see the file's
+// committed contents closes the stream itself first, so a `close` that never
+// arrives costs a late commit and nothing else.
 
 // --- mirrors of src/shim/FsRecord.zig ------------------------------------
 
-export const FS_OP_VERSION = 1;
+export const FS_OP_VERSION = 2;
 
 export const FS_OP = {
   stat: 1,
@@ -31,6 +40,7 @@ export const FS_OP = {
   create_dir: 6,
   remove: 7,
   truncate: 8,
+  close: 9,
 };
 
 export const FS_STATUS = {
@@ -225,16 +235,39 @@ export function createOpfsBackend({ complete, warn }) {
     return new Uint8Array(await blob.arrayBuffer());
   }
 
-  async function writeOf(parts, offset, data) {
+  // path -> the open FileSystemWritableFileStream for it, if any.
+  const writables = new Map();
+
+  // The stream for `path`, opening one if this is the first write of the
+  // sequence. keepExistingData: a 9P write is positional, never a truncating
+  // rewrite.
+  async function writableFor(path, parts) {
+    const open = writables.get(path);
+    if (open) return open;
     const { dir, name } = await parentOf(parts);
     const fh = await dir.getFileHandle(name);
-    // keepExistingData: a 9P write is positional, never a truncating rewrite.
     const w = await fh.createWritable({ keepExistingData: true });
+    writables.set(path, w);
+    return w;
+  }
+
+  // Commit and forget the stream for `path`, if there is one. Errors are
+  // swallowed: a close that fails leaves nothing the caller can do, and the
+  // next write simply opens a fresh stream.
+  async function closeWritable(path) {
+    const w = writables.get(path);
+    if (!w) return;
+    writables.delete(path);
     try {
-      await w.write({ type: "write", position: Number(offset), data });
-    } finally {
       await w.close();
+    } catch (err) {
+      warn("opfs: close", path, err);
     }
+  }
+
+  async function writeOf(path, parts, offset, data) {
+    const w = await writableFor(path, parts);
+    await w.write({ type: "write", position: Number(offset), data });
     return writeReply(data.length);
   }
 
@@ -281,6 +314,10 @@ export function createOpfsBackend({ complete, warn }) {
 
   async function perform(rec) {
     const parts = partsOf(rec.path);
+    // Anything but another write must see the file as it stands on disk, and
+    // an open stream is still holding the changes in its swap file — so commit
+    // first. Ops are serialized per path, so this is coherent.
+    if (rec.op !== FS_OP.write) await closeWritable(rec.path);
     switch (rec.op) {
       case FS_OP.stat:
         return { status: FS_STATUS.ok, payload: await statOf(parts) };
@@ -289,7 +326,7 @@ export function createOpfsBackend({ complete, warn }) {
       case FS_OP.read:
         return { status: FS_STATUS.ok, payload: await readOf(parts, rec.arg0, rec.arg1) };
       case FS_OP.write:
-        return { status: FS_STATUS.ok, payload: await writeOf(parts, rec.arg0, rec.payload) };
+        return { status: FS_STATUS.ok, payload: await writeOf(rec.path, parts, rec.arg0, rec.payload) };
       case FS_OP.create_file:
         return { status: FS_STATUS.ok, payload: await createOf(parts, false) };
       case FS_OP.create_dir:
@@ -298,6 +335,10 @@ export function createOpfsBackend({ complete, warn }) {
         return { status: FS_STATUS.ok, payload: await removeOf(parts) };
       case FS_OP.truncate:
         return { status: FS_STATUS.ok, payload: await truncateOf(parts, rec.arg0) };
+      case FS_OP.close:
+        // The stream is already closed by the guard above; this op exists so
+        // the module can say "that write sequence is over" without a stat.
+        return { status: FS_STATUS.ok, payload: EMPTY };
       default:
         return { status: FS_STATUS.io, payload: EMPTY };
     }

@@ -118,6 +118,13 @@ fn trimSlash(s: []const u8) []const u8 {
 /// (util.c:145-150) additionally treats `"."` as no directory; that collapse is
 /// the caller's job, as in the C.
 ///
+/// NO TRAILING `/`. The C slices `b[0..slash+1]`, which keeps the separator,
+/// and then hands the result to `cleanrname` — which takes it off again for
+/// every name but the root. This function returns the CLEANED form directly:
+/// `"/a/b/c.zig"` ⇒ `"/a/b"`, `"/x/"` ⇒ `"/x"`, `"/c.zig"` ⇒ `"/"`,
+/// `"c.zig"` ⇒ `""`. A caller joining a name onto it therefore supplies the
+/// separator itself (`expand.absolute` does: `"{s}/{s}"`).
+///
 /// Returns a SUBSLICE of `w.body.file.name` — no allocation, nothing to free.
 ///
 /// TWO documented divergences:
@@ -126,10 +133,11 @@ fn trimSlash(s: []const u8) []const u8 {
 ///      equal to that field, so the two agree except in the window between a user
 ///      hand-editing the tag name and the next `winsettag` — v1 has no rename
 ///      path at all, so the difference is unobservable.
-///   2. `cleanrname`/`cleanname` (look.c:454-465) is NOT ported: only its one
-///      effect on this input is reproduced — the trailing `/` of `b[0..slash+1]`
-///      is dropped unless the result is the root `"/"`. `.`/`..` collapsing is
-///      DEFERRED (no host paths reach here yet); FLAG for the namespace phase.
+///   2. `cleanrname`/`cleanname` (look.c:454-465) is not CALLED here: only its
+///      one effect on this input is reproduced, the trailing-`/` strip above.
+///      Full `.`/`..` collapsing arrived with `openfile.cleanName` in phase 13b
+///      — the "FLAG for the namespace phase" this comment used to carry is
+///      retired, and every name that reaches a window has been through it.
 pub fn dirName(w: *Window) []const u8 {
     const name = w.body.file.name.items;
     const slash = std.mem.lastIndexOfScalar(u8, name, '/') orelse return ""; // look.c:554-559
@@ -178,10 +186,6 @@ pub fn errorWin(ed: *Editor, dir: []const u8) Text.Error!*Window {
 /// buckets are LEFT PENDING rather than dropped — the C always has a row.
 ///
 /// DIVERGENCES:
-///   * `textbsinsert` (util.c:243, text.c:307-364) is reduced to a plain
-///     `insertAt`: backspace/^U processing of command output is DEFERRED (no
-///     external commands write here yet — the only writers are `ed.warning`
-///     lines). FLAG for the host-command wave.
 ///   * The C's `w->owner` juggling (util.c:236-239/249) and `wincommit`
 ///     (util.c:240, no tag cache in the port) are n/a; the RBUFSIZE chunking
 ///     (util.c:247-253) is a `bufread` optimization — `Buffer` already blocks.
@@ -206,8 +210,11 @@ pub fn flushWarnings(ed: *Editor) Text.Error!void {
         // dropped so a too-narrow rightmost column can never wedge the frame loop.
         const w = errorWin(ed, wn.dir) catch continue;
         const t = &w.body;
-        const q0 = t.file.buffer.len(); // util.c:241
-        try t.insertAt(q0, wn.text.items, true); // util.c:243 textbsinsert (see above)
+        // util.c:241-243. `bsInsert` is `textbsinsert` (text.c:307-364): a `\b`
+        // in the message erases the rune before it, and leading backspaces eat
+        // text already in the window — which is why the shown range starts at
+        // what it RETURNS, not at the old end of file.
+        const q0 = try t.bsInsert(t.file.buffer.len(), wn.text.items, true);
         try t.show(q0, t.file.buffer.len(), true); // util.c:245 textshow(t, q0, nc, 1)
         try w.setTag1(); // util.c:247 winsettag
         w.dirty = false; // util.c:250
@@ -276,6 +283,9 @@ test "errors: dirName splits the directory from the window name (T17)" {
     try testing.expectEqualStrings("", dirName(w));
     try w.body.file.setName("/x/");
     try testing.expectEqualStrings("/x", dirName(w));
+    // The root is the one name that keeps its slash (16b item 7).
+    try w.body.file.setName("/c.zig");
+    try testing.expectEqualStrings("/", dirName(w));
 }
 
 test "errors: flushWarnings mints +Errors in the rightmost column and appends (T18)" {
@@ -365,4 +375,43 @@ test "errors: flushWarnings grows a column in an empty row (T20)" {
     const c = row.col.items[0];
     try testing.expectEqual(@as(usize, 1), c.w.items.len);
     try testing.expectEqualStrings("+Errors", c.w.items[0].body.file.name.items);
+}
+
+test "errors: flushWarnings runs a \\b-laden warning through bsInsert and shows from where it landed (16b item 12 integration)" {
+    // util.c:241-245: `bsInsert` (`textbsinsert`, text.c:307-364) processes the
+    // warning text before it is shown, and the shown range starts at what
+    // `bsInsert` RETURNS — not at the old end of file — when leading
+    // backspaces ate text already in the window.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    ed.warning("abc\n", .{});
+    try flushWarnings(&ed);
+    const errw = lookFile(tree.row, "+Errors").?;
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("abc\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+
+    // Two leading backspaces eat "c\n" (the two runes just written); the
+    // reduced-scope processed run then appends. Not a literal control
+    // character in sight.
+    ed.warning("\x08\x08X\n", .{});
+    try flushWarnings(&ed);
+    try testing.expectEqualStrings("abX\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+
+    // `t.show(q0, nc, true)` ran with `q0` = where the run landed (2, right
+    // after "ab") — not the old end of file (4) that a plain insertAt would
+    // have shown from.
+    try testing.expectEqual(@as(usize, 2), errw.body.q0);
+    try testing.expectEqual(@as(usize, 4), errw.body.q1);
+    try testing.expect(!errw.dirty);
 }

@@ -97,7 +97,7 @@ std-only, still no node).
 > since phase 5 and the LAST one in the sketch above to land, as
 > `fsOp(ptr, len, ticket)`: `ptr[0..len]` is ONE operation record and `ticket` is
 > the module's, echoed back untouched. Record format (little-endian,
-> `fs_op_version = 1`, `src/shim/FsRecord.zig` with the JS mirror in
+> `fs_op_version = 1` — see the 16b entry below for v2, `src/shim/FsRecord.zig` with the JS mirror in
 > `web/opfs.js`):
 >
 > ```
@@ -123,6 +123,19 @@ std-only, still no node).
 > is delivered from a microtask — never re-entrantly inside `fsOp` (the module's
 > `fsPush` may call back into `fsOp`, which only enqueues). ABI version = 6
 > (5→6).
+>
+> Revision log: 2026-09-14 (phase 16b item 4) — `fs_op_version = 2`. ONE new op,
+> `close = 9` (no args, empty reply); the byte layout and the ABI version are
+> unchanged (still 6). A browser `FileSystemWritableFileStream` writes to a swap
+> file until it is closed, so v1's open-and-close-per-`write` cost three platform
+> round trips for every 9P Twrite. The shim now keeps one stream open per PATH
+> across a write sequence and closes it on `close`, which `DevOpfs` issues from
+> the clunk of any fid that wrote. `close` is a HINT, not a fence: the shim
+> closes the stream itself before any operation that must see the file's
+> committed contents, so a `close` that never arrives (a session that ends
+> mid-write) costs a late commit and nothing more. It is issued fire-and-forget
+> under ticket 0, which matches no slot, so its completion is dropped like any
+> other answer nobody is waiting for.
 
 ## 5. CI (sketch)
 

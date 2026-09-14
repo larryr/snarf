@@ -16,6 +16,9 @@ pub const Buffer = @import("Buffer.zig");
 pub const File = @import("File.zig");
 pub const Text = @import("text/Text.zig");
 pub const Window = @import("Window.zig");
+/// Window tag composition (`parsetag`/`winsettag1`/`winsettag`, wind.c:437-593)
+/// — carved out of `Window.zig` in phase 16a; `Window` forwards to it.
+pub const wintag = @import("wintag.zig");
 pub const Chrome = @import("Chrome.zig");
 pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
@@ -31,12 +34,18 @@ pub const Load = @import("Load.zig");
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).
 pub const expand = @import("expand.zig");
+/// The parked half of the B3 look (R-P13b-2) — `expandfile`'s asynchronous
+/// existence check, its own file since phase 16a.
+pub const pendinglook = @import("pendinglook.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");
 /// The `+Errors` window and the warning flush (util.c:79-258) — phase 12b,
 /// R-EDIT-21. Named for the C's concept, not for `ninep.errors`.
 pub const errors = @import("errors.zig");
+/// The origin-transport seam (`Editor.OriginHook`, R-P12-7) — its own file
+/// since phase 16a so the one place `core` touches the transport is named.
+pub const originhook = @import("originhook.zig");
 pub const exec = @import("exec/exec.zig");
 // Edit language (phase 10). One public type per line, matching the flat style
 // above; later 10x waves add ast/parse/addr/Elog/cmd here.
