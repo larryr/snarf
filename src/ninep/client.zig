@@ -19,6 +19,7 @@ const Qid = @import("qid.zig");
 const stat_mod = @import("stat.zig");
 const transport = @import("transport.zig");
 const errors = @import("errors.zig");
+const tickets = @import("tickets.zig");
 
 const Message = msg.Message;
 const Body = msg.Body;
@@ -38,24 +39,9 @@ pub const FidInfo = struct { fid: u32, qid: Qid };
 /// An outstanding non-blocking read (R-P6-4). Opaque: the caller holds only the
 /// tag and hands the ticket back to `checkRead`/`cancelRead`. A ticket is live
 /// from `beginRead` until it is consumed (a non-null `checkRead`, or
-/// `cancelRead`).
-pub const ReadTicket = struct { tag: u16 };
-
-/// The client-side slot for one `ReadTicket`. `buf` is the caller-owned
-/// destination the Rread data is copied into; the client only borrows it and it
-/// must outlive the ticket. `state` advances waiting → done/failed exactly once,
-/// when the matching reply is dispatched (during any `rpc`/pump/`checkRead`).
-const PendingRead = struct {
-    buf: []u8,
-    state: union(enum) {
-        waiting,
-        /// Rread arrived; `buf[0..n]` holds the payload.
-        done: usize,
-        /// Rerror arrived (a flushed ticket lands here as error.Interrupted), or
-        /// the reply was malformed/oversized (error.ProtocolError).
-        failed: Error,
-    },
-};
+/// `cancelRead`). Since phase 13a this is the generic `tickets.Ticket` — read
+/// tickets are the `.payload` mode of one mechanism (S-01 §3.2).
+pub const ReadTicket = tickets.Ticket;
 
 /// Drives the peer when the transport would block. `run` is invoked on every
 /// transport `WouldBlock`, then the operation retries. With no pump a
@@ -76,15 +62,11 @@ pub const Pump = struct {
 };
 
 /// The client error set: typed 9P op errors (mapped from Rerror), plus the
-/// transport's own errors, plus local failures.
-pub const Error = errors.OpError || transport.Error || error{
-    OutOfMemory,
-    /// The reply violated the protocol: wrong tag, undecodable, or an
-    /// unexpected message type for the request.
-    ProtocolError,
-    /// A frame would exceed the negotiated msize (on encode or on read).
-    MessageTooBig,
-};
+/// transport's own errors, plus local failures. Declared in `tickets.zig` (the
+/// asynchronous half of this file) so that `Client`'s field layout — it holds a
+/// map of `tickets.Pending`, whose failure arm is this set — does not depend on
+/// `Client`'s own namespace. Same members, same name.
+pub const Error = tickets.Error;
 
 allocator: std.mem.Allocator,
 tport: transport.Transport,
@@ -100,10 +82,11 @@ next_fid: u32 = 0,
 free_fids: std.ArrayListUnmanaged(u32) = .empty,
 /// Live fids the client believes the server holds, → their last-known qid.
 fids: std.AutoHashMapUnmanaged(u32, Qid) = .empty,
-/// Outstanding read tickets keyed by their tag (R-P6-4). A reply whose tag is
-/// not `t.tag` of the in-flight `rpc` is routed here rather than being a
-/// ProtocolError; only a tag matching neither is a real protocol violation.
-pending: std.AutoHashMapUnmanaged(u16, PendingRead) = .empty,
+/// Outstanding tickets keyed by their tag (R-P6-4, generalised in phase 13a).
+/// A reply whose tag is not `t.tag` of the in-flight `rpc` is routed here rather
+/// than being a ProtocolError; only a tag matching neither is a real protocol
+/// violation. Owned by `tickets.zig`, which is the only file that writes it.
+pending: std.AutoHashMapUnmanaged(u16, tickets.Pending) = .empty,
 /// Owned read buffer, `max_msize` bytes; decoded replies alias it.
 rbuf: []u8,
 /// Owned write buffer, `max_msize` bytes.
@@ -165,7 +148,9 @@ pub fn seedQid(self: *Client, fid: u32, qid: Qid) void {
 }
 
 /// Next tag, wrapping 0..0xFFFE and skipping NOTAG (0xFFFF). [S-01 §4]
-fn allocTag(self: *Client) u16 {
+/// `pub` for `tickets.zig` only — the asynchronous half of this file (S-07 P-1
+/// splits one type across two files here); no other module allocates tags.
+pub fn allocTag(self: *Client) u16 {
     const t = self.next_tag;
     self.next_tag = if (self.next_tag >= 0xFFFE) 0 else self.next_tag + 1;
     return t;
@@ -206,43 +191,20 @@ pub fn rpc(self: *Client, t: Message) Error!Message {
         }
         // Not our reply: route it to a waiting ticket, or fail. dispatch copies
         // any payload out of rbuf before we loop and read over it.
-        try self.dispatch(reply);
+        try tickets.dispatch(self, reply_bytes, reply);
     }
 }
 
 /// Encode `t` into `wbuf` and write the whole frame (pumping on WouldBlock).
-/// Shared by `rpc` and `beginRead` (which sends without waiting for a reply).
-fn sendFrame(self: *Client, t: Message) Error!void {
+/// Shared by `rpc` and the ticket senders (`tickets.begin`/`beginRead`, which
+/// send without waiting for a reply); `pub` for `tickets.zig` only.
+pub fn sendFrame(self: *Client, t: Message) Error!void {
     const limit = self.frameLimit();
     const n = msg.encode(&t, self.wbuf[0..limit]) catch |e| return switch (e) {
         error.ShortBuffer => error.MessageTooBig, // frame exceeds msize
         error.BadMessage => error.ProtocolError,
     };
     try self.writeFrame(self.wbuf[0..n]);
-}
-
-/// Route a reply whose tag is not the one an in-flight `rpc` awaits. If it
-/// matches an outstanding read ticket, transition that ticket's slot (copying an
-/// Rread payload out of `rbuf` immediately). A tag matching no pending ticket is
-/// a genuine ProtocolError. A slot already resolved is left as-is (the first
-/// reply for a tag wins; a duplicate is ignored, not an error).
-fn dispatch(self: *Client, reply: Message) Error!void {
-    const entry = self.pending.getPtr(reply.tag) orelse return error.ProtocolError;
-    if (entry.state != .waiting) return; // already resolved; ignore duplicate.
-    switch (reply.body) {
-        .rread => |r| {
-            if (r.data.len > entry.buf.len) {
-                entry.state = .{ .failed = error.ProtocolError };
-            } else {
-                @memcpy(entry.buf[0..r.data.len], r.data);
-                entry.state = .{ .done = r.data.len };
-            }
-        },
-        // A flushed ticket lands here as Rerror "interrupted" ⇒ error.Interrupted.
-        .rerror => |e| entry.state = .{ .failed = self.mapRerror(e.ename) },
-        // Any other reply type for a read tag is a protocol violation.
-        else => entry.state = .{ .failed = error.ProtocolError },
-    }
 }
 
 /// Write a whole frame, pumping the peer on WouldBlock. FrameTooBig from the
@@ -283,8 +245,9 @@ fn readFrame(self: *Client) Error![]u8 {
 }
 
 /// Map a received Rerror string to a typed error; for the catch-all error.Other
-/// stash the raw text (truncated to 128 bytes) BEFORE returning it.
-fn mapRerror(self: *Client, ename: []const u8) Error {
+/// stash the raw text (truncated to 128 bytes) BEFORE returning it. `pub` for
+/// `tickets.zig` only (it maps an Rerror into a ticket's slot).
+pub fn mapRerror(self: *Client, ename: []const u8) Error {
     const e = errors.errorFromString(ename);
     if (e == error.Other) {
         const m = @min(ename.len, self.last_rerror_buf.len);
@@ -462,8 +425,9 @@ pub fn write(self: *Client, fid: u32, offset: u64, data: []const u8) Error!usize
     }
 }
 
-/// Max single-message payload: msize - IOHDRSZ.
-fn ioMax(self: *const Client) usize {
+/// Max single-message payload: msize - IOHDRSZ. `pub` for `tickets.zig` and
+/// `nsjob.zig`, which size their own Tread counts against it.
+pub fn ioMax(self: *const Client) usize {
     return self.frameLimit() - IOHDRSZ;
 }
 
@@ -510,81 +474,30 @@ pub fn flushTag(self: *Client, oldtag: u16) Error!void {
 }
 
 // --- non-blocking read tickets (R-P6-4) -----------------------------------
+//
+// Three forwarders into `tickets.zig`, which owns the whole asynchronous half
+// since phase 13a (S-01 §3.2). The semantics are UNCHANGED — a read ticket is
+// simply the `.payload` mode of the generic ticket:
+//
+//   * `beginRead` sends `Tread(fid, offset, min(buf.len, msize-IOHDRSZ))`
+//     without waiting; `buf` is borrowed and must outlive the ticket.
+//   * `checkRead` polls without pumping or blocking; `null` ⇒ still pending, a
+//     byte count ⇒ `buf[0..n]` holds the payload and the ticket is CONSUMED, an
+//     error ⇒ the reply's error (a flushed ticket surfaces error.Interrupted).
+//   * `cancelRead` Tflushes the ticket and consumes it either way.
+//
+// Use these (never `read`/`rpc`) for files that may park server-side.
 
-/// Send `Tread(fid, offset, min(buf.len, msize-IOHDRSZ))` WITHOUT waiting for the
-/// reply, returning a ticket. `buf` is borrowed, not owned: it must outlive the
-/// ticket, and the reply — whenever it arrives, dispatched during ANY subsequent
-/// `rpc`/pump/`checkRead` — is copied into it. Use this (never `read`/`rpc`) for
-/// files that may park server-side. Consume the ticket with `checkRead` (once it
-/// reports non-null) or `cancelRead`.
 pub fn beginRead(self: *Client, fid: u32, offset: u64, buf: []u8) Error!ReadTicket {
-    const tag = self.allocTag();
-    const count: u32 = @intCast(@min(buf.len, self.ioMax()));
-    // Register the slot BEFORE sending: a reply cannot arrive before the send,
-    // but registering first keeps the invariant "a live tag is always in the map"
-    // and lets the errdefer undo cleanly if the send fails.
-    try self.pending.put(self.allocator, tag, .{ .buf = buf, .state = .waiting });
-    errdefer _ = self.pending.remove(tag);
-    try self.sendFrame(.{ .tag = tag, .body = .{
-        .tread = .{ .fid = fid, .offset = offset, .count = count },
-    } });
-    return .{ .tag = tag };
+    return tickets.beginRead(self, fid, offset, buf);
 }
 
-/// Non-blocking poll of a ticket. First drains every frame the transport can hand
-/// over right now (no pump, no spin — a `WouldBlock` stops the drain), dispatching
-/// each by tag; then reports the ticket's slot. `null` ⇒ still pending. A non-null
-/// return CONSUMES the ticket: a byte count on success, or the reply's error — a
-/// ticket the server flushed surfaces error.Interrupted here. An unknown ticket is
-/// a ProtocolError.
 pub fn checkRead(self: *Client, t: ReadTicket) Error!?usize {
-    try self.drainReady();
-    const entry = self.pending.getPtr(t.tag) orelse return error.ProtocolError;
-    switch (entry.state) {
-        .waiting => return null,
-        .done => |n| {
-            _ = self.pending.remove(t.tag);
-            return n;
-        },
-        .failed => |e| {
-            _ = self.pending.remove(t.tag);
-            return e;
-        },
-    }
+    return tickets.checkRead(self, t);
 }
 
-/// Abandon a ticket. Sends `Tflush(oldtag = t.tag)` synchronously via `rpc`
-/// (flushes themselves never park, so this cannot wedge). The server answers the
-/// old tag FIRST — Rerror "interrupted" if the read was still parked, which
-/// `rpc` dispatches into the slot — then Rflush on the flush's own tag; OR, if
-/// the data raced ahead, the Rread is dispatched into the slot and then Rflush
-/// arrives. Either ordering is handled: the ticket is always CONSUMED here and
-/// any dispatched result is discarded. [flush(5); srv.c deferred-Rflush]
 pub fn cancelRead(self: *Client, t: ReadTicket) Error!void {
-    defer _ = self.pending.remove(t.tag);
-    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
-        .tflush = .{ .oldtag = t.tag },
-    } });
-    switch (reply.body) {
-        .rflush => return,
-        else => return error.ProtocolError,
-    }
-}
-
-/// Drain every frame available WITHOUT blocking or pumping, dispatching each to
-/// its pending ticket. A transport `WouldBlock` means "nothing ready" and ends
-/// the drain (this is the non-blocking twin of `readFrame`, which pumps). A frame
-/// for an unknown tag is a ProtocolError; an oversized frame is MessageTooBig.
-fn drainReady(self: *Client) Error!void {
-    while (true) {
-        const frame = self.tport.readMsg(self.rbuf) catch |e| switch (e) {
-            error.WouldBlock => return,
-            error.FrameTooBig => return error.MessageTooBig,
-            else => return e, // Closed, BadFrame
-        };
-        const reply = msg.decode(frame) catch return error.ProtocolError;
-        try self.dispatch(reply);
-    }
+    return tickets.cancel(self, t);
 }
 
 // ==========================================================================

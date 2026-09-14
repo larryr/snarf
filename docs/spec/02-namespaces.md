@@ -12,8 +12,9 @@ Diagram source: [diagrams/namespaces.puml](diagrams/namespaces.puml)
 
 The namespace is a per-instance ordered table `path prefix → ordered list of
 (server, root fid)`. Longest-prefix match on path COMPONENT boundaries wins
-(`/mnt/host` never matches `/mnt/hostx`). Built at boot (S-00 §4); the file `/dev/ns`
-(read-only) lists the table in `ns(1)` style for debugging.
+(`/mnt/host` never matches `/mnt/hostx`). Built at boot (S-00 §4); the read-only file
+`/mnt/snarf-self/ns` lists the table in `ns(1)` style for debugging (§1.3 records why it
+is not `/dev/ns`).
 
 ### 1.1 Unions (`bind -a` / `bind -b`) — R-9P-03, OQ-9P-1 resolved YES
 
@@ -39,7 +40,7 @@ Each mount point carries an ORDERED list of targets, the flattened form of the k
 - **Unmount**: `unmount(prefix)` drops the whole mount point; `unbindTarget(prefix, …)`
   drops one member and removes the entry when its last member goes.
 
-`/dev/ns` prints the head of each union as `mount <prefix>` and every stacked member as
+The `ns` file prints the head of each union as `mount <prefix>` and every stacked member as
 `bind -a <prefix>` / `bind -b <prefix>` (the shape of `/proc/n/ns`, devproc.c:954-966;
 we have no server names to print, so the line carries the mount point only).
 
@@ -68,7 +69,7 @@ be created in them (a `bind`/`mount` is what puts something there).
 | `/dev/dom` | browser | the hosting page (§2) — **browser-only, low priority** |
 | `/dev/snarf` | both | clipboard (§3): browser = async Clipboard API; native = `devdraw` `Trdsnarf`/`Twrsnarf` (ADR-0005 §2) |
 | `/dev/storage`, `/dev/notify`, `/dev/location`, `/dev/title`, `/dev/log` | browser | browser feature files (§3) |
-| `/dev/ns` | both | this table, `ns(1)` style, read-only |
+| `/mnt/snarf-self/ns` | both | the mount table itself, `ns(1)` style, read-only — see the note below |
 | `/mnt/host` | both | the host file system (§4): browser = File System Access grants; native = a real 9P file server (ADR-0005 §2) |
 | `/mnt/opfs` | browser | Origin Private File System (§4) |
 | `/mnt/snarf-self` | both | Snarf's own served tree (§6) |
@@ -78,6 +79,34 @@ be created in them (a `bind`/`mount` is what puts something there).
 "Host" is where the mount can exist at all: **browser** (needs the page), **native**
 (needs the host OS), **both**. The native host is ADR-0005's target; the editor core
 cannot tell the difference, which is the point of R-OV-03.
+
+**Where the table lives (ruling R-P13a-4).** Plan 9 puts this listing at `/dev/ns`,
+which devcons synthesizes. Snarf has no `/dev` server of its own — `/dev` is the input
+device and `/dev/draw` the draw device, and neither has any business knowing the mount
+table — so the file lives at **`/mnt/snarf-self/ns`**, in the tree that is already the
+editor's own interface (§6). It renders one line per union member, exactly as
+`Namespace.list` does.
+
+**As built (phase 13a).** The rows above are the intended table; the ones the browser
+actually mounts at boot today are:
+
+| Prefix | Mounted by | Notes |
+|--------|-----------|-------|
+| `/dev` | `ns_boot.mountDevices` | the input device — root directory `mouse kbd ctl` (S-04) |
+| `/dev/draw` | `ns_boot.mountDevices` | the draw device; a *separate server*, so `/dev`'s listing gains a synthesized `draw` child (§1.2) |
+| `/mnt/snarf-self` | `ns_boot.SelfTree.start` | served in-process from boot (§6) |
+| `/n/origin`, `/bin` | `origin/OriginMount` | only if the origin attaches (§5) |
+
+`/` and `/mnt` are mounted by nobody: they are synthesized from those prefixes (§1.2).
+So a listing of `/` reads `dev/ mnt/` with the origin down and `bin/ dev/ mnt/ n/` with
+it up. Not yet mounted: `/dev/snarf`, `/dev/dom`, the browser feature files,
+`/mnt/host`, `/mnt/opfs`, and `/mnt/snarf-self/ns` itself.
+
+> Revision log: 2026-09-14 (phase 13a) — §1.3 gained the as-built table: the boot
+> namespace is no longer empty (`/dev`, `/dev/draw`, `/mnt/snarf-self` mounted at boot,
+> `ns_boot.zig`). `/dev/ns` became **`/mnt/snarf-self/ns`** (ruling R-P13a-4: Snarf has
+> no `/dev` server of its own), specified but not yet implemented. §6's R-P10-E
+> (on-demand serving of the editor's tree) is retired.
 
 ## 2. `/dev/dom` — the hosting page (R-9P-05) — Host: **browser**
 
@@ -186,6 +215,15 @@ Formats and `ctl`/`event` verbs follow acme(4) exactly except: `event` strings u
 same syntax but only mouse/keyboard origins that exist here. Served in-process; also
 reachable by the origin server over the same WebSocket (server-initiated attach is a v2
 item — v1 exposes it to other tabs via `BroadcastChannel` transport experiment, OQ-OV-2).
+
+**Served from boot (phase 13a).** Wave 10a served this tree only on demand ("runtime
+mounting waits for the first in-editor client", R-P10-E). That is RETIRED: the entry
+point stands up the server, client and mount at boot and polls the server on every tick,
+so the first client is the editor itself. The root also carries `ns` (§1.3) once that
+file is built; it is specified above but **not implemented yet** — a row in the served
+root's dirtab is also a row in its listing, so adding it moves an existing served-tree
+expectation and belongs with the next wave that changes those listings (directory
+windows).
 
 **Deferred extension — `kbd hold` (specified here, not implemented in v1).** acme(4)'s
 event interface is asymmetric: with an `event` file open, B2/B3 actions are

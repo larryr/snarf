@@ -1,6 +1,6 @@
 # R-03 — Namespace & 9P Requirements
 
-Status: **Draft v3**
+Status: **Draft v4**
 
 Everything outside the editor core's memory is a file served over 9P. This document states
 which namespaces must exist and what they must let a client do. Protocol details:
@@ -33,7 +33,7 @@ which namespaces must exist and what they must let a client do. Protocol details
 
 | ID | Requirement |
 |----|-------------|
-| R-9P-13 | Blocking reads (e.g. `/dev/mouse`, `event` files) MUST work without blocking the browser main thread — the concurrency model (spec 00/01) has to make long-poll-style reads natural in WASM. |
+| R-9P-13 | **Every 9P operation the editor issues** — not only reads of files that block (`/dev/mouse`, `event` files) — MUST complete without blocking the browser main thread. Walk, open, read, write, stat and clunk are all subject to it, because a mount may have no pump at all on the editor's side (`/n/origin` is answered on a later tick). The concurrency model (spec 00/01) therefore makes long-poll-style *and* multi-step operations natural in WASM: a non-blocking ticket per outstanding T-message, and multi-message operations expressed as step-driven jobs over those tickets (S-01 §4.1). A client that stops caring about an outstanding request MUST `Tflush` it. |
 | R-9P-14 | Every namespace file SHALL be documented with its read/write format in spec 02; formats are line-oriented text unless there is a strong reason otherwise (Plan 9 style). |
 | R-9P-15 | Security: the namespace boundary is the security boundary. `/dev/dom` is same-page only; `/mnt/host` only ever contains user-granted handles; `/n/origin` is same-origin (or CORS/WSS-permitted) only. No server may proxy to arbitrary third-party URLs in v1 (see OQ-9P-2). |
 | R-9P-16 | Directories that exist only as prefixes of mounted entries (`/`, `/n`, `/mnt`, …) SHALL be **synthesized by the namespace** — the role Plan 9's root device `#/` plays (`9/port/devroot.c`) — so that walks and directory listings work at every level of the tree without a root file system. Synthesized directories are read-only, report `DMDIR|0555`, and carry a stable qid derived from their path. |
@@ -52,7 +52,13 @@ which namespaces must exist and what they must let a client do. Protocol details
 
 ## 5. Revision log
 
-- **v1** — initial mount list.
+- **v4** (2026-09-14, phase 13a) — **R-9P-13 widened** from "blocking reads" to *every 9P
+  operation the editor issues*. The trigger was `/n/origin`: its frames arrive on a later
+  tick, so even a Twalk cannot be answered synchronously, and every wave that reads
+  through a mount (Get/Put, origin file reads, directory windows) was blocked on it. The
+  mechanism — generic tickets plus step-driven jobs, `check` never pumping and never
+  blocking — is specified in S-01 §4.1 and built in `src/ninep/tickets.zig`,
+  `nsjob.zig` and `nsio.zig`. No ID renumbered; no new ID needed.
 - **v3** (2026-09-14, phase 12d) — **OQ-9P-1 resolved YES by the user**: R-9P-03 now
   REQUIRES union directories (bind order flags, first-success walk, concatenated reads);
   new **R-9P-16** makes the namespace synthesize the mount-point directories that only
@@ -62,3 +68,4 @@ which namespaces must exist and what they must let a client do. Protocol details
 - **v2** — added OPFS fallback to R-9P-09 after surveying File System Access API browser
   support; added R-9P-13 (non-blocking reads) after the /dev/draw + event-loop design;
   split browser features into named small files (R-9P-08).
+- **v1** — initial mount list.

@@ -28,6 +28,7 @@ const shim = @import("shim");
 const screen = @import("screen.zig");
 const input_pump = @import("input_pump.zig");
 const origin_glue = @import("origin_glue.zig");
+const ns_boot = @import("ns_boot.zig");
 
 const DevInput = dev.input.DevInput;
 const OriginMount = origin.OriginMount;
@@ -118,17 +119,23 @@ const App = struct {
     ticket_kbd: ninep.Client.ReadTicket,
     mouse_buf: [mouse_buf_len]u8,
     kbd_buf: [kbd_buf_len]u8,
-    // --- namespace + origin mount (phase 12) ---
-    /// The session's mount table (S-02 §1). Empty at boot: the draw and input
-    /// stacks are reached through their own captured clients, not by path. The
-    /// origin binds `/n/origin` into it when (and only when) it comes up.
+    // --- namespace + origin mount (phase 12, populated in 13a) ---
+    /// The session's mount table (S-02 §1.3). Since phase 13a it is REAL at
+    /// boot — `/dev`, `/dev/draw` and `/mnt/snarf-self` are mounted by
+    /// `ns_boot`, and `/` and `/mnt` are synthesized from those prefixes
+    /// (R-9P-16). The origin binds `/n/origin` (+ `/bin`) into it when, and
+    /// only when, it comes up. `a.editor.ns` points here: it is how `core`
+    /// reaches any file at all (R-OV-03).
     ///
-    /// SEAM (contract §3d, S-02 §1): `/dev/ns` — a read-only file rendering
-    /// `ns.list(w)` — is not served yet. It belongs to a device server that can
-    /// see this table; `core/served/fsys.zig` serves `/mnt/snarf-self` off the
-    /// `Editor` and has no `*Namespace`, so wiring it is a small wave of its
-    /// own (a `/dev` server plus an `Editor`→namespace handle), not free.
+    /// SEAM (R-P13a-4, S-02 §1): `/mnt/snarf-self/ns` — a read-only file
+    /// rendering `ns.list(w)` — is still not served. The handle it needs now
+    /// exists (`Editor.ns`); what stops it is that a served-root dirtab row is
+    /// also a listing row, so it moves an existing served-tree expectation.
+    /// See the SEAM(ns) note in `core/served/fsys.zig`.
     ns: ninep.mount.Namespace,
+    /// The in-process `/mnt/snarf-self` server + client (retires R-P10-E).
+    /// Holds interior pointers, so like everything else here it never moves.
+    self_tree: ns_boot.SelfTree,
     /// `/n/origin` (R-P12-5/6/7). Holds interior pointers (the client's
     /// transport captures `&origin.ws`), so like everything else here it lives
     /// in the heap App and never moves.
@@ -176,18 +183,26 @@ fn boot(width: u32, height: u32) !void {
     a.display = try draw.Display.init(alloc, &a.cl, root.fid);
     a.font = try draw.Font.init(alloc, a.display, draw.Font.default_subfont);
 
+    // ---- the session mount table (S-02 §1.3) ----
+    // Created BEFORE the scene so the tree can carry it onto the Editor; the
+    // devices and the served tree are mounted below, once their stacks exist.
+    // `OriginMount` captures `&a.ns` later, so this must not move.
+    a.ns = ninep.mount.Namespace.init(alloc);
+
     // ---- window tree: Chrome + Row + Column + initial Window (phase 8) ----
     // boot draws the whole scene (white ground, rowtag/columntag/window chrome,
     // the demo body); no hand-built palette or manual ground fill needed.
     a.tree = try core.boot.boot(alloc, a.display, &a.font, screen_rect, .{
         .win_name = "scratch",
         .body = demo_body,
+        .ns = &a.ns,
     });
 
     // Editor routing machine bound to the window tree (R-P8-9/10/11): keys
     // point-to-type, gestures pin to their Text, the wheel scrolls under-pointer.
+    // `bind` installs the window tree AND the namespace handle (phase 13a).
     a.editor = core.Editor.init(alloc);
-    a.editor.row = a.tree.row;
+    a.tree.bind(&a.editor);
     // Bind the B2/B3 colored-sweep solids from Chrome (acme.c:1084-1085); the core
     // falls back to f.col(.high) when these are null (R-P9-12).
     a.editor.but2col = a.tree.chrome.but2col;
@@ -227,15 +242,23 @@ fn boot(width: u32, height: u32) !void {
     a.ticket_mouse = try a.cl_input.beginRead(a.mouse_fid, 0, &a.mouse_buf);
     a.ticket_kbd = try a.cl_input.beginRead(a.kbd_fid, 0, &a.kbd_buf);
 
-    // ---- namespace + origin mount (R-P12-5) ----
+    // ---- boot namespace (S-02 §1.3, R-P13a) ----
+    // The two device stacks by path, then the served editor tree, served
+    // in-process from boot (R-P10-E retired). `/` and `/mnt` need no mount —
+    // `ninep.nsdir` synthesizes every directory that exists only as a prefix of
+    // a mounted entry (R-9P-16, devroot.c's role).
+    try ns_boot.mountDevices(&a.ns, &a.cl, root.fid, &a.cl_input, iroot.fid);
+    try a.self_tree.start(alloc, &a.editor, &a.ns);
+
+    // ---- origin mount (R-P12-5) ----
     // Boot NEVER waits on the socket: `dial` asks the shim to open it and
     // returns, the handshake is driven one step per `tick`, and if it does not
     // finish within OriginMount.dial_timeout_ms the mount is simply absent
     // (one warning line, no retry loop). Everything above this point — draw,
     // input, the window tree — is bit-identical with the origin down; that is
-    // the acceptance bar. Both fields are assigned BEFORE `dial`, because the
-    // mount captures `&a.origin.ws` and `&a.ns`.
-    a.ns = ninep.mount.Namespace.init(alloc);
+    // the acceptance bar. The mount is assigned BEFORE `dial`, because it
+    // captures `&a.origin.ws` and `&a.ns` (`a.ns` itself was created above, so
+    // the scene and the devices could already be bound to it).
     a.origin = OriginMount.init(alloc, &a.ns);
     a.ws_stage = &.{};
     // Route the `Reconnect` builtin back out to the transport (R-P12-7). The
@@ -351,6 +374,7 @@ export fn wake() void {}
 export fn tick(now_ms: u32) void {
     const a = app orelse return;
     _ = a.srv.poll() catch |e| @panic(@errorName(e)); // draw stack
+    a.self_tree.poll() catch |e| @panic(@errorName(e)); // /mnt/snarf-self stack
     input_pump.drain(inputDevices(a), &a.editor) catch |e| @panic(@errorName(e)); // input stack → Editor
     origin_glue.poll(originDevices(a), now_ms); // /n/origin handshake + disconnect watch
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
