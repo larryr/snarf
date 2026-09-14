@@ -359,7 +359,8 @@ test "dirwin: columnate golden — 7 names into a 640px body at the 9x18 font (T
     );
 }
 
-test "dirwin: columnate sets the dir body's maxtab to 27; a normal Text stays at 72 (T3)" {
+test "dirwin: columnate sets the dir body's maxtab to 27; a normal Text gets acme's 36 (T3)" {
+    // (renamed in 16c: the 72-px divergence this pinned is closed)
     // NAME NOTE: the divergence this test was written to pin is CLOSED — phase
     // 16c ported acme's `textinit` maxtab override (text.c:53-60), so a normal
     // Text is 36 (`maxtab*stringWidth("0")` = 4x9), not libframe's `frinit`
