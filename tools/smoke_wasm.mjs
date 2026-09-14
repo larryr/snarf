@@ -130,7 +130,7 @@ check("exports: memory/init/wake/tick present", () =>
 check("exports: abi_version() present", () => typeof ex.abi_version === "function");
 
 const abi = typeof ex.abi_version === "function" ? ex.abi_version() : undefined;
-check(`abi_version() === ${EXPECT_ABI}`, () => abi === EXPECT_ABI);
+check(`abi_version() === ${EXPECT_ABI} (T14)`, () => abi === EXPECT_ABI);
 
 let initTrapped = false;
 const logsBeforeInit = logs.length;
@@ -646,7 +646,7 @@ function makeFsStub() {
   };
 }
 
-check(`opfs: web/opfs.js mirror is FS_OP_VERSION ${FS_OP_VERSION} with 8 ops / 9 statuses`, () =>
+check(`opfs: web/opfs.js mirror is FS_OP_VERSION ${FS_OP_VERSION} with 8 ops / 9 statuses (T1)`, () =>
   FS_OP_VERSION === 1 &&
   Object.keys(FS_OP).length === 8 &&
   Object.keys(FS_STATUS).length === 9 &&

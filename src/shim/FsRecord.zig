@@ -220,7 +220,7 @@ pub fn decodeWriteCount(payload: []const u8) u32 {
 // ===========================================================================
 const testing = std.testing;
 
-test "FsRecord: round-trips every op" {
+test "FsRecord: round-trips every op (T1)" {
     var buf: [256]u8 = undefined;
     const cases = [_]FsRecord{
         .{ .op = .stat, .path = "/" },
@@ -244,7 +244,7 @@ test "FsRecord: round-trips every op" {
     }
 }
 
-test "FsRecord: empty payload, long path, short buffer, bad op" {
+test "FsRecord: empty payload, long path, short buffer, bad op (T1)" {
     var path: [max_path]u8 = undefined;
     @memset(&path, 'x');
     path[0] = '/';
@@ -297,7 +297,7 @@ test "FsRecord: stat/list/write reply payloads" {
     try testing.expectEqual(@as(u32, 0), decodeWriteCount(&.{}));
 }
 
-test "FsRecord: op and status integers match the JS mirror" {
+test "FsRecord: op and status integers match the JS mirror (T1)" {
     try testing.expectEqual(@as(u32, 1), version);
     try testing.expectEqual(@as(u8, 1), @intFromEnum(Op.stat));
     try testing.expectEqual(@as(u8, 2), @intFromEnum(Op.list));

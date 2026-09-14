@@ -517,3 +517,56 @@ test "nsjob: deinit mid-walk leaves the wire clean — a fresh ticket still reso
     try testing.expectEqual(msg.Kind.rstat, reply.body.kind());
     try testing.expectEqual(@as(usize, 0), s.client.pending.count());
 }
+
+// ===========================================================================
+// T12 (phase-14b contract §4): a NATIVE boot-namespace fixture — no `core`,
+// no `dev`, no wasm — shaped exactly like `ns_boot.zig`'s real mount table
+// (`/dev`, `/mnt/snarf-self`, then `/mnt/opfs`, the order `main_wasm.zig`
+// mounts them in). `core` cannot import `dev` and vice versa (S-07 §6), so
+// the only cross-module root that could construct the REAL `DevOpfs` is
+// `src/accept.zig` — orchestrator-owned and explicitly not to be touched
+// (R-P14b-1's FROZEN-ACCEPT-13B lives there). `syntheticChildren` is what
+// answers "does /mnt list opfs/", and it does not care what is on the other
+// end of a mount's client — a `FakeTree` proves the same table shape ns_boot
+// builds without needing the browser-backed device at all.
+// ===========================================================================
+test "nsjob/ns_boot: /mnt lists opfs/ in a boot-shaped mount table; / stays dev/ mnt/ (T12, R-P14b-1)" {
+    const a = testing.allocator;
+    var t_dev = nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var s_dev = try nsdir.FakeServer.init(a, &t_dev);
+    defer s_dev.deinit();
+    var t_self = nsdir.FakeTree{ .names = &.{"ctl"}, .tag = "s\n" };
+    var s_self = try nsdir.FakeServer.init(a, &t_self);
+    defer s_self.deinit();
+    var t_opfs = nsdir.FakeTree{ .names = &.{"notes.txt"}, .tag = "o\n" };
+    var s_opfs = try nsdir.FakeServer.init(a, &t_opfs);
+    defer s_opfs.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    // ns_boot's real order: mountDevices("/dev"), SelfTree.start("/mnt/snarf-self"),
+    // OpfsTree.start("/mnt/opfs") — main_wasm.zig lines 253/254/265.
+    try ns.mount("/dev", s_dev.client, s_dev.root_fid);
+    try ns.mount("/mnt/snarf-self", s_self.client, s_self.root_fid);
+    try ns.mount("/mnt/opfs", s_opfs.client, s_opfs.root_fid);
+    var pumps = Pumps{ .srvs = &.{ s_dev.srv, s_self.srv, s_opfs.srv } };
+
+    // "/" is FROZEN-ACCEPT-13B's boot-window scene: still exactly dev/ mnt/,
+    // unmoved by /mnt/opfs joining underneath (R-P14b-1 — no golden move).
+    var jr = try ListDirJob.init(a, &ns, "/");
+    defer jr.deinit();
+    try runSync(&jr, pumps.pump());
+    try testing.expectEqual(@as(usize, 2), jr.entries.items.len);
+    try testing.expectEqualStrings("dev", jr.entries.items[0].name);
+    try testing.expectEqualStrings("mnt", jr.entries.items[1].name);
+    for (jr.entries.items) |e| try testing.expect(e.mode & Stat.DMDIR != 0);
+
+    // "/mnt" gains opfs/ alongside snarf-self/, in mount order.
+    var jm = try ListDirJob.init(a, &ns, "/mnt");
+    defer jm.deinit();
+    try runSync(&jm, pumps.pump());
+    try testing.expectEqual(@as(usize, 2), jm.entries.items.len);
+    try testing.expectEqualStrings("snarf-self", jm.entries.items[0].name);
+    try testing.expectEqualStrings("opfs", jm.entries.items[1].name);
+    try testing.expect(jm.entries.items[1].mode & Stat.DMDIR != 0);
+}

@@ -534,3 +534,468 @@ test "devopfs: a clunked fid's late completion is dropped" {
     sc.answer(0, .ok, ""); // nobody is waiting: dropped, not stored
     try testing.expectEqual(@as(usize, 0), dev.inflight());
 }
+
+// ===========================================================================
+// Named battery T2-T11 (phase-14b contract §4), the test-writer's own — over
+// a REAL chan.Pipe + Server, driven by hand (no `ninep.Client`/`tickets`: a
+// blocking `Client.rpc` against this tree pumps forever the moment an op
+// parks, since nothing but an explicit `retryParked` ever answers it). The
+// harness below is `dev/input.zig`'s Harness pattern (send once, `recv`
+// reports `null` on a parked op instead of blocking), generalised with a
+// `drive` helper that answers outstanding `fsOp` tickets — via the `Script`
+// requester above — until a reply appears or the test's answer list runs out.
+// ===========================================================================
+
+/// One scripted answer for the NEXT outstanding `fsOp` ticket that `drive`
+/// hands to `Script.answer`, in the order a chain of round trips needs them
+/// (e.g. OTRUNC's `stat` then `truncate`).
+const Answer = struct { status: FsRecord.Status, payload: []const u8 = &.{} };
+
+const chan = ninep.chan;
+
+/// Heap-pinned raw-pipe harness (no `Client`): `send` writes one T-frame and
+/// runs exactly one `Server.step`; `recv` reports `null` on a parked op
+/// (`WouldBlock`) rather than spinning. Plugs in whatever `Requester` the test
+/// wants — the scripted `Script` for most tests, an auto-answering one for T10.
+const Wire = struct {
+    alloc: std.mem.Allocator,
+    pipe: *chan.Pipe,
+    dev: DevOpfs,
+    srv: Server,
+    rbuf: [16384]u8 = undefined,
+    tag: u16 = 0,
+
+    fn create(alloc: std.mem.Allocator, req: Requester) !*Wire {
+        const self = try alloc.create(Wire);
+        errdefer alloc.destroy(self);
+        self.* = .{
+            .alloc = alloc,
+            .pipe = try chan.Pipe.init(alloc, 65536),
+            .dev = DevOpfs.init(alloc, req),
+            .srv = undefined,
+        };
+        self.srv = try Server.init(alloc, self.pipe.serverEnd(), &DevOpfs.ops, &self.dev, 8192);
+        return self;
+    }
+
+    fn destroy(self: *Wire) void {
+        self.srv.deinit();
+        self.dev.deinit();
+        self.pipe.deinit();
+        self.alloc.destroy(self);
+    }
+
+    fn nextTag(self: *Wire) u16 {
+        self.tag += 1;
+        return self.tag;
+    }
+
+    fn send(self: *Wire, m: msg.Message) !void {
+        var enc: [8192]u8 = undefined;
+        const n = try msg.encode(&m, &enc);
+        try self.pipe.clientEnd().writeMsg(enc[0..n]);
+        _ = try self.srv.step();
+    }
+
+    /// One decoded reply, or `null` when the op parked and nothing came back.
+    fn recv(self: *Wire) !?msg.Message {
+        const frame = self.pipe.clientEnd().readMsg(&self.rbuf) catch |e| switch (e) {
+            error.WouldBlock => return null,
+            else => return e,
+        };
+        return try msg.decode(frame);
+    }
+
+    /// Tversion + Tattach; asserts the mount's one unparking op (R-P14b-2).
+    fn connect(self: *Wire) !void {
+        try self.send(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
+        try testing.expect((try self.recv()).?.body == .rversion);
+        try self.send(.{ .tag = self.nextTag(), .body = .{ .tattach = .{ .fid = 0, .afid = msg.NOFID, .uname = "larry", .aname = "" } } });
+        try testing.expect((try self.recv()).?.body == .rattach);
+    }
+};
+
+/// Send `m` on `h`; while no reply is ready, hand the newest outstanding
+/// `fsOp` ticket the next entry of `answers` and re-dispatch. `error.NoReply`
+/// if `answers` runs out first — the op needed more round trips than expected.
+fn drive(h: *Wire, sc: *Script, m: msg.Message, answers: []const Answer) !msg.Message {
+    try h.send(m);
+    var i: usize = 0;
+    while (true) {
+        if (try h.recv()) |r| return r;
+        if (i >= answers.len) return error.NoReply;
+        const t = sc.tickets.items.len - 1;
+        sc.answer(t, answers[i].status, answers[i].payload);
+        i += 1;
+        _ = try h.srv.retryParked();
+    }
+}
+
+test "devopfs wire T2: a walk over the pipe parks on one stat and completes on the answer" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = 3, .mtime_ms = 9_000 }).encode(&sb);
+    const r = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } },
+        &.{.{ .status = .ok, .payload = &sb }},
+    );
+    try testing.expect(r.body == .rwalk);
+    try testing.expectEqual(@as(usize, 1), r.body.rwalk.nwqid);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len); // exactly one round trip
+    const rec = try FsRecord.decode(sc.log.items[0]);
+    try testing.expectEqual(FsRecord.Op.stat, rec.op);
+    try testing.expectEqualStrings("/f", rec.path);
+}
+
+test "devopfs wire T3: two fids' walks park independently and complete out of order" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"a"}) } });
+    try testing.expectEqual(@as(?msg.Message, null), try h.recv());
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"b"}) } });
+    try testing.expectEqual(@as(?msg.Message, null), try h.recv());
+    try testing.expectEqual(@as(usize, 2), h.dev.inflight());
+
+    // Answer "b"'s ticket (issued SECOND) first: only fid 2 unparks.
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = true }).encode(&sb);
+    sc.answer(1, .ok, &sb);
+    _ = try h.srv.retryParked();
+    const rb = (try h.recv()).?;
+    try testing.expect(rb.body == .rwalk);
+    try testing.expectEqual(@as(usize, 1), h.dev.inflight()); // "a" still parked
+
+    (FsRecord.StatReply{ .is_dir = false, .size = 1 }).encode(&sb);
+    sc.answer(0, .ok, &sb);
+    _ = try h.srv.retryParked();
+    const ra = (try h.recv()).?;
+    try testing.expect(ra.body == .rwalk);
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight());
+}
+
+test "devopfs wire T4: a 20000-byte file reads byte-exact via chunked Tread" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    const data = try a.alloc(u8, 20_000);
+    defer a.free(data);
+    for (data, 0..) |*b, i| b.* = @intCast('a' + (i % 26));
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = data.len, .mtime_ms = 1 }).encode(&sb);
+    const rw = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"big"}) } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(rw.body == .rwalk);
+    const ro = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 1, .mode = msg.OREAD } } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(ro.body == .ropen);
+
+    const got = try a.alloc(u8, data.len);
+    defer a.free(got);
+    var off: u64 = 0;
+    while (off < data.len) {
+        const want: u32 = 4096;
+        const end = @min(off + want, data.len);
+        const r = try drive(
+            h,
+            &sc,
+            .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 1, .offset = off, .count = want } } },
+            &.{.{ .status = .ok, .payload = data[off..end] }},
+        );
+        try testing.expect(r.body == .rread);
+        const n = r.body.rread.data.len;
+        try testing.expect(n > 0);
+        @memcpy(got[off..][0..n], r.body.rread.data);
+        off += n;
+    }
+    try testing.expectEqual(@as(u64, data.len), off);
+    try testing.expectEqualSlices(u8, data, got);
+}
+
+test "devopfs wire T5: OTRUNC open issues stat then truncate(0); the write after it works" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = 9, .mtime_ms = 1 }).encode(&sb);
+    const rw = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(rw.body == .rwalk);
+
+    const ro = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 1, .mode = msg.OWRITE | msg.OTRUNC } } },
+        &.{ .{ .status = .ok, .payload = &sb }, .{ .status = .ok } },
+    );
+    try testing.expect(ro.body == .ropen);
+    // [0] the walk's own stat, [1] open's confirming stat, [2] OTRUNC's truncate.
+    try testing.expectEqual(@as(usize, 3), sc.log.items.len);
+    try testing.expectEqual(FsRecord.Op.stat, (try FsRecord.decode(sc.log.items[1])).op);
+    const trunc = try FsRecord.decode(sc.log.items[2]);
+    try testing.expectEqual(FsRecord.Op.truncate, trunc.op);
+    try testing.expectEqual(@as(u64, 0), trunc.arg0);
+
+    var wc: [4]u8 = undefined;
+    std.mem.writeInt(u32, &wc, 5, .little);
+    const wr = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .twrite = .{ .fid = 1, .offset = 0, .data = "hello" } } },
+        &.{.{ .status = .ok, .payload = &wc }},
+    );
+    try testing.expect(wr.body == .rwrite);
+    try testing.expectEqual(@as(u32, 5), wr.body.rwrite.count);
+    try testing.expectEqual(FsRecord.Op.write, (try FsRecord.decode(sc.log.items[3])).op);
+}
+
+test "devopfs wire T6: create masks the perm, re-points the fid, and a following Twrite works" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    // A second untouched root fid, cloned via a bare Twalk (no fsOp at all).
+    const clone = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{}) } }, &.{});
+    try testing.expect(clone.body == .rwalk);
+    try testing.expectEqual(@as(usize, 0), sc.log.items.len);
+
+    const rc = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .tcreate = .{ .fid = 0, .name = "new.txt", .perm = 0o666, .mode = msg.OWRITE } } },
+        &.{.{ .status = .ok }},
+    );
+    try testing.expect(rc.body == .rcreate);
+    const rec = try FsRecord.decode(sc.log.items[sc.log.items.len - 1]);
+    try testing.expectEqual(FsRecord.Op.create_file, rec.op);
+    try testing.expectEqualStrings("/new.txt", rec.path);
+    try testing.expectEqual(@as(u32, 0o644), rec.arg1); // 0666 masked by the 0755 dir_mode
+
+    var wc: [4]u8 = undefined;
+    std.mem.writeInt(u32, &wc, 2, .little);
+    const wr = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .twrite = .{ .fid = 0, .offset = 0, .data = "hi" } } },
+        &.{.{ .status = .ok, .payload = &wc }},
+    );
+    try testing.expect(wr.body == .rwrite);
+    try testing.expectEqual(@as(u32, 2), wr.body.rwrite.count); // the fid now IS the new file
+
+    const rd = try drive(
+        h,
+        &sc,
+        .{ .tag = h.nextTag(), .body = .{ .tcreate = .{ .fid = 2, .name = "sub", .perm = Stat.DMDIR | 0o777, .mode = msg.OREAD } } },
+        &.{.{ .status = .ok }},
+    );
+    try testing.expect(rd.body == .rcreate);
+    const recd = try FsRecord.decode(sc.log.items[sc.log.items.len - 1]);
+    try testing.expectEqual(FsRecord.Op.create_dir, recd.op);
+    try testing.expectEqualStrings("/sub", recd.path);
+    // The DMDIR bit rides through untouched (maskPerm's `~0o777` leaves every
+    // bit above the low 9 alone); only the permission bits are masked.
+    try testing.expectEqual(@as(u32, Stat.DMDIR | 0o755), recd.arg1);
+}
+
+test "devopfs wire T7: remove — ok and 'directory not empty', the fid clunked either way" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false }).encode(&sb);
+    const w1 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"gone"}) } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(w1.body == .rwalk);
+    const rr1 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tremove = .{ .fid = 1 } } }, &.{.{ .status = .ok }});
+    try testing.expect(rr1.body == .rremove);
+    const after1 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 1 } } }, &.{});
+    try testing.expect(after1.body == .rerror);
+    try testing.expectEqualStrings("unknown fid", after1.body.rerror.ename);
+
+    (FsRecord.StatReply{ .is_dir = true }).encode(&sb);
+    const w2 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"full"}) } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(w2.body == .rwalk);
+    const rr2 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tremove = .{ .fid = 2 } } }, &.{.{ .status = .not_empty }});
+    try testing.expect(rr2.body == .rerror);
+    try testing.expectEqualStrings("directory not empty", rr2.body.rerror.ename);
+    const after2 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 2 } } }, &.{});
+    try testing.expect(after2.body == .rerror);
+    try testing.expectEqualStrings("unknown fid", after2.body.rerror.ename); // R-P14a-3: clunked even on failure
+}
+
+test "devopfs wire T8: dir read serves the cached listing, continues by offset, rejects a misaligned one" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    // Root (fid 0) is already a dir: opening it issues NO fsOp.
+    const ro = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 0, .mode = msg.OREAD } } }, &.{});
+    try testing.expect(ro.body == .ropen);
+    try testing.expectEqual(@as(usize, 0), sc.log.items.len);
+
+    var payload: [64]u8 = undefined;
+    var p: usize = 0;
+    p += try (FsRecord.ListEntry{ .is_dir = true, .name = "sub" }).encode(payload[p..]);
+    p += try (FsRecord.ListEntry{ .is_dir = false, .name = "f.txt" }).encode(payload[p..]);
+
+    const r1 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 0, .offset = 0, .count = 4096 } } }, &.{.{ .status = .ok, .payload = payload[0..p] }});
+    try testing.expect(r1.body == .rread);
+    const first = try Stat.decode(r1.body.rread.data);
+    try testing.expectEqualStrings("sub", first.name);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len); // one `list`, cached
+
+    // Continuation from the offset the first read reported: no new fsOp.
+    const r2 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 0, .offset = @intCast(first.encodedSize()), .count = 4096 } } }, &.{});
+    try testing.expect(r2.body == .rread);
+    const second = try Stat.decode(r2.body.rread.data);
+    try testing.expectEqualStrings("f.txt", second.name);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len); // still one — served from cache
+
+    // A misaligned offset (BadOffset): "bad message", not a crash or garbage.
+    const bad = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 0, .offset = 1, .count = 4096 } } }, &.{});
+    try testing.expect(bad.body == .rerror);
+    try testing.expectEqualStrings("bad message", bad.body.rerror.ename);
+}
+
+test "devopfs wire T9: every fsOp status maps to its exact Rerror string" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    const cases = [_]struct { status: FsRecord.Status, want: []const u8 }{
+        .{ .status = .not_found, .want = "file does not exist" },
+        .{ .status = .exists, .want = "file already exists" },
+        .{ .status = .not_dir, .want = "not a directory" },
+        .{ .status = .is_dir, .want = "file is a directory" }, // kernel Eisdir, not the contract's shorthand
+        .{ .status = .permission, .want = "permission denied" },
+        .{ .status = .quota, .want = "no space on device" },
+        .{ .status = .not_empty, .want = "directory not empty" },
+        .{ .status = .io, .want = "i/o error" },
+    };
+    var fid: u32 = 1;
+    for (cases) |c| {
+        const r = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, fid, &.{"x"}) } }, &.{.{ .status = c.status }});
+        try testing.expect(r.body == .rerror);
+        try testing.expectEqualStrings(c.want, r.body.rerror.ename);
+        fid += 1;
+    }
+}
+
+test "devopfs wire T10: an always-io backend maps every op to 'i/o error' and logs the unavailable line once" {
+    const a = testing.allocator;
+    const AutoIo = struct {
+        dev: *DevOpfs = undefined,
+        fn issue(ctx: ?*anyopaque, ticket: u32, _: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.dev.complete(ticket, .io, ""); // exactly what a browser missing OPFS does (§3a)
+        }
+        fn requester(self: *@This()) Requester {
+            return .{ .ctx = self, .issue = issue };
+        }
+    };
+    var air = AutoIo{};
+    const h = try Wire.create(a, air.requester());
+    defer h.destroy();
+    air.dev = &h.dev;
+
+    const Rec = struct {
+        var n: usize = 0;
+        fn write(_: ?*anyopaque, line: []const u8) void {
+            std.debug.assert(std.mem.eql(u8, line, unavailable_line));
+            n += 1;
+        }
+    };
+    Rec.n = 0;
+    h.dev.log = .{ .write = Rec.write };
+    try h.connect(); // attach never asks the backend anything
+
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"x"}) } });
+    try testing.expectEqual(@as(?msg.Message, null), try h.recv()); // parked once, though already answered
+    _ = try h.srv.retryParked();
+    const r1 = (try h.recv()).?;
+    try testing.expect(r1.body == .rerror);
+    try testing.expectEqualStrings("i/o error", r1.body.rerror.ename);
+    try testing.expectEqual(@as(usize, 1), Rec.n);
+
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"y"}) } });
+    _ = try h.srv.retryParked();
+    const r2 = (try h.recv()).?;
+    try testing.expect(r2.body == .rerror);
+    try testing.expectEqual(@as(usize, 1), Rec.n); // still once (R-9P-10-style absence)
+}
+
+test "devopfs wire T11: clunking a fid mid-flight drops its late fsOp completion silently" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = 100 }).encode(&sb);
+    const w = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(w.body == .rwalk);
+    const o = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 1, .mode = msg.OREAD } } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(o.body == .ropen);
+
+    // A Tread parks; note its ticket's slot before the fid disappears under it.
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 64 } } });
+    try testing.expectEqual(@as(?msg.Message, null), try h.recv());
+    try testing.expectEqual(@as(usize, 1), h.dev.inflight());
+    const late_index = sc.tickets.items.len - 1;
+
+    // Tclunk: the framework interrupts the parked Tread (R-P6-5) before it
+    // answers the clunk itself, and `DevOpfs.clunkOp` drops the read's slot.
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .tclunk = .{ .fid = 1 } } });
+    const interrupted = (try h.recv()).?;
+    try testing.expect(interrupted.body == .rerror);
+    try testing.expectEqualStrings("interrupted", interrupted.body.rerror.ename);
+    const rc = (try h.recv()).?;
+    try testing.expect(rc.body == .rclunk);
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight()); // the slot went with the fid
+
+    // The late browser answer for the abandoned read: dropped, no crash, no leak.
+    sc.answer(late_index, .ok, "stale");
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight());
+    try testing.expectEqual(@as(usize, 0), try h.srv.retryParked());
+}
