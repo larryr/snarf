@@ -102,6 +102,9 @@ pub const DevOpfs = struct {
     /// and served offset-addressed from then on. Dropped on clunk, on re-open
     /// and on a create through the same fid.
     listings: std.AutoHashMapUnmanaged(u32, []u8) = .empty,
+    /// Per-PATH `stat` memo, keyed by the path's qid hash and so shared across
+    /// every fid that names the file (14b review; 16b item 3). See `statOf`.
+    stat_memo: std.AutoHashMapUnmanaged(u64, FsRecord.StatReply) = .empty,
     /// Scratch for building one child path (never held across a call).
     path_buf: [tree.max_path]u8 = undefined,
     /// Scratch the outgoing record is encoded into; grows to the largest
@@ -118,6 +121,7 @@ pub const DevOpfs = struct {
         var it = self.listings.valueIterator();
         while (it.next()) |v| self.allocator.free(v.*);
         self.listings.deinit(self.allocator);
+        self.stat_memo.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.paths.deinit(self.allocator);
         self.rec_buf.deinit(self.allocator);
@@ -178,6 +182,74 @@ pub const DevOpfs = struct {
         if (self.listings.fetchRemove(fid)) |kv| self.allocator.free(kv.value);
     }
 
+    // -- the per-path stat memo (16b item 3) --------------------------------
+    //
+    // WHY. Opening one file used to cost SIX `stat` round trips: walk1 stats
+    // the component, `open` stats it again to confirm it is not a directory,
+    // and every Tstat the client sends — the namespace walker sends several
+    // while resolving `/mnt/opfs/x` — stats it once more, each through a
+    // DIFFERENT fid and so a different `(fid, op, key)` slot. The slot table
+    // is per-fid by design (it exists so two concurrent reads on one fid do
+    // not collide); the TRUTH it caches is per-PATH.
+    //
+    // THE RULE. `stat_memo` holds the last `StatReply` seen for a path hash.
+    // It is dropped whenever this device changes what that answer would be —
+    // `write`, `truncate`, `create_file`/`create_dir`, `remove` — for the path
+    // itself AND for its parent directory, and a `list` of a directory drops
+    // every child memo under it (a fresh listing is fresh truth, so nothing
+    // older may outlive it). An external writer (another tab) is NOT seen:
+    // the same staleness a 9P client's own qid.vers caching already accepts,
+    // and the reason the memo never outlives an editing operation on the file.
+    //
+    // Like `PathTable`, it grows with the set of paths VISITED and is freed
+    // whole at `deinit`.
+
+    /// `stat` this path, from the memo if it is there and from the browser
+    /// (one parked round trip) if it is not.
+    fn statOf(self: *Self, fid: u32, path: []const u8, key: u64) OpBlockError!FsRecord.StatReply {
+        if (self.stat_memo.get(key)) |sr| return sr;
+        const c = try self.request(fid, .{ .op = .stat, .path = path }, key);
+        if (c.status != .ok) return tree.statusError(c.status);
+        const sr = FsRecord.StatReply.decode(c.payload) catch return error.IoError;
+        // The memo is an optimisation: an OOM here costs a round trip, not
+        // correctness, so the failure is swallowed.
+        self.stat_memo.put(self.allocator, key, sr) catch {};
+        return sr;
+    }
+
+    /// Forget `path` and its parent directory — what a completed `write`,
+    /// `truncate`, `create_*` or `remove` through this device invalidates.
+    pub fn forgetStat(self: *Self, path: []const u8) void {
+        _ = self.stat_memo.remove(tree.hashPath(path));
+        const parent = tree.parentPath(path);
+        if (parent.ptr != path.ptr or parent.len != path.len) {
+            _ = self.stat_memo.remove(tree.hashPath(parent));
+        }
+    }
+
+    /// Forget every memo for a child of `dir`: a fresh `list` supersedes them.
+    /// Keys are collected first — removing while iterating a hash map is not
+    /// allowed — and an allocation failure falls back to dropping the WHOLE
+    /// memo, which is conservative in the safe direction.
+    pub fn forgetChildren(self: *Self, dir: []const u8) void {
+        var doomed: std.ArrayList(u64) = .empty;
+        defer doomed.deinit(self.allocator);
+        var it = self.stat_memo.keyIterator();
+        while (it.next()) |k| {
+            const p = self.paths.get(k.*) orelse continue;
+            // The root is its OWN parent (`5/walk`), so `dir` itself would
+            // otherwise match when `dir` is "/" — and a listing says nothing
+            // new about the directory being listed.
+            if (std.mem.eql(u8, p, dir)) continue;
+            if (!std.mem.eql(u8, tree.parentPath(p), dir)) continue;
+            doomed.append(self.allocator, k.*) catch {
+                self.stat_memo.clearRetainingCapacity();
+                return;
+            };
+        }
+        for (doomed.items) |k| _ = self.stat_memo.remove(k);
+    }
+
     // -- Ops vtable ---------------------------------------------------------
 
     pub const ops: ninep.server.Ops = .{
@@ -224,9 +296,7 @@ pub const DevOpfs = struct {
         if (!tree.validName(name)) return error.FileDoesNotExist;
         const child = try tree.joinInto(&self.path_buf, dir, name);
         const key = tree.hashPath(child);
-        const c = try self.request(fid.fid, .{ .op = .stat, .path = child }, key);
-        if (c.status != .ok) return tree.statusError(c.status);
-        const sr = FsRecord.StatReply.decode(c.payload) catch return error.IoError;
+        const sr = try self.statOf(fid.fid, child, key);
         _ = try self.paths.intern(self.allocator, child);
         return tree.qidOf(key, sr.is_dir, sr.mtime_ms);
     }
@@ -246,13 +316,12 @@ pub const DevOpfs = struct {
             self.dropListing(fid.fid); // a re-open re-reads the directory
             return fid.qid;
         }
-        const c = try self.request(fid.fid, .{ .op = .stat, .path = path }, fid.qid.path);
-        if (c.status != .ok) return tree.statusError(c.status);
-        const sr = FsRecord.StatReply.decode(c.payload) catch return error.IoError;
+        const sr = try self.statOf(fid.fid, path, fid.qid.path);
         if (sr.is_dir) return error.FileIsDirectory; // it changed under us
         if ((mode & msg.OTRUNC) != 0) {
             const t = try self.request(fid.fid, .{ .op = .truncate, .path = path, .arg0 = 0 }, fid.qid.path);
             if (t.status != .ok) return tree.statusError(t.status);
+            self.forgetStat(path); // length 0 now
             return tree.qidOf(fid.qid.path, false, 0);
         }
         return tree.qidOf(fid.qid.path, false, sr.mtime_ms);
@@ -294,6 +363,7 @@ pub const DevOpfs = struct {
         }, key);
         if (c.status != .ok) return tree.statusError(c.status);
         _ = try self.paths.intern(self.allocator, child);
+        self.forgetStat(child); // the child is new and the parent has grown
         self.dropListing(fid.fid); // the fid now names the new file, not the directory
         return .{ .qid = tree.qidOf(key, is_dir, 0) };
     }
@@ -311,6 +381,7 @@ pub const DevOpfs = struct {
         if (std.mem.eql(u8, path, tree.root)) return error.PermissionDenied;
         const c = try self.request(fid.fid, .{ .op = .remove, .path = path }, fid.qid.path);
         if (c.status != .ok) return tree.statusError(c.status);
+        self.forgetStat(path);
     }
 
     fn statOp(ctx: *anyopaque, _: *Server, fid: *Fid) OpBlockError!Stat {
@@ -320,9 +391,7 @@ pub const DevOpfs = struct {
 
     fn stat(self: *Self, fid: *Fid) OpBlockError!Stat {
         const path = try self.pathOf(fid.qid);
-        const c = try self.request(fid.fid, .{ .op = .stat, .path = path }, fid.qid.path);
-        if (c.status != .ok) return tree.statusError(c.status);
-        const sr = FsRecord.StatReply.decode(c.payload) catch return error.IoError;
+        const sr = try self.statOf(fid.fid, path, fid.qid.path);
         return tree.statOf(
             tree.baseName(path),
             tree.qidOf(fid.qid.path, sr.is_dir, sr.mtime_ms),
@@ -353,6 +422,7 @@ pub const DevOpfs = struct {
             .arg0 = st.length,
         }, fid.qid.path);
         if (c.status != .ok) return tree.statusError(c.status);
+        self.forgetStat(path);
     }
 
     fn clunkOp(ctx: *anyopaque, _: *Server, fid: *Fid) void {
@@ -595,10 +665,11 @@ test "devopfs wire T5: OTRUNC open issues stat then truncate(0); the write after
         &.{ .{ .status = .ok, .payload = &sb }, .{ .status = .ok } },
     );
     try testing.expect(ro.body == .ropen);
-    // [0] the walk's own stat, [1] open's confirming stat, [2] OTRUNC's truncate.
-    try testing.expectEqual(@as(usize, 3), sc.log.items.len);
-    try testing.expectEqual(FsRecord.Op.stat, (try FsRecord.decode(sc.log.items[1])).op);
-    const trunc = try FsRecord.decode(sc.log.items[2]);
+    // [0] the walk's own stat, [1] OTRUNC's truncate. Since 16b item 3 the
+    // per-path stat memo answers `open`'s confirming stat with the walk's
+    // reply, so this used to be three records and is now two.
+    try testing.expectEqual(@as(usize, 2), sc.log.items.len);
+    const trunc = try FsRecord.decode(sc.log.items[1]);
     try testing.expectEqual(FsRecord.Op.truncate, trunc.op);
     try testing.expectEqual(@as(u64, 0), trunc.arg0);
 
@@ -612,7 +683,7 @@ test "devopfs wire T5: OTRUNC open issues stat then truncate(0); the write after
     );
     try testing.expect(wr.body == .rwrite);
     try testing.expectEqual(@as(u32, 5), wr.body.rwrite.count);
-    try testing.expectEqual(FsRecord.Op.write, (try FsRecord.decode(sc.log.items[3])).op);
+    try testing.expectEqual(FsRecord.Op.write, (try FsRecord.decode(sc.log.items[2])).op);
 }
 
 test "devopfs wire T6: create masks the perm, re-points the fid, and a following Twrite works" {
@@ -843,4 +914,42 @@ test "devopfs wire T11: clunking a fid mid-flight drops its late fsOp completion
     sc.answer(late_index, .ok, "stale");
     try testing.expectEqual(@as(usize, 0), h.dev.inflight());
     try testing.expectEqual(@as(usize, 0), try h.srv.retryParked());
+}
+
+test "devopfs: the per-path stat memo is shared across fids and dropped by a write (16b item 3)" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = 9, .mtime_ms = 1 }).encode(&sb);
+
+    // Walk fid 1 to "f": one stat, memoised under hash("/f").
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rwalk);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len);
+
+    // A SECOND fid onto the same file, and a Tstat through it: neither costs a
+    // round trip — the memo is keyed by path, not by fid.
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"f"}) } }, &.{})).body == .rwalk);
+    const st = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 2 } } }, &.{});
+    try testing.expect(st.body == .rstat);
+    try testing.expectEqual(@as(u64, 9), (try Stat.decode(st.body.rstat.stat)).length);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len);
+
+    // A write through fid 1 changes the length, so the memo goes: the next
+    // Tstat pays for a fresh one, and reports the new size.
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 1, .mode = msg.OWRITE } } }, &.{})).body == .ropen);
+    var wc: [4]u8 = undefined;
+    std.mem.writeInt(u32, &wc, 5, .little);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twrite = .{ .fid = 1, .offset = 0, .data = "hello" } } }, &.{.{ .status = .ok, .payload = &wc }})).body == .rwrite);
+
+    (FsRecord.StatReply{ .is_dir = false, .size = 5, .mtime_ms = 2 }).encode(&sb);
+    const st2 = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 2 } } }, &.{.{ .status = .ok, .payload = &sb }});
+    try testing.expect(st2.body == .rstat);
+    try testing.expectEqual(@as(u64, 5), (try Stat.decode(st2.body.rstat.stat)).length);
+    try testing.expectEqual(FsRecord.Op.stat, (try FsRecord.decode(sc.log.items[sc.log.items.len - 1])).op);
 }

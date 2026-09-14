@@ -25,6 +25,9 @@ pub fn read(self: *Self, fid: *Fid, offset: u64, buf: []u8) ReadError!usize {
         if (self.listings.get(fid.fid) == null) {
             const c = try self.request(fid.fid, .{ .op = .list, .path = path }, fid.qid.path);
             if (c.status != .ok) return tree.statusError(c.status);
+            // A fresh listing is fresh truth: nothing memoised about a child
+            // of this directory may outlive it (16b item 3).
+            self.forgetChildren(path);
             const s = try tree.buildListing(self.allocator, path, c.payload, &self.path_buf);
             self.listings.put(self.allocator, fid.fid, s) catch {
                 self.allocator.free(s);
@@ -56,5 +59,6 @@ pub fn write(self: *Self, fid: *Fid, offset: u64, data: []const u8) OpBlockError
         .payload = data,
     }, offset);
     if (c.status != .ok) return tree.statusError(c.status);
+    self.forgetStat(path); // the length and mtime just changed (16b item 3)
     return @min(data.len, FsRecord.decodeWriteCount(c.payload));
 }
