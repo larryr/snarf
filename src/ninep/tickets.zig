@@ -413,6 +413,9 @@ const ScriptedTransport = struct {
     sent: std.ArrayListUnmanaged([]u8) = .empty,
     replies: std.ArrayListUnmanaged([]u8) = .empty,
     reply_idx: usize = 0,
+    /// 16b item 8: when set, `writeMsg` refuses instead of sending — nothing
+    /// goes out, so nothing will ever answer.
+    fail_write: bool = false,
 
     fn init(allocator: std.mem.Allocator) ScriptedTransport {
         return .{ .allocator = allocator };
@@ -440,6 +443,7 @@ const ScriptedTransport = struct {
 
     fn writeMsg(ctx: *anyopaque, frame: []const u8) transport.Error!void {
         const self: *ScriptedTransport = @ptrCast(@alignCast(ctx));
+        if (self.fail_write) return error.Closed;
         const copy = self.allocator.dupe(u8, frame) catch return error.Closed;
         self.sent.append(self.allocator, copy) catch {
             self.allocator.free(copy);
@@ -681,4 +685,22 @@ test "tickets: discardClunk holds the fid number until the reply lands (16b item
     try st.pushReply(.{ .tag = tag2, .body = .{ .rerror = .{ .ename = "unknown fid" } } });
     try drainReady(&client);
     try testing.expectEqual(second, client.allocFid());
+}
+
+test "tickets: discardClunk recycles the fid at once when the send itself fails (16b item 8)" {
+    // "Best effort — a transport that refuses the send recycles the number at
+    // once and leaves the server side to the session teardown": nothing went
+    // out, so nothing will ever answer the tombstone.
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    const fid = client.allocFid();
+    st.fail_write = true;
+    discardClunk(&client, fid);
+
+    try testing.expectEqual(@as(usize, 0), st.sent.items.len); // nothing sent
+    try testing.expectEqual(@as(usize, 0), client.pending.count()); // no tombstone left behind
+    try testing.expectEqual(fid, client.allocFid()); // recycled immediately
 }

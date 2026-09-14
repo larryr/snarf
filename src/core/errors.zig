@@ -376,3 +376,42 @@ test "errors: flushWarnings grows a column in an empty row (T20)" {
     try testing.expectEqual(@as(usize, 1), c.w.items.len);
     try testing.expectEqualStrings("+Errors", c.w.items[0].body.file.name.items);
 }
+
+test "errors: flushWarnings runs a \\b-laden warning through bsInsert and shows from where it landed (16b item 12 integration)" {
+    // util.c:241-245: `bsInsert` (`textbsinsert`, text.c:307-364) processes the
+    // warning text before it is shown, and the shown range starts at what
+    // `bsInsert` RETURNS — not at the old end of file — when leading
+    // backspaces ate text already in the window.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "",
+    });
+    defer tree.deinit();
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    ed.row = tree.row;
+
+    ed.warning("abc\n", .{});
+    try flushWarnings(&ed);
+    const errw = lookFile(tree.row, "+Errors").?;
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("abc\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+
+    // Two leading backspaces eat "c\n" (the two runes just written); the
+    // reduced-scope processed run then appends. Not a literal control
+    // character in sight.
+    ed.warning("\x08\x08X\n", .{});
+    try flushWarnings(&ed);
+    try testing.expectEqualStrings("abX\n", errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &buf));
+
+    // `t.show(q0, nc, true)` ran with `q0` = where the run landed (2, right
+    // after "ab") — not the old end of file (4) that a plain insertAt would
+    // have shown from.
+    try testing.expectEqual(@as(usize, 2), errw.body.q0);
+    try testing.expectEqual(@as(usize, 4), errw.body.q1);
+    try testing.expect(!errw.dirty);
+}

@@ -549,3 +549,43 @@ test "Load: applyAddress stops at the first non-address rune (16b item 5)" {
     var junk = [_]u21{'x'};
     try testing.expectError(error.Edit, applyAddress(&ed, &t, &junk));
 }
+
+test "Load: addressAndShow — error.Edit is dot in silence; an evaluation failure warns (16b item 5 integration)" {
+    // look.c:876-894, the `addressAndShow` tail. `error.Edit` (the parser's
+    // `default:` arm, not an address at all) shows the CURRENT dot with no
+    // warning; an address that PARSES and then fails to evaluate — here an
+    // out-of-order compound, "5,1" (line 5's start, line 1's end, q0>q1) —
+    // warns "addresses out of order" (look.c:882-884) and ALSO shows dot,
+    // through the OTHER arm.
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "one",
+        .body = "abc\ndef\nghi\njkl\n",
+    });
+    defer tree.deinit();
+    const w = tree.row.col.items[0].w.items[0];
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+
+    // Dot pinned at [4,8) ("def") so "unchanged" is unambiguous.
+    try w.body.setSelect(4, 8);
+    const before = ed.warnings.items.len;
+    var junk = [_]u21{'%'};
+    try addressAndShow(&ed, w, &junk, true);
+    try testing.expectEqual(before, ed.warnings.items.len); // silent — error.Edit
+    try testing.expectEqual(@as(usize, 4), w.body.q0); // dot, unchanged
+    try testing.expectEqual(@as(usize, 8), w.body.q1);
+
+    // "5,1": parses fine as a compound address, then fails at EVALUATION
+    // (q0 > q1) — the other arm, which DOES warn.
+    try w.body.setSelect(4, 8);
+    var backwards = [_]u21{ '5', ',', '1' };
+    try addressAndShow(&ed, w, &backwards, true);
+    try testing.expectEqual(before + 1, ed.warnings.items.len);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "addresses out of order") != null);
+    try testing.expectEqual(@as(usize, 4), w.body.q0); // still dot: the default `r`
+    try testing.expectEqual(@as(usize, 8), w.body.q1);
+}

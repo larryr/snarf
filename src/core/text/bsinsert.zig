@@ -165,3 +165,18 @@ test "bsinsert: backspaces are clamped at the start, and multi-byte runes go who
     defer a.free(got);
     try testing.expectEqualStrings("zcaf\u{e8}", got);
 }
+
+test "bsinsert: a tag never gets backspace processing (text.c:325-330, 16b item 12)" {
+    // "can't happen but safety first: mustn't backspace over file name" — a
+    // `\b` in tag text is inserted VERBATIM, and the return is always q0.
+    const a = testing.allocator;
+    const h = try Fixture.init("");
+    defer h.deinit();
+    h.t.what = .tag;
+
+    const at = try h.t.bsInsert(0, "a\x08b", true);
+    try testing.expectEqual(@as(usize, 0), at);
+    const got = try h.text(a);
+    defer a.free(got);
+    try testing.expectEqualStrings("a\x08b", got);
+}

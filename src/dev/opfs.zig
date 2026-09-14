@@ -878,6 +878,52 @@ test "devopfs wire T11: clunking a fid mid-flight drops its late fsOp completion
     try testing.expectEqual(@as(usize, 0), try h.srv.retryParked());
 }
 
+test "devopfs wire: a flushed parked walk's tentative newfid is discarded; inflight goes to 0 even after a late answer (16b item 1)" {
+    // Complements `park: a discarded tentative newfid is announced to the
+    // server (16b item 1)` (park.zig, the fake-`Ops` clunk-count witness) with
+    // the real `DevOpfs`: `srv.ops.clunk` is `DevOpfs.clunkOp`, and its
+    // observable is `inflight()`, not a counter.
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    // Twalk fid0 -> newfid 5, "slow": walk1 asks for a stat and parks.
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 5, &.{"slow"}) } });
+    try testing.expectEqual(@as(?msg.Message, null), try h.recv());
+    try testing.expectEqual(@as(usize, 1), h.dev.inflight());
+    const late_index = sc.tickets.items.len - 1;
+    const walk_tag = h.tag; // the Twalk's own tag: nextTag() already advanced it
+
+    // Tflush: the framework never re-enters `handleWalk` for this walk, so
+    // `park.flushTag` discards the tentative newfid itself — `DevOpfs.clunkOp`
+    // drops slot 5's pending stat right away, before any answer comes back.
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .tflush = .{ .oldtag = walk_tag } } });
+    const interrupted = (try h.recv()).?;
+    try testing.expect(interrupted.body == .rerror);
+    try testing.expectEqualStrings("interrupted", interrupted.body.rerror.ename);
+    const rf = (try h.recv()).?;
+    try testing.expect(rf.body == .rflush);
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight());
+
+    // The browser's answer, arriving late for a newfid that was never
+    // installed: dropped on the floor, same as any post-clunk completion
+    // (R-P14b-3) — inflight stays at 0, and a retry finds nothing parked.
+    sc.answer(late_index, .ok, "stale");
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight());
+    try testing.expectEqual(@as(usize, 0), try h.srv.retryParked());
+
+    // Fid 5 was never installed: a Tstat on it is "unknown fid", not whatever
+    // the stale answer would have produced.
+    try h.send(.{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 5 } } });
+    const st = (try h.recv()).?;
+    try testing.expect(st.body == .rerror);
+    try testing.expectEqualStrings("unknown fid", st.body.rerror.ename);
+}
+
 test "devopfs: the per-path stat memo is shared across fids and dropped by a write (16b item 3)" {
     const a = testing.allocator;
     var sc = Script{ .alloc = a };
@@ -914,6 +960,66 @@ test "devopfs: the per-path stat memo is shared across fids and dropped by a wri
     try testing.expect(st2.body == .rstat);
     try testing.expectEqual(@as(u64, 5), (try Stat.decode(st2.body.rstat.stat)).length);
     try testing.expectEqual(FsRecord.Op.stat, (try FsRecord.decode(sc.log.items[sc.log.items.len - 1])).op);
+}
+
+test "devopfs: create, remove and a fresh listing invalidate the stat memo too (16b item 3 extension)" {
+    // The write path is T3's own test above; `write` is only ONE of the four
+    // invalidators `forgetStat`/`forgetChildren` name (opfs_cache.zig): a
+    // `create`/`remove` on a path drops it AND its parent, and a `list` of a
+    // directory drops every child memo under it.
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    // Walk fid1 to "/dir" and memoise it (one stat).
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = true }).encode(&sb);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"dir"}) } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rwalk);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 1 } } }, &.{})).body == .rstat);
+    try testing.expectEqual(@as(usize, 1), sc.log.items.len); // the walk's stat only; the Tstat was a memo hit
+
+    // CREATE a child under it: `forgetStat(child)` drops the child AND its
+    // parent — "/dir" — so the NEXT Tstat on fid1 pays for a fresh one.
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tcreate = .{ .fid = 1, .name = "child.txt", .perm = 0o666, .mode = msg.OWRITE } } }, &.{.{ .status = .ok }})).body == .rcreate);
+    const before_restat = sc.log.items.len;
+    (FsRecord.StatReply{ .is_dir = true }).encode(&sb);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 1 } } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rstat);
+    try testing.expectEqual(before_restat + 1, sc.log.items.len); // create invalidated the parent's memo
+
+    // fid1 now names "/dir/child.txt" (create re-points the fid). Walk a
+    // SECOND fid to "/other" and memoise it, then REMOVE fid1's file: remove
+    // invalidates its own path and its parent ("/dir"), not "/other".
+    (FsRecord.StatReply{ .is_dir = false, .size = 1 }).encode(&sb);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"other"}) } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rwalk);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 2 } } }, &.{})).body == .rstat);
+    const before_remove = sc.log.items.len;
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tremove = .{ .fid = 1 } } }, &.{.{ .status = .ok }})).body == .rremove);
+    // "/other" is untouched by the remove: a walk to it would be a fresh fid
+    // (fid1 is gone), so re-stat via a THIRD fid onto the same path instead —
+    // still a memo hit, proving "/other" survived.
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 3, &.{"other"}) } }, &.{})).body == .rwalk);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 3 } } }, &.{})).body == .rstat);
+    // +1 is the `remove` itself; the walk and the stat cost nothing more —
+    // "/other" memo untouched.
+    try testing.expectEqual(before_remove + 1, sc.log.items.len);
+
+    // A LISTING of the root invalidates every child memo under it — including
+    // "/other", walked and memoised above.
+    var payload: [64]u8 = undefined;
+    var p: usize = 0;
+    p += try (FsRecord.ListEntry{ .is_dir = false, .name = "other" }).encode(payload[p..]);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 0, .mode = msg.OREAD } } }, &.{})).body == .ropen);
+    const before_list = sc.log.items.len;
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 0, .offset = 0, .count = 4096 } } }, &.{.{ .status = .ok, .payload = payload[0..p] }})).body == .rread);
+    try testing.expectEqual(before_list + 1, sc.log.items.len); // the `list` itself
+
+    (FsRecord.StatReply{ .is_dir = false, .size = 2 }).encode(&sb);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tstat = .{ .fid = 3 } } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rstat);
+    try testing.expectEqual(before_list + 2, sc.log.items.len); // the listing evicted "/other" too
 }
 
 test "devopfs: a write sequence is closed once, at the clunk of the fid that wrote (16b item 4)" {
