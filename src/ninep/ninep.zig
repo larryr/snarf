@@ -9,6 +9,9 @@ pub const transport = @import("transport.zig");
 pub const errors = @import("errors.zig");
 pub const chan = @import("chan.zig");
 pub const Client = @import("client.zig").Client;
+/// The ASYNCHRONOUS half of the client: generic non-blocking tickets, one per
+/// outstanding T-message (R-9P-13, S-01 §3.2).
+pub const tickets = @import("tickets.zig");
 pub const server = @import("server.zig");
 pub const mount = @import("mount.zig");
 pub const nspath = @import("nspath.zig");
