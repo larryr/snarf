@@ -3,12 +3,14 @@
 //! Namespace module (lowercase), aliased on `Editor` like Text's select/scroll.
 //! Ported from larryr/plan9port@337c6ac; cite as `look.c:NN`.
 //!
-//! v1 scope (master R-P9-8 / look side §3.3). DEFERRED to the namespace phases:
-//! the external-client arm (look.c:97-146, no 9P clients), the plumber arm
-//! (look.c:147-196), and the openfile/URL/file arm (look.c:200-201 +
-//! `expandfile` look.c:592-729). With no host fs `expandfile` always fails
-//! (look.c:745), so a bare B3 click faithfully reduces to the alnum run
-//! (look.c:748-752) — FLAG-DIVERGENCE noted in the master. Permanently dropped:
+//! Scope. STILL DEFERRED: the external-client arm (look.c:97-146, no 9P
+//! clients) and the plumber arm (look.c:147-196). LANDED in phase 13b: the
+//! `openfile`/`expandfile` file arm (look.c:200-201, look.c:592-729) — it lives
+//! in `expand.zig`/`openfile.zig` and is entered from `look` below. It is the
+//! one ASYNCHRONOUS divergence of the port (R-P13b-2): acme answers "is this a
+//! file?" with `access()` mid-call, Snarf parks a `StatJob` and resolves it on a
+//! later frame, so a look that is NOT a file runs its literal search a frame or
+//! two late. Permanently dropped:
 //! the `e.jump`/`moveto` mouse warp on a hit (look.c:219, R-P8-6 lineage) and
 //! winlock/unlock (look.c:206-207/220-221, single-threaded). `winsettag` on a hit
 //! (look.c:418) is covered for free by the frameEnd tag sweep (R-P9-4).
@@ -16,30 +18,45 @@ const std = @import("std");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const select = @import("text/select.zig");
+const expand = @import("expand.zig");
 
-/// look3 v1 (look.c:82-229, minus the deferred arms above). `[q0,q1)` are
-/// absolute rune coords in `t`. When `q0==q1` the range is expanded (a click
-/// inside `t`'s selection captures it, look.c:738-743; otherwise the alnum run,
-/// look.c:748-752); a non-empty `[q0,q1)` is taken as the literal needle. B3 in
-/// a tag searches the owning window's BODY (look.c:205), with the needle still
-/// read from the CLICKED text's file (look.c:217). An empty expansion is a silent
-/// no-op (look.c:197-199). `reverse` selects the backward scan (Shift-B3).
+/// look3 (look.c:82-229, minus the deferred arms above). `[q0,q1)` are absolute
+/// rune coords in `t`. A bare click inside `t`'s own selection captures it
+/// (look.c:738-743); then the FILE arm (`expand.startLook`, look.c:783) gets
+/// first refusal and, if the text is not a file name, the literal search arm
+/// below runs on the alnum expansion (look.c:786-796). `reverse` selects the
+/// backward scan (Shift-B3).
+///
+/// R-P13b-2: the file arm is ASYNCHRONOUS. acme answers "is this a file?" with
+/// `access()` inside this call; Snarf parks a `StatJob` (`expand.zig`) and the
+/// verdict — open the file, or run `literal` below — lands on a later frame.
+/// With no namespace (`ed.ns == null`, every headless harness) `startLook`
+/// declines immediately and this reduces, byte for byte, to the pre-13b look.
 pub fn look(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
-    // --- expand (look.c:731-756) — find the needle range [e0,e1) in `t`. ------
     var e0 = q0;
     var e1 = q1;
-    const nc = t.file.buffer.len();
     if (q1 == q0 and t.q1 > t.q0 and t.q0 <= q0 and q0 <= t.q1) {
         // look.c:738-743: a bare click inside the current selection ⇒ the
         // selection itself is the needle. (The `e->jump=FALSE` tag tweak only fed
         // the dropped `moveto` warp, so it is irrelevant here.)
         e0 = t.q0;
         e1 = t.q1;
-    } else if (q1 == q0) {
-        // look.c:745 `expandfile` is the DEFERRED file/URL arm (always fails with
-        // no host fs, R-P9-8), so the faithful v1 bare-click expansion is the
-        // alnum run (look.c:748-752), reusing select.zig's util.c-faithful
-        // isAlnum.
+    }
+    if (try expand.startLook(ed, t, e0, e1, reverse)) return; // look.c:783
+    return literal(ed, t, e0, e1, reverse);
+}
+
+/// The literal (within-window search) arm of `look3`: the alnum expansion
+/// (look.c:786-791) and `search` (look.c:200-221's else branch). Reached
+/// directly when the text is not a file name, and from `expand.stepPending`
+/// when the parked existence check says it is not.
+pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
+    var e0 = q0;
+    var e1 = q1;
+    const nc = t.file.buffer.len();
+    if (e1 == e0) {
+        // look.c:786-791: the bare-click alnum run, reusing select.zig's
+        // util.c-faithful isAlnum.
         while (e1 < nc and select.isAlnum(t.file.buffer.runeAt(e1))) e1 += 1;
         while (e0 > 0 and select.isAlnum(t.file.buffer.runeAt(e0 - 1))) e0 -= 1;
     }

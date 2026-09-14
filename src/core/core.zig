@@ -28,6 +28,8 @@ pub const dirwin = @import("dirwin.zig");
 pub const Load = @import("Load.zig");
 /// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
 pub const openfile = @import("openfile.zig");
+/// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).
+pub const expand = @import("expand.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");

@@ -285,6 +285,55 @@ test "openfile: readFile('/') columnates the synthesized root (smoke)" {
     try testing.expectEqual(@as(i32, 27), w.body.fr.maxtab);
 }
 
+test "openfile: a parked B3 look opens the entry it names (smoke)" {
+    const a = testing.allocator;
+    const look = @import("look.zig");
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    const c = h.tree.row.col.items[0];
+    const root = try readFile(&h.ed, c, "/");
+    try h.frames(24);
+    try testing.expect(root.isdir);
+
+    // B3 inside `mnt/` of "dev/\tmnt/\n": textually a file name, so the look
+    // PARKS on a StatJob (R-P13b-2) instead of searching.
+    try look.look(&h.ed, &root.body, 6, 6, false);
+    try testing.expect(h.ed.pending_look != null);
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+
+    const opened = errors.lookFile(h.tree.row, "/mnt").?;
+    try testing.expect(opened != root);
+    try testing.expect(opened.isdir);
+    try testing.expectEqualStrings("/mnt/", opened.body.file.name.items);
+    const body = try bodyText(opened);
+    defer a.free(body);
+    try testing.expectEqualStrings("snarf-self/\n", body);
+}
+
+test "openfile: a look that names no file falls back to the literal search (smoke)" {
+    const look = @import("look.zig");
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "hay", .body = "zzz one zzz\n" });
+    defer h.deinit();
+
+    const w = h.tree.row.col.items[0].w.items[0];
+    const t = &w.body;
+    try t.setSelect(0, 0);
+    try look.look(&h.ed, t, 1, 1, false); // inside the first "zzz"
+    try testing.expect(h.ed.pending_look != null); // "/zzz" might exist: parked
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+
+    // It does not, so the literal arm ran: the SECOND "zzz" is selected and no
+    // window was opened.
+    try testing.expectEqual(@as(usize, 8), t.q0);
+    try testing.expectEqual(@as(usize, 11), t.q1);
+    try testing.expectEqual(@as(usize, 1), h.tree.row.col.items[0].w.items.len);
+}
+
 test "openfile: cleanName collapses . and .. against the root" {
     const a = testing.allocator;
     const cases = [_][2][]const u8{

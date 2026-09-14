@@ -32,6 +32,7 @@ const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Load = @import("Load.zig");
+const expand = @import("expand.zig");
 const Regx = @import("edit/Regx.zig");
 
 const Editor = @This();
@@ -166,6 +167,12 @@ ns: ?*ninep.mount.Namespace = null,
 /// ticket and must never MOVE (nsjob.zig's pointer-stability rule), so the list
 /// may reallocate but the Loads may not. Owned; `Load.deinitAll` frees them.
 loads: std.ArrayList(*Load) = .empty,
+/// The ONE parked B3 look (R-P13b-2). acme decides "is this text a file name?"
+/// with a synchronous `access()` (look.c:706); Snarf can only answer with a
+/// `StatJob` that completes on a later frame, so the look waits here. A newer
+/// B3 cancels the older. Owned; stepped by `Load.stepAll`, freed by
+/// `expand.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
+pending_look: ?*expand.PendingLook = null,
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
