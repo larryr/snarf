@@ -699,3 +699,62 @@ test "round-trip create/remove/wstat (phase 14a)" {
         try expectBodyEqual(b, got.body);
     }
 }
+
+test "msg: create/remove/wstat — max-length name, empty-string wstat, truncated Tcreate (T1)" {
+    const alloc = testing.allocator;
+
+    // Max-length name: `mut.validateTcreate` accepts up to 0xFFFF bytes (a
+    // string's u16 length prefix), so this pins the boundary the codec
+    // itself enforces, not an arbitrary "long" name.
+    const max_name = try alloc.alloc(u8, 0xFFFF);
+    defer alloc.free(max_name);
+    @memset(max_name, 'n');
+    const buf = try alloc.alloc(u8, 0xFFFF + 64);
+    defer alloc.free(buf);
+
+    const tc = Message{ .tag = 1, .body = .{ .tcreate = .{ .fid = 9, .name = max_name, .perm = 0o644, .mode = OWRITE } } };
+    {
+        const n = try encode(&tc, buf);
+        try testing.expectEqual(encodedSize(&tc), n);
+        const got = try decode(buf[0..n]);
+        try testing.expectEqualStrings(max_name, got.body.tcreate.name);
+    }
+
+    // Empty-string wstat: the codec treats `stat` as an opaque blob (its
+    // validity as a stat(5) record is a different layer, checked in
+    // server_mut.zig's T2/T3), so a zero-length one round-trips fine.
+    const tw = Message{ .tag = 2, .body = .{ .twstat = .{ .fid = 9, .stat = &.{} } } };
+    {
+        const n = try encode(&tw, buf);
+        const got = try decode(buf[0..n]);
+        try testing.expectEqual(@as(usize, 0), got.body.twstat.stat.len);
+    }
+
+    // The rest of the mandatory set, at ordinary sizes (the phase-14a smoke
+    // test above already covers Tcreate/Rcreate/Tremove/Twstat generally).
+    const q = Qid{ .path = 0x99, .vers = 3, .qtype = .{ .dir = false } };
+    const bodies = [_]Body{
+        .{ .rcreate = .{ .qid = q, .iounit = 8168 } },
+        .{ .tremove = .{ .fid = 4 } },
+        .rremove,
+        .rwstat,
+    };
+    for (bodies) |b| {
+        const m = Message{ .tag = 3, .body = b };
+        const n = try encode(&m, buf);
+        try testing.expectEqual(encodedSize(&m), n);
+        const got = try decode(buf[0..n]);
+        try expectBodyEqual(b, got.body);
+    }
+
+    // A Tcreate truncated at every offset short of the full frame ⇒
+    // BadMessage (mirrors "decode: truncated at every offset" above, for the
+    // new body).
+    const full = Message{ .tag = 5, .body = .{ .tcreate = .{ .fid = 1, .name = "abc", .perm = 0o644, .mode = OWRITE } } };
+    const full_n = try encode(&full, buf);
+    var i: usize = 0;
+    while (i < full_n) : (i += 1) {
+        try testing.expectError(error.BadMessage, decode(buf[0..i]));
+    }
+    _ = try decode(buf[0..full_n]); // the full frame decodes fine
+}

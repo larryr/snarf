@@ -369,3 +369,119 @@ test "server_mut: create name syntax" {
     try testing.expect(!validCreateName(".."));
     try testing.expect(!validCreateName("a/b"));
 }
+
+test "server_mut: default Ops (create/remove/wstat = null) refuse, and Tremove still clunks the fid (T2)" {
+    const f = try testsrv.Fixture.create(testing.allocator);
+    defer f.destroy();
+    try f.doVersion();
+    _ = try f.doAttach(0); // fid 0 = root: a directory, unopened
+
+    const rc = try f.transact(.{ .tag = 1, .body = .{ .tcreate = .{ .fid = 0, .name = "x", .perm = 0o644, .mode = msg.OWRITE } } });
+    try f.expectRerror(rc, create_prohibited);
+
+    var blob: [64]u8 = undefined;
+    const nst = try stat.dontTouch().encode(&blob);
+    const rw = try f.transact(.{ .tag = 2, .body = .{ .twstat = .{ .fid = 0, .stat = blob[0..nst] } } });
+    try f.expectRerror(rw, wstat_prohibited);
+
+    // Tremove is refused too, but `5/remove` still clunks the fid: a
+    // following Tstat on it sees "unknown fid" (R-P14a-3).
+    const rr = try f.transact(.{ .tag = 3, .body = .{ .tremove = .{ .fid = 0 } } });
+    try f.expectRerror(rr, remove_prohibited);
+    const after = try f.transact(.{ .tag = 4, .body = .{ .tstat = .{ .fid = 0 } } });
+    try f.expectRerror(after, "unknown fid");
+}
+
+/// A `create` fake for T3: always mints qid path 99 (a non-directory) and
+/// ignores every argument but `name` — the negative cases (open fid, non-dir
+/// fid, bad name) are all refused by `handleCreate` itself BEFORE `ops.create`
+/// is ever reached, so the fake only needs to model the success path. `write`
+/// only accepts the fid `create` just re-pointed, so "the fid is open" is
+/// pinned by a real Twrite rather than by inspecting server internals.
+const FakeCreate3 = struct {
+    fn qidOf(path: u64) Qid {
+        return .{ .path = path, .qtype = .{ .dir = path == 1 } };
+    }
+    fn attach(_: *anyopaque, _: *Server, _: *server.Fid, _: []const u8) OpError!Qid {
+        return qidOf(1); // root: dir
+    }
+    fn walk1(_: *anyopaque, _: *Server, fid: *server.Fid, name: []const u8) server.OpBlockError!Qid {
+        if (fid.qid.path == 1 and std.mem.eql(u8, name, "leaf")) return qidOf(2); // non-dir child
+        return error.FileDoesNotExist;
+    }
+    fn open(_: *anyopaque, _: *Server, fid: *server.Fid, _: u8) server.OpBlockError!Qid {
+        return fid.qid;
+    }
+    fn read(_: *anyopaque, _: *Server, _: *server.Fid, _: u64, _: []u8) server.ReadError!usize {
+        return 0;
+    }
+    fn write(_: *anyopaque, _: *Server, fid: *server.Fid, _: u64, data: []const u8) server.OpBlockError!usize {
+        if (fid.qid.path != 99) return error.PermissionDenied;
+        return data.len;
+    }
+    fn statOp(_: *anyopaque, _: *Server, fid: *server.Fid) server.OpBlockError!stat {
+        return .{
+            .qid = fid.qid,
+            .mode = if (fid.qid.qtype.dir) stat.DMDIR | 0o555 else 0o644,
+            .length = 0,
+            .name = if (fid.qid.path == 99) "made" else "x",
+        };
+    }
+    fn create(_: *anyopaque, _: *Server, _: *server.Fid, name: []const u8, _: u32, _: u8) server.OpBlockError!CreateResult {
+        _ = name;
+        return .{ .qid = qidOf(99) }; // iounit left 0 ⇒ the framework default
+    }
+};
+
+test "server_mut: create — every framework check, success re-points and opens the fid, iounit default (T3)" {
+    const f = try testsrv.Fixture.create(testing.allocator);
+    defer f.destroy();
+    f.srv.ops = &.{
+        .attach = FakeCreate3.attach,
+        .walk1 = FakeCreate3.walk1,
+        .open = FakeCreate3.open,
+        .read = FakeCreate3.read,
+        .write = FakeCreate3.write,
+        .stat = FakeCreate3.statOp,
+        .create = FakeCreate3.create,
+    };
+    try f.doVersion();
+    _ = try f.doAttach(0); // fid 0 = root, dir, unopened
+
+    // Already-open fid ⇒ protocol botch, checked before dir/name (5/open).
+    const ro = try f.transact(.{ .tag = 1, .body = .{ .topen = .{ .fid = 0, .mode = msg.OREAD } } });
+    try testing.expect(ro.body == .ropen);
+    const botch = try f.transact(.{ .tag = 2, .body = .{ .tcreate = .{ .fid = 0, .name = "x", .perm = 0, .mode = 0 } } });
+    try f.expectRerror(botch, protocol_botch);
+
+    // A second, still-unopened root fid to exercise the rest.
+    _ = try f.doAttach(1);
+
+    // Non-directory, unopened fid ⇒ create in non-directory.
+    _ = try f.transact(.{ .tag = 3, .body = .{ .twalk = msg.Body.Twalk.init(1, 2, &.{"leaf"}) } });
+    const nondir = try f.transact(.{ .tag = 4, .body = .{ .tcreate = .{ .fid = 2, .name = "x", .perm = 0, .mode = 0 } } });
+    try f.expectRerror(nondir, create_nondir);
+
+    // Bad names on an unopened directory fid (fid 1, still root).
+    for ([_][]const u8{ "", ".", "..", "a/b" }) |bad| {
+        const r = try f.transact(.{ .tag = 5, .body = .{ .tcreate = .{ .fid = 1, .name = bad, .perm = 0, .mode = 0 } } });
+        try f.expectRerror(r, filename_syntax);
+    }
+
+    // Success: Rcreate with the new qid; iounit 0 from the callback becomes
+    // msize-IOHDRSZ (8192-24 in this fixture, `open`'s own default).
+    const ok = try f.transact(.{ .tag = 6, .body = .{ .tcreate = .{ .fid = 1, .name = "made", .perm = 0o644, .mode = msg.OWRITE } } });
+    try testing.expect(ok.body == .rcreate);
+    try testing.expectEqual(@as(u64, 99), ok.body.rcreate.qid.path);
+    try testing.expectEqual(@as(u32, 8192 - msg.IOHDRSZ), ok.body.rcreate.iounit);
+
+    // The fid now names the new file AND is open: Tstat agrees, Twrite works.
+    const st = try f.transact(.{ .tag = 7, .body = .{ .tstat = .{ .fid = 1 } } });
+    try testing.expect(st.body == .rstat);
+    const decoded = try stat.decode(st.body.rstat.stat);
+    try testing.expectEqual(@as(u64, 99), decoded.qid.path);
+    try testing.expectEqualStrings("made", decoded.name);
+    const wr = try f.transact(.{ .tag = 8, .body = .{ .twrite = .{ .fid = 1, .offset = 0, .data = "hi" } } });
+    try testing.expect(wr.body == .rwrite);
+    try testing.expectEqual(@as(u32, 2), wr.body.rwrite.count);
+}

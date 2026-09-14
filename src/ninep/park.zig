@@ -281,3 +281,398 @@ test "park: fidOfFrame rejects a runt frame" {
     try testing.expectEqual(@as(?u32, null), fidOfFrame(&[_]u8{ 1, 2, 3 }));
     try testing.expectEqual(@as(?u32, null), fidOfFrame(&([_]u8{0} ** 10)));
 }
+
+// ===========================================================================
+// Named battery T5-T9 (phase-14a contract §4, test writer's). One shared
+// harness — `AllOpsHarness` around an `AllOps` fake whose seven parkable
+// slots each block on their own flag — exercises every op the framework may
+// park, FIFO order, the flush arm, the bound, and the clunked/vanished-fid
+// arm. `testsrv.TestTransport` supplies the transport (server.zig's own
+// `BlockFixture` pattern, adapted).
+// ===========================================================================
+const testsrv = @import("testsrv.zig");
+const Fid = server.Fid;
+const Ops = server.Ops;
+const Stat = @import("stat.zig");
+
+/// Tree: root(1, dir) → "f"(2, file). Every parkable op blocks while its own
+/// flag is set, else succeeds trivially. `stat_budget`, used only by T8, lets
+/// exactly N blocked `stat` calls through before reverting to WouldBlock —
+/// how the bound test frees exactly one slot without a second flag.
+const AllOps = struct {
+    block_walk: bool = false,
+    block_open: bool = false,
+    block_read: bool = false,
+    block_write: bool = false,
+    block_create: bool = false,
+    block_remove: bool = false,
+    block_stat: bool = false,
+    block_wstat: bool = false,
+    /// While `block_stat` is set, this many additional calls succeed anyway
+    /// (each one consumes one), before reverting to WouldBlock. T8 only.
+    stat_budget: usize = 0,
+
+    fn qidOf(path: u64) Qid {
+        return .{ .path = path, .qtype = .{ .dir = path == 1 } };
+    }
+    fn attach(_: *anyopaque, _: *Server, _: *Fid, _: []const u8) errors.OpError!Qid {
+        return qidOf(1);
+    }
+    fn walk1(ctx: *anyopaque, _: *Server, fid: *Fid, name: []const u8) OpBlockError!Qid {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_walk) return error.WouldBlock;
+        if (fid.qid.path == 1 and std.mem.eql(u8, name, "f")) return qidOf(2);
+        return error.FileDoesNotExist;
+    }
+    fn open(ctx: *anyopaque, _: *Server, fid: *Fid, _: u8) OpBlockError!Qid {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_open) return error.WouldBlock;
+        return fid.qid;
+    }
+    fn read(ctx: *anyopaque, _: *Server, _: *Fid, _: u64, _: []u8) ReadError!usize {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_read) return error.WouldBlock;
+        return 0;
+    }
+    fn write(ctx: *anyopaque, _: *Server, _: *Fid, _: u64, data: []const u8) OpBlockError!usize {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_write) return error.WouldBlock;
+        return data.len;
+    }
+    fn stat(ctx: *anyopaque, _: *Server, fid: *Fid) OpBlockError!Stat {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_stat) {
+            if (self.stat_budget > 0) {
+                self.stat_budget -= 1;
+            } else return error.WouldBlock;
+        }
+        return .{
+            .qid = fid.qid,
+            .mode = if (fid.qid.qtype.dir) Stat.DMDIR | 0o555 else 0o644,
+            .length = 0,
+            .name = "f",
+        };
+    }
+    fn create(ctx: *anyopaque, _: *Server, _: *Fid, name: []const u8, _: u32, _: u8) OpBlockError!server.CreateResult {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_create) return error.WouldBlock;
+        _ = name;
+        return .{ .qid = qidOf(3) };
+    }
+    fn remove(ctx: *anyopaque, _: *Server, _: *Fid) OpBlockError!void {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_remove) return error.WouldBlock;
+    }
+    fn wstat(ctx: *anyopaque, _: *Server, _: *Fid, _: Stat) OpBlockError!void {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.block_wstat) return error.WouldBlock;
+    }
+
+    const ops = Ops{
+        .attach = attach,
+        .walk1 = walk1,
+        .open = open,
+        .read = read,
+        .write = write,
+        .stat = stat,
+        .create = create,
+        .remove = remove,
+        .wstat = wstat,
+    };
+};
+
+const Qid = @import("qid.zig");
+
+/// Heap-pinned harness: `feed`/`popMsg` primitives (a parked request yields
+/// NO reply), plus `transact` for the non-blocking setup steps.
+const AllOpsHarness = struct {
+    alloc: std.mem.Allocator,
+    tt: testsrv.TestTransport,
+    fake: AllOps,
+    srv: Server,
+    rbuf: [8192]u8 = undefined,
+
+    fn create(alloc: std.mem.Allocator) !*AllOpsHarness {
+        const self = try alloc.create(AllOpsHarness);
+        self.alloc = alloc;
+        self.tt = .{ .alloc = alloc };
+        self.fake = .{};
+        self.srv = try Server.init(alloc, self.tt.asTransport(), &AllOps.ops, &self.fake, 8192);
+        return self;
+    }
+
+    fn destroy(self: *AllOpsHarness) void {
+        self.srv.deinit();
+        self.tt.deinit();
+        self.alloc.destroy(self);
+    }
+
+    fn feed(self: *AllOpsHarness, m: msg.Message) !void {
+        var enc: [8192]u8 = undefined;
+        const n = try msg.encode(&m, &enc);
+        try self.tt.pushReq(enc[0..n]);
+        _ = try self.srv.step();
+    }
+
+    fn popMsg(self: *AllOpsHarness) !?msg.Message {
+        const reply = self.tt.popReply() orelse return null;
+        defer self.alloc.free(reply);
+        @memcpy(self.rbuf[0..reply.len], reply);
+        return try msg.decode(self.rbuf[0..reply.len]);
+    }
+
+    fn transact(self: *AllOpsHarness, m: msg.Message) !msg.Message {
+        try self.feed(m);
+        return (try self.popMsg()) orelse error.NoReply;
+    }
+
+    fn setup(self: *AllOpsHarness) !void {
+        const rv = try self.transact(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
+        try testing.expect(rv.body == .rversion);
+        const ra = try self.transact(.{ .tag = 1, .body = .{ .tattach = .{ .fid = 0, .afid = msg.NOFID, .uname = "glenda", .aname = "" } } });
+        try testing.expect(ra.body == .rattach);
+    }
+};
+
+test "park: Tstat blocks with no reply until the flag flips, then completes exactly once (T5)" {
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+    h.fake.block_stat = true;
+
+    try h.feed(.{ .tag = 20, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+
+    // Still blocked: retryParked makes no progress and sends nothing.
+    try testing.expectEqual(@as(usize, 0), try retryParked(&h.srv));
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+
+    h.fake.block_stat = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const r = (try h.popMsg()).?;
+    try testing.expect(r.body == .rstat);
+    try testing.expectEqual(@as(u16, 20), r.tag);
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+}
+
+test "park: clunk (and attach) cannot park — a compile-time property; the 7 parkable ops each park and complete (T6)" {
+    // Compile-time (the coder's as-built ruling, phase-14a contract T6
+    // adjustment): `Ops.clunk` returns plain `void` — no error union at all,
+    // so WouldBlock has nowhere to live — and `Ops.attach` returns the
+    // narrower `errors.OpError`, a named closed set with no WouldBlock
+    // member. Neither slot's signature can be made to park; this is a type
+    // fact, not a runtime refusal, so it is checked with `@typeInfo`.
+    comptime {
+        const ClunkOpt = std.meta.fieldInfo(Ops, .clunk).type; // ?*const fn(...) void
+        const ClunkFnPtr = @typeInfo(ClunkOpt).optional.child; // *const fn(...) void
+        const ClunkFn = @typeInfo(ClunkFnPtr).pointer.child; // fn(...) void
+        const ClunkRet = @typeInfo(ClunkFn).@"fn".return_type.?;
+        if (@typeInfo(ClunkRet) != .void) @compileError("Ops.clunk must return plain void — WouldBlock must not be representable");
+
+        const AttachFnPtr = std.meta.fieldInfo(Ops, .attach).type; // *const fn(...) OpError!Qid
+        const AttachFn = @typeInfo(AttachFnPtr).pointer.child;
+        const AttachRet = @typeInfo(AttachFn).@"fn".return_type.?;
+        const AttachErrSet = @typeInfo(AttachRet).error_union.error_set;
+        const members = @typeInfo(AttachErrSet).error_set.?;
+        for (members) |e| {
+            if (std.mem.eql(u8, e.name, "WouldBlock")) @compileError("Ops.attach's error set must not contain WouldBlock");
+        }
+    }
+
+    // Runtime: each of the seven parkable ops parks (no reply) then
+    // completes (exactly one reply) once its own flag flips.
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+
+    // walk1
+    h.fake.block_walk = true;
+    try h.feed(.{ .tag = 10, .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+    h.fake.block_walk = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const rwalk = (try h.popMsg()).?;
+    try testing.expect(rwalk.body == .rwalk);
+    try testing.expectEqual(@as(u16, 10), rwalk.tag);
+
+    // open (fid 1, walked above)
+    h.fake.block_open = true;
+    try h.feed(.{ .tag = 11, .body = .{ .topen = .{ .fid = 1, .mode = msg.OREAD } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_open = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    try testing.expect((try h.popMsg()).?.body == .ropen);
+
+    // read (fid 1, now open)
+    h.fake.block_read = true;
+    try h.feed(.{ .tag = 12, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 10 } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_read = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    try testing.expect((try h.popMsg()).?.body == .rread);
+
+    // write: walk+open a second fid with a write-capable mode.
+    _ = try h.transact(.{ .tag = 13, .body = .{ .twalk = msg.Body.Twalk.init(0, 2, &.{"f"}) } });
+    _ = try h.transact(.{ .tag = 14, .body = .{ .topen = .{ .fid = 2, .mode = msg.ORDWR } } });
+    h.fake.block_write = true;
+    try h.feed(.{ .tag = 15, .body = .{ .twrite = .{ .fid = 2, .offset = 0, .data = "hi" } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_write = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const rwrite = (try h.popMsg()).?;
+    try testing.expect(rwrite.body == .rwrite);
+    try testing.expectEqual(@as(u32, 2), rwrite.body.rwrite.count);
+
+    // stat (fid 0, root)
+    h.fake.block_stat = true;
+    try h.feed(.{ .tag = 16, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_stat = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    try testing.expect((try h.popMsg()).?.body == .rstat);
+
+    // create (fid 0, root: still unopened and a directory)
+    h.fake.block_create = true;
+    try h.feed(.{ .tag = 17, .body = .{ .tcreate = .{ .fid = 0, .name = "made", .perm = 0o644, .mode = msg.OWRITE } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_create = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const rcreate = (try h.popMsg()).?;
+    try testing.expect(rcreate.body == .rcreate);
+    try testing.expectEqual(@as(u64, 3), rcreate.body.rcreate.qid.path);
+
+    // wstat (fid 1, still valid and open)
+    h.fake.block_wstat = true;
+    var blob: [64]u8 = undefined;
+    const nst = try Stat.dontTouch().encode(&blob);
+    try h.feed(.{ .tag = 18, .body = .{ .twstat = .{ .fid = 1, .stat = blob[0..nst] } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_wstat = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    try testing.expect((try h.popMsg()).?.body == .rwstat);
+
+    // remove (fid 2, still valid)
+    h.fake.block_remove = true;
+    try h.feed(.{ .tag = 19, .body = .{ .tremove = .{ .fid = 2 } } });
+    try testing.expect((try h.popMsg()) == null);
+    h.fake.block_remove = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    try testing.expect((try h.popMsg()).?.body == .rremove);
+
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+}
+
+test "park: FIFO order across two retries; a mid-queue Tflush leaves the other two to complete (T7)" {
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+    h.fake.block_stat = true;
+
+    try h.feed(.{ .tag = 1, .body = .{ .tstat = .{ .fid = 0 } } });
+    try h.feed(.{ .tag = 2, .body = .{ .tstat = .{ .fid = 0 } } });
+    try h.feed(.{ .tag = 3, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 3), h.srv.parkedCount());
+
+    // First retry: still blocked everywhere, nothing completes.
+    try testing.expectEqual(@as(usize, 0), try retryParked(&h.srv));
+    try testing.expectEqual(@as(usize, 3), h.srv.parkedCount());
+
+    // Flush the middle tag: Rerror "interrupted" on tag 2 FIRST, then Rflush.
+    try h.feed(.{ .tag = 9, .body = .{ .tflush = .{ .oldtag = 2 } } });
+    const e = (try h.popMsg()).?;
+    try testing.expect(e.body == .rerror);
+    try testing.expectEqual(@as(u16, 2), e.tag);
+    try testing.expectEqualStrings("interrupted", e.body.rerror.ename);
+    const fl = (try h.popMsg()).?;
+    try testing.expect(fl.body == .rflush);
+    try testing.expectEqual(@as(u16, 9), fl.tag);
+    try testing.expectEqual(@as(usize, 2), h.srv.parkedCount());
+
+    // Second retry, unblocked: the remaining two complete in park order.
+    h.fake.block_stat = false;
+    try testing.expectEqual(@as(usize, 2), try retryParked(&h.srv));
+    const r1 = (try h.popMsg()).?;
+    try testing.expect(r1.body == .rstat);
+    try testing.expectEqual(@as(u16, 1), r1.tag);
+    const r3 = (try h.popMsg()).?;
+    try testing.expect(r3.body == .rstat);
+    try testing.expectEqual(@as(u16, 3), r3.tag);
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+}
+
+test "park: the queue is bounded at max_parked; freeing one slot admits a new park (T8)" {
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+    h.fake.block_stat = true;
+
+    var t: u16 = 0;
+    while (t < max_parked) : (t += 1) {
+        try h.feed(.{ .tag = t, .body = .{ .tstat = .{ .fid = 0 } } });
+    }
+    try testing.expectEqual(max_parked, h.srv.parkedCount());
+    try testing.expect((try h.popMsg()) == null);
+
+    // One more ⇒ refused on the spot, "too many parked requests", queue unchanged.
+    try h.feed(.{ .tag = 9999, .body = .{ .tstat = .{ .fid = 0 } } });
+    const r = (try h.popMsg()).?;
+    try testing.expectEqual(@as(u16, 9999), r.tag);
+    try testing.expect(r.body == .rerror);
+    try testing.expectEqualStrings(too_many_parked, r.body.rerror.ename);
+    try testing.expectEqual(max_parked, h.srv.parkedCount());
+
+    // Complete exactly the FIFO head (tag 0) by budgeting one unblocked call;
+    // every other parked stat stays blocked and re-parks.
+    h.fake.stat_budget = 1;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const done = (try h.popMsg()).?;
+    try testing.expect(done.body == .rstat);
+    try testing.expectEqual(@as(u16, 0), done.tag);
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(max_parked - 1, h.srv.parkedCount());
+
+    // The queue is no longer full: a new park now succeeds.
+    try h.feed(.{ .tag = 5000, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(max_parked, h.srv.parkedCount());
+}
+
+test "park: a parked request whose fid vanishes without a Tclunk sweep gets the same error a fresh op on that fid would (T9)" {
+    // An ordinary Tclunk sweeps everything parked on the fid it drops
+    // (`sweepFid`, exercised in server.zig's "clunk with parked reads
+    // interrupts then Rclunk") — so "unknown fid on retry" is unreachable
+    // via Tclunk (phase-14a contract T9 adjustment). This pins the OTHER
+    // path `retryFiltered`/`matchesPath` must also handle: a parked frame
+    // whose fid the table no longer has AT ALL, via a test-only bypass that
+    // removes the fid directly (no sweep, no Tclunk).
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+    h.fake.block_stat = true;
+
+    try h.feed(.{ .tag = 41, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+
+    // Remove fid 0 directly (bypassing Tclunk/sweepFid entirely); free the
+    // uname the framework owns so the harness stays leak-free.
+    if (h.srv.fids.fetchRemove(0)) |kv| h.srv.allocator.free(kv.value.uname);
+
+    h.fake.block_stat = false;
+    try testing.expectEqual(@as(usize, 1), try retryParked(&h.srv));
+    const r = (try h.popMsg()).?;
+    try testing.expect(r.body == .rerror);
+    try testing.expectEqual(@as(u16, 41), r.tag);
+    try testing.expectEqualStrings("unknown fid", r.body.rerror.ename);
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+
+    // Confirm it is the SAME error a fresh op on that fid gets.
+    const fresh = try h.transact(.{ .tag = 42, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect(fresh.body == .rerror);
+    try testing.expectEqualStrings("unknown fid", fresh.body.rerror.ename);
+}
