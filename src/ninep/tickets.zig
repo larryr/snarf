@@ -218,6 +218,13 @@ pub fn beginDiscard(c: *Client, t: Message) Error!void {
 /// the Rclunk lands on the tombstone instead of poisoning a later `check`.
 /// Best effort — a transport that refuses the send leaves the fid to the
 /// session teardown.
+///
+/// ASSUMPTION (review nit, phase 13a): recycling the number before the Rclunk
+/// is safe only because every peer processes one connection's frames in order
+/// (`ninep.server.poll` is sequential; `snarf-origin` runs one blocking pump per
+/// connection), so a reused fid in the next Twalk always lands after the Tclunk.
+/// A reordering server (a threaded ADR-0005 native host) would need the
+/// tombstone to carry the fid and `dispatch` to free it on the Rclunk instead.
 pub fn discardClunk(c: *Client, fid: u32) void {
     beginDiscard(c, .{ .tag = 0, .body = .{ .tclunk = .{ .fid = fid } } }) catch {};
     c.freeFid(fid);
