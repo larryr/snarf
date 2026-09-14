@@ -533,3 +533,82 @@ test "tickets: an Rerror maps to the ticket's error; cancel Tflushes and frees t
 
     try testing.expectError(error.ProtocolError, check(&client, t2));
 }
+
+test "tickets: cancel on an un-pumped client tombstones both tags; late replies in either order never poison a fresh ticket (T8b)" {
+    // ordering A: the flushed ticket's own Rerror races ahead of its Rflush.
+    {
+        var st = ScriptedTransport.init(testing.allocator);
+        defer st.deinit();
+        var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+        defer client.deinit();
+
+        var buf0: [512]u8 = undefined;
+        const t0 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 0 } } }, &buf0); // tag 0
+
+        // Nothing is ready: cancel sends the Tflush (tag 1) on a tombstone and
+        // its own drain finds nothing to absorb yet.
+        try cancel(&client, t0);
+        const flush_sent = try st.sentMsg(1);
+        try testing.expectEqual(msg.Kind.tflush, flush_sent.body.kind());
+        try testing.expectEqual(@as(u16, 0), flush_sent.body.tflush.oldtag);
+
+        var buf2: [512]u8 = undefined;
+        const t2 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 1 } } }, &buf2); // tag 2
+        try testing.expectEqual(@as(?Message, null), try check(&client, t2));
+
+        // The cancelled ticket is already unreachable, before either late
+        // reply has even been queued.
+        try testing.expectError(error.ProtocolError, check(&client, t0));
+
+        // Late replies land in send order: the flushed request's own Rerror,
+        // then the Rflush, then the unrelated ticket's real reply.
+        try st.pushReply(.{ .tag = 0, .body = .{ .rerror = .{ .ename = "interrupted" } } });
+        try st.pushReply(.{ .tag = 1, .body = .rflush });
+        var stat_bytes: [128]u8 = undefined;
+        const sn = try (Stat{ .qid = .{ .path = 9 }, .mode = 0, .length = 0, .name = "f" }).encode(&stat_bytes);
+        try st.pushReply(.{ .tag = 2, .body = .{ .rstat = .{ .stat = stat_bytes[0..sn] } } });
+
+        const r2 = (try check(&client, t2)).?;
+        try testing.expectEqual(msg.Kind.rstat, r2.body.kind());
+        try testing.expectEqual(@as(usize, 0), client.pending.count());
+        try testing.expectError(error.ProtocolError, check(&client, t0));
+    }
+
+    // ordering B: the real reply races ahead of the Rflush instead.
+    {
+        var st = ScriptedTransport.init(testing.allocator);
+        defer st.deinit();
+        var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+        defer client.deinit();
+
+        var buf0: [512]u8 = undefined;
+        const t0 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 0 } } }, &buf0); // tag 0
+
+        try cancel(&client, t0);
+        const flush_sent = try st.sentMsg(1);
+        try testing.expectEqual(msg.Kind.tflush, flush_sent.body.kind());
+        try testing.expectEqual(@as(u16, 0), flush_sent.body.tflush.oldtag);
+
+        var buf2: [512]u8 = undefined;
+        const t2 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 1 } } }, &buf2); // tag 2
+        try testing.expectEqual(@as(?Message, null), try check(&client, t2));
+
+        try testing.expectError(error.ProtocolError, check(&client, t0));
+
+        // This time the Rflush arrives first, then a REAL Rstat on the
+        // flushed tag (the server's answer raced ahead of its own Rflush),
+        // then the unrelated ticket's real reply.
+        try st.pushReply(.{ .tag = 1, .body = .rflush });
+        var stat0_bytes: [128]u8 = undefined;
+        const sn0 = try (Stat{ .qid = .{ .path = 3 }, .mode = 0, .length = 0, .name = "g" }).encode(&stat0_bytes);
+        try st.pushReply(.{ .tag = 0, .body = .{ .rstat = .{ .stat = stat0_bytes[0..sn0] } } });
+        var stat_bytes: [128]u8 = undefined;
+        const sn = try (Stat{ .qid = .{ .path = 9 }, .mode = 0, .length = 0, .name = "f" }).encode(&stat_bytes);
+        try st.pushReply(.{ .tag = 2, .body = .{ .rstat = .{ .stat = stat_bytes[0..sn] } } });
+
+        const r2 = (try check(&client, t2)).?;
+        try testing.expectEqual(msg.Kind.rstat, r2.body.kind());
+        try testing.expectEqual(@as(usize, 0), client.pending.count());
+        try testing.expectError(error.ProtocolError, check(&client, t0));
+    }
+}

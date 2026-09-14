@@ -474,3 +474,39 @@ test "nsjob: WalkJob un-pumped stepping stays pending with no frames; deinit mid
     try testing.expectEqual(msg.Kind.tclunk, m2.body.kind());
     try testing.expectEqual(newfid, m2.body.tclunk.fid);
 }
+
+test "nsjob: deinit mid-walk leaves the wire clean — a fresh ticket still resolves after the late Rflush/Rclunk (T8b)" {
+    const a = testing.allocator;
+    var t = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s = try nsdir.FakeServer.init(a, &t);
+    defer s.deinit();
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/x", s.client, s.root_fid);
+
+    var j = try WalkJob.init(&ns, "/x/rc");
+    try testing.expectEqual(Status.pending, try j.step()); // Twalk on the wire, never polled
+
+    // Disable the pump: deinit's cleanup RPCs (Tflush, Tclunk) must land on
+    // tombstones without any implicit pumping (R-P13a-3 discipline extended
+    // to cleanup), exactly as T8 pins for the raw-frame ordering.
+    s.client.pump = null;
+    j.deinit();
+    // Leave every frame deinit put on the wire — the Twalk it never got a
+    // reply to, plus its own Tflush and Tclunk — untouched; the point of
+    // this test is that a FRESH ticket started afterwards is unaffected by
+    // whatever the server eventually answers them with.
+
+    var buf: [small_reply]u8 = undefined;
+    const fresh = try tickets.begin(s.client, .{ .tag = 0, .body = .{
+        .tstat = .{ .fid = s.root_fid },
+    } }, &buf);
+
+    // Let the server work through everything it's owed: the stale Twalk, the
+    // Tflush, the Tclunk, and the fresh Tstat.
+    for (0..8) |_| _ = try s.srv.poll();
+
+    const reply = (try tickets.check(s.client, fresh)).?;
+    try testing.expectEqual(msg.Kind.rstat, reply.body.kind());
+    try testing.expectEqual(@as(usize, 0), s.client.pending.count());
+}
