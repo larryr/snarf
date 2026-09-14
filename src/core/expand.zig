@@ -48,6 +48,13 @@ pub const Kind = enum { file, url, include };
 ///     colon.
 ///   * `[q0, q1)` — `e->q0`/`e->q1`, the whole expansion; the caller needs it
 ///     for the literal-search fallback.
+///   * `reverse` — `e->reverse` (look.c:637-643), the caller's Shift-B3 flag
+///     AFTER the two downgrades `expandfile` applies to it. NOTHING READS IT
+///     YET: it is the one piece of the reverse-look backlog item that belongs
+///     to this function, recorded here so the bookkeeping cannot be forgotten
+///     when Shift-B3 lands. Its consumer will be `address()`'s last argument
+///     (look.c:723/881), where a true `reverse` starts the address scan with
+///     `dir = Back` (addr.c:188-189).
 pub const Candidate = struct {
     name_q0: usize,
     name_q1: usize,
@@ -57,6 +64,7 @@ pub const Candidate = struct {
     q0: usize,
     q1: usize,
     kind: Kind,
+    reverse: bool = false,
 };
 
 /// `isaddrc` (addr.c:28-34): the runes an address may be made of.
@@ -100,18 +108,24 @@ fn breakingColon(t: *Text, q: usize) bool {
 /// `expandfile` (look.c:592-729) MINUS its I/O: everything up to (but not
 /// including) `access()`/`lookfile`. Purely textual, so it is trivially
 /// testable and the asynchronous half below is the only thing that needs a
-/// namespace. `reverse` (Shift-B3, look.c:636-643) is DEFERRED with the rest of
-/// the reverse-look backlog item and is not a parameter here.
+/// namespace.
+///
+/// `reverse_in` is the caller's Shift-B3 flag. `expandfile` DOWNGRADES it in
+/// two places (look.c:637-643) and the result travels on as `e->reverse`; it
+/// is reproduced here and handed back in `Candidate.reverse`. Nothing consumes
+/// it yet — the rest of reverse look is still a backlog item — but the rule
+/// lives where the C puts it instead of being rediscovered later.
 ///
 /// Returns null for the C's `Isntfile` (look.c:727-729) and for an empty
 /// expansion (look.c:646-648).
-pub fn expandFile(t: *Text, q0_in: usize, q1_in: usize) ?Candidate {
+pub fn expandFile(t: *Text, q0_in: usize, q1_in: usize, reverse_in: bool) ?Candidate {
     const nc = t.file.buffer.len();
     var q0 = q0_in;
     var q1 = q1_in;
     var amax = q1; // look.c:604
     var amin = amax; // look.c:645
     var has_colon = false;
+    var reverse = reverse_in;
 
     if (q1 == q0) { // look.c:605
         var colon: ?usize = null;
@@ -150,7 +164,16 @@ pub fn expandFile(t: *Text, q0_in: usize, q1_in: usize) ?Candidate {
                 }
             } else amax = nc; // look.c:638-639
         }
+        // look.c:640-641 `if(colon != q0) reverse = FALSE`. `colon` is an int
+        // and `q0` a uint there, so the absent colon (-1) converts to a huge
+        // unsigned and the test is TRUE — i.e. a reverse look survives only
+        // when the expansion BEGINS at the colon, a bare `:addr` click.
+        if (colon == null or colon.? != q0) reverse = false;
         amin = amax;
+    } else if (reverse) {
+        // look.c:642-644: an explicit selection keeps `reverse` only when it
+        // starts with the colon.
+        if (q0 >= nc or t.file.buffer.runeAt(q0) != ':') reverse = false;
     }
 
     const n = q1 - q0; // look.c:648
@@ -198,6 +221,7 @@ pub fn expandFile(t: *Text, q0_in: usize, q1_in: usize) ?Candidate {
         .q0 = q0,
         .q1 = q1,
         .kind = if (include) .include else .file,
+        .reverse = reverse, // look.c:718 `e->reverse = reverse`
     };
 }
 
@@ -313,7 +337,7 @@ test "expand: expandFile — file+addr, bare addr, url, include, no-addr, whites
         defer text.deinit();
         try text.insertAt(0, c.text, true);
 
-        const got = expandFile(&text, c.click, c.click);
+        const got = expandFile(&text, c.click, c.click, false);
         if (c.kind == null) {
             try testing.expect(got == null);
             continue;
@@ -334,4 +358,31 @@ test "expand: expandFile — file+addr, bare addr, url, include, no-addr, whites
             try testing.expect(!cand.has_addr);
         }
     }
+}
+
+test "expand: Candidate.reverse follows expandfile's two downgrades (16b item 6)" {
+    // [look.c:637-643] — a reverse look survives only a bare `:addr` click
+    // (the expansion BEGINS at the colon), or an explicit selection that
+    // starts with the colon.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var file = File.init(a, Buffer.initEmpty(a));
+    defer file.deinit();
+    var text = try Text.init(&file, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
+    defer text.deinit();
+    try text.insertAt(0, "x.c:12 :34", true); // a named address, then a bare one
+
+    // A click anywhere in `x.c:12`: the expansion starts at the name, not the
+    // colon, so `colon != q0` and reverse is dropped (look.c:640-641).
+    try testing.expect(!expandFile(&text, 1, 1, true).?.reverse);
+    try testing.expect(!expandFile(&text, 4, 4, true).?.reverse);
+    // A click in the bare `:34`: the expansion IS the colon run, so it stays.
+    try testing.expect(expandFile(&text, 8, 8, true).?.reverse);
+    // An explicit selection keeps it only when it starts with the colon
+    // (look.c:642-644).
+    try testing.expect(expandFile(&text, 7, 10, true).?.reverse);
+    try testing.expect(!expandFile(&text, 0, 6, true).?.reverse);
+    // And a caller that never asked for reverse never gets it.
+    try testing.expect(!expandFile(&text, 8, 8, false).?.reverse);
 }

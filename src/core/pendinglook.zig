@@ -60,7 +60,9 @@ pub const PendingLook = struct {
 pub fn startLook(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool, jump: bool) Text.Error!bool {
     dropPending(ed); // one at a time: a newer B3 supersedes the older
     const a = ed.allocator;
-    const cand = expandFile(t, q0, q1) orelse return false;
+    // `cand.reverse` is `e->reverse` after expandfile's downgrades
+    // (look.c:637-643). Nothing reads it yet — see `expand.Candidate`.
+    const cand = expandFile(t, q0, q1, reverse) orelse return false;
 
     if (cand.kind == .include) return false; // no `incl` list in v1 ⇒ literal
 
