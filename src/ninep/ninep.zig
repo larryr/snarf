@@ -16,6 +16,11 @@ pub const server = @import("server.zig");
 pub const mount = @import("mount.zig");
 pub const nspath = @import("nspath.zig");
 pub const nsdir = @import("nsdir.zig");
+/// Asynchronous namespace operations built on `tickets` — walk/stat/read/list
+/// as step-driven jobs (R-9P-13, S-01 §3.2).
+pub const nsjob = @import("nsjob.zig");
+/// The reading half of `nsjob` (S-07 size seam); its jobs are re-exported there.
+pub const nsio = @import("nsio.zig");
 
 test {
     std.testing.refAllDecls(@This());

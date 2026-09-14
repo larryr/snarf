@@ -166,8 +166,9 @@ pub fn close(ns: *const Namespace, h: Handle) void {
 }
 
 /// `.dir` if `path` is a strict component-wise ancestor of some mounted
-/// prefix, else null.
-fn syntheticHandle(ns: *const Namespace, path: []const u8) ?Handle {
+/// prefix, else null. `pub` for `nsjob.WalkJob`, which reaches the same verdict
+/// asynchronously (R-P13a-2).
+pub fn syntheticHandle(ns: *const Namespace, path: []const u8) ?Handle {
     if (!hasChildPrefix(ns, path)) return null;
     return .{ .dir = .{
         .path = path,
@@ -186,8 +187,9 @@ fn hasChildPrefix(ns: *const Namespace, path: []const u8) bool {
 
 /// Split a resolve remainder into walk components. "" ⇒ 0 components (a pure
 /// clone of the mount point's root fid). Null if it is deeper than
-/// `max_components`.
-fn splitComponents(remainder: []const u8, out: *[max_components][]const u8) ?usize {
+/// `max_components`. `pub` for `nsjob.zig`, which walks the same components one
+/// Twalk at a time.
+pub fn splitComponents(remainder: []const u8, out: *[max_components][]const u8) ?usize {
     if (remainder.len == 0) return 0;
     var n: usize = 0;
     var it = std.mem.splitScalar(u8, remainder, '/');
@@ -198,6 +200,34 @@ fn splitComponents(remainder: []const u8, out: *[max_components][]const u8) ?usi
         n += 1;
     }
     return n;
+}
+
+/// The synthesized children of `path`: the next component of every mounted
+/// prefix strictly below it, appended to `out` in table order, each name once
+/// and each owned by `allocator`. (devroot.c keeps ONE `Dirlist` per directory,
+/// so a name cannot repeat there either; R-P12d-2's "no de-duplication" is
+/// about union MEMBERS.) Shared by `DirReader` and `nsjob.ListDirJob` so the
+/// synchronous and asynchronous listings cannot drift (R-P13a-2).
+pub fn syntheticChildren(
+    allocator: std.mem.Allocator,
+    ns: *const Namespace,
+    path: []const u8,
+    out: *std.ArrayList([]u8),
+) Error!void {
+    for (ns.entries.items) |*e| {
+        if (e.prefix.len <= path.len) continue;
+        const rest = nspath.matchPrefix(path, e.prefix) orelse continue;
+        const name = nspath.firstComponent(rest);
+        if (name.len == 0) continue;
+        var seen = false;
+        for (out.items) |s| {
+            if (std.mem.eql(u8, s, name)) seen = true;
+        }
+        if (seen) continue;
+        const owned = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned);
+        try out.append(allocator, owned);
+    }
 }
 
 /// One open directory, reading the union at a path as a single stat(5) stream
@@ -427,25 +457,9 @@ pub const DirReader = struct {
         return buf[0..total];
     }
 
-    /// The synthesized children of this path: the next component of every
-    /// mounted prefix strictly below it, in table order, each name once.
-    /// (devroot.c keeps ONE `Dirlist` per directory, so a name cannot repeat
-    /// there either; R-P12d-2's "no de-duplication" is about union MEMBERS.)
+    /// The synthesized children of this path — `syntheticChildren` below.
     fn collectSynthetic(self: *DirReader, ns: *const Namespace) Error!void {
-        for (ns.entries.items) |*e| {
-            if (e.prefix.len <= self.path.len) continue;
-            const rest = nspath.matchPrefix(self.path, e.prefix) orelse continue;
-            const name = nspath.firstComponent(rest);
-            if (name.len == 0) continue;
-            var seen = false;
-            for (self.synth.items) |s| {
-                if (std.mem.eql(u8, s, name)) seen = true;
-            }
-            if (seen) continue;
-            const owned = try self.allocator.dupe(u8, name);
-            errdefer self.allocator.free(owned);
-            try self.synth.append(self.allocator, owned);
-        }
+        return syntheticChildren(self.allocator, ns, self.path, &self.synth);
     }
 
     /// The union members to concatenate after the synthetic entries.
