@@ -6,21 +6,23 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase13b`** (worktree `../snarf-wt/phase13b`, 2026-09-14, larry's Mac, local only) —
-  DIRECTORY WINDOWS: NEW `core/{dirwin,Load,openfile,expand}.zig`, `exec/cmd_get.zig` (dirs
-  only), `Window.isdir`, acme two-column boot with `/` rightmost (scratch demo removed from
-  main_wasm), `/mnt/snarf-self/ns`, S-05 §2 columnation fix, `phase13-opfs.md` → `phase14-opfs.md`.
-  Owns those files + `core/look.zig` (expand seam), `core/boot.zig`, `served/fsys.zig`,
-  `main_wasm.zig`/`ns_boot.zig`, `accept.zig` (new 13B scene only). Contract
-  `agents/contracts/phase13b-directory-windows.md`.
+- *(none as of 2026-09-14 — phase 13b merged `fd1abe0`; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b–12e, 13a are MERGED to `main`; `main` is green.**
-  592/592 tests (≈3 s), node smoke 29/29, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
-  ≈ 1747 KiB ReleaseSafe (+137 KiB in 13a: the served tree is now linked in; user decision
-  2026-09-14: KEEP ReleaseSafe default; ReleaseSmall was 194 KiB before 13a — re-measure).
+- **Phases 1–12, 12b–12e, 13a, 13b are MERGED to `main`; `main` is green.**
+  620/620 tests (≈3.5 s), node smoke 30/30, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
+  ≈ 2037 KiB ReleaseSafe / 253 KiB ReleaseSmall (+297/+43 KiB in 13b — real code ×7 by
+  safety checks; user keeps ReleaseSafe; debt-pass item).
+- **Phase 13b MERGED (`fd1abe0`, 2026-09-14) — DIRECTORY WINDOWS** — see
+  agents/reports/phase13b-directory-windows.md and REVIEW-NOTES: acme boot (2 columns, `/`
+  rightmost, scratch demo gone), `dirwin` (dircmp/columnate/TABDIR), `Load` (async textload),
+  `openfile`, `expand` (expandfile + PARKED look — R-P13b-2 async existence check), `Get` for
+  dirs, `isdir` tag/ctl, `/mnt/snarf-self/ns`, FROZEN-ACCEPT-13B. R-EDIT-03 DONE. Debt:
+  `Window.zig` 559 / `Editor.zig` 414 / `expand.zig` 402 pre-test lines; normal-window
+  `maxtab` 72 vs acme 36 (textinit never ported; moves FROZEN-ACCEPT-3); `applyAddress`
+  parses the whole `:addr` run; `expandFile` lacks `reverse`.
 - **Phase 13a MERGED (2026-09-14)** — see agents/reports/phase13a-async-namespace.md:
   generic async 9P tickets with TOMBSTONES (`ninep/tickets.zig`; `client.zig` 585 lines),
   namespace jobs (`ninep/nsjob.zig` Walk + `ninep/nsio.zig` Stat/ReadFile/ListDir, `runSync`
@@ -118,9 +120,10 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: directory windows (user-queued 2026-09-14)** — also needs an `Editor`→namespace
-  handle so `core` can reach `ninep.nsdir` without importing `origin`/`dev` (the same gap
-  that blocked `/dev/ns` in 12d) — R-EDIT-03 + paper
+- **NEXT: phase 14 OPFS** (`agents/contracts/phase14-opfs.md`, DRAFT; ABI → **v6**, not v5 as
+  the draft says) as 14a (server framework: generalized parked ops + create/remove, lifts
+  phase-1 R5) then 14b (`dev/opfs.zig` + `fsOp` import + boot mount + smoke stub). Then the
+  ADR-0005 native-host spike, then the debt pass. — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:

@@ -11,6 +11,29 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 13b — directory windows (merged `fd1abe0`, 2026-09-14)
+
+**For you — try it:** `make run`. Boot is now acme's: two columns, the right one a directory
+window on `/` listing `dev/  mnt/` (tag `/ Del Snarf Get | Look`). B3 on `mnt/` opens
+`/mnt/` (`snarf-self/`), B3 on `snarf-self/` opens the served tree, B3 on `index` opens it as
+a file window. After the origin attaches, B2 `Get` in the `/` tag re-lists and shows `bin/ n/`;
+B3 into `n/origin/fs/` browses the repo. `file:12` and `file:/re/` select the address after
+opening; a word that is not a file falls back to the literal search.
+
+**What changed:** acme's `textload` directory arm, `dircmp`, `textcolumnate` (narrower
+TABDIR tabs), `openfile`, `expandfile`, `Get` for directories, `isdir` in the tag/ctl,
+`/mnt/snarf-self/ns`. R-EDIT-03 satisfied. FROZEN-ACCEPT-13B freezes the new boot.
+
+**Decisions made for you:** `wdir` = `/`. `Get` on FILE windows still warns (Put/Get is its
+own wave). The self-mount guard refuses only `/mnt/snarf-self` itself, so files under it open.
+**One recorded divergence:** acme decides file-vs-text on a right click synchronously; Snarf
+parks the look for one round trip (a frame on in-memory mounts) then opens or searches.
+
+**Open items / debt:** wasm grew +297 KiB at ReleaseSafe (+43 KiB ReleaseSmall — real new
+code ×7 by safety checks; debt pass). `Window.zig` 559, `Editor.zig` 414, `expand.zig` 402
+pre-test lines are over the cap again. Normal windows keep libframe's 72-px tab where acme
+uses 36 (pre-existing; fixing it moves a golden). Retina still soft.
+
 ## Phase 13a — asynchronous 9P, real boot namespace (merged `cee0441`, 2026-09-14)
 
 **For you:** nothing visible yet; this is the plumbing directory windows need. Reload is safe.
