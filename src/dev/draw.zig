@@ -16,6 +16,9 @@
 const std = @import("std");
 const ninep = @import("ninep");
 const draw_backend = @import("draw_backend.zig");
+const draw_font = @import("draw_font.zig");
+const draw_msgs = @import("draw_msgs.zig");
+const draw_ctl = @import("draw_ctl.zig");
 
 const Server = ninep.server.Server;
 const Fid = ninep.server.Fid;
@@ -62,15 +65,12 @@ fn nodeOf(path: u64) Node {
 }
 
 // ===========================================================================
-// Per-font state (mirrors the kernel's DImage font fields, devdraw.c:107-115,
-// 130-132). A font is a normal image ('b') promoted by an 'i' verb: it grows a
-// glyph-metrics table whose entries 'l' fills. `miny`/`maxy` are TRUNCATED to
-// u8 exactly as the kernel's `uchar` FChar fields (devdraw.c:130-131, G18).
+// Per-font state — types + the three cache functions live in `draw_font.zig`
+// since phase 16a (S-07 size seam); the map itself is a `DevDraw` field.
 // ===========================================================================
 
-const FChar = struct { minx: i32, maxx: i32, miny: u8, maxy: u8, left: i8, width: u8 };
-const FontRec = struct { ascent: u8, chars: []FChar };
-const zero_fchar: FChar = .{ .minx = 0, .maxx = 0, .miny = 0, .maxy = 0, .left = 0, .width = 0 };
+const FChar = draw_font.FChar;
+const FontRec = draw_font.FontRec;
 
 // ===========================================================================
 // DevDraw — one exclusive connection over a Backend.
@@ -126,229 +126,30 @@ pub const DevDraw = struct {
         self.* = undefined;
     }
 
-    /// Free the metrics table owned by font `id`, if any (devdraw.c:1679 `free`).
-    fn freeFont(self: *Self, id: u32) void {
-        if (self.fonts.fetchRemove(id)) |kv| self.allocator.free(kv.value.chars);
-    }
-
-    /// Free every font's `chars` slice and empty the map (clunk-reset / deinit).
-    fn freeAllFonts(self: *Self) void {
-        var it = self.fonts.valueIterator();
-        while (it.next()) |fr| self.allocator.free(fr.chars);
-        self.fonts.clearRetainingCapacity();
-    }
-
-    /// Is `id` a live image on this connection (a 'b'-allocation not yet freed)?
-    fn isAllocated(self: *Self, id: u32) bool {
-        for (self.allocated.items) |v| if (v == id) return true;
-        return false;
-    }
-
-    /// Font ladder shared by 'l' and 's' (devdraw.c:1691-1694, 1963-1966): a
-    /// live font ⇒ its record; an allocated image that is not a font ⇒ NotFont;
-    /// anything else ⇒ NoDrawImage.
-    fn fontLadder(self: *Self, id: u32) OpError!*FontRec {
-        if (self.fonts.getPtr(id)) |fr| return fr;
-        if (self.isAllocated(id)) return error.NotFont;
-        return error.NoDrawImage;
-    }
+    /// The font-cache functions live in `draw_font.zig` since phase 16a, and
+    /// the draw-message verb loop in `draw_msgs.zig`. Decl aliases, not
+    /// forwarders: `self.fontLadder(id)`/`self.dispatch(data)` resolve exactly
+    /// as before.
+    pub const freeFont = draw_font.freeFont;
+    pub const freeAllFonts = draw_font.freeAllFonts;
+    pub const isAllocated = draw_font.isAllocated;
+    pub const fontLadder = draw_font.fontLadder;
+    pub const dispatch = draw_msgs.dispatch;
 
     fn devOf(ctx: *anyopaque) *Self {
         return @ptrCast(@alignCast(ctx));
     }
 
     // -- connection line (G8) ------------------------------------------------
-
-    /// Format the 144-byte connection line: 12 fields, each a value
-    /// right-justified in 11 columns followed by one space, no newline
-    /// (devdraw.c:1197-1204). Field order: clientid, infoid(0), chan string,
-    /// repl(0), r×4, clipr×4. Values come from `backend.displayInfo()`.
-    fn connLine(self: *Self, out: *[conn_line_len]u8) void {
-        const di = self.backend.displayInfo();
-        var pos: usize = 0;
-        var tmp: [16]u8 = undefined;
-        putIntField(out, &pos, &tmp, 1); // clientid = N = 1 (G3)
-        putIntField(out, &pos, &tmp, 0); // infoid
-        putStrField(out, &pos, chanToStr(di.chan)); // display chan
-        putIntField(out, &pos, &tmp, 0); // repl
-        putIntField(out, &pos, &tmp, di.r.min.x);
-        putIntField(out, &pos, &tmp, di.r.min.y);
-        putIntField(out, &pos, &tmp, di.r.max.x);
-        putIntField(out, &pos, &tmp, di.r.max.y);
-        putIntField(out, &pos, &tmp, di.clipr.min.x);
-        putIntField(out, &pos, &tmp, di.clipr.min.y);
-        putIntField(out, &pos, &tmp, di.clipr.max.x);
-        putIntField(out, &pos, &tmp, di.clipr.max.y);
-        std.debug.assert(pos == conn_line_len);
-    }
+    // Formatted in `draw_ctl.zig` since phase 16a; a decl alias, so
+    // `self.connLine(&line)` in `readOp` is unchanged.
+    pub const connLine = draw_ctl.connLine;
 
     // -- verb dispatch (G1/G5/G7, devdraw.c:1457-1466) -----------------------
 
-    /// Walk the batch of concatenated draw messages in one `data` write.
-    /// Per verb: check the remaining bytes cover the fixed message size (else
-    /// `ShortDraw`, G5), parse little-endian fields (G1/G7), call the backend.
-    /// A fault stops the loop; ops already applied stay applied (G6 — no
-    /// rollback). Backend faults funnel through the single `opError` table.
-    fn dispatch(self: *Self, data: []const u8) OpError!void {
-        var i: usize = 0;
-        while (i < data.len) {
-            const a = data[i..];
-            switch (a[0]) {
-                // 'b' — alloc: id[4]@1 screenid[4]@5 refresh[1]@9 chan[4]@10
-                //   repl[1]@14 r[16]@15 clipr[16]@31 color[4]@47 (devdraw.c:1467).
-                'b' => {
-                    if (a.len < 51) return error.ShortDraw;
-                    const id = rdU32(a, 1);
-                    if (rdU32(a, 5) != 0) return error.BadDraw; // no screens in Phase 2
-                    const ch = rdU32(a, 10);
-                    const repl = a[14] != 0;
-                    const r = rdRect(a, 15);
-                    const clipr = rdRect(a, 31);
-                    const color = rdU32(a, 47);
-                    self.backend.allocImage(id, r, ch, repl, clipr, color) catch |e| return opError(e);
-                    self.allocated.append(self.allocator, id) catch return error.IoError;
-                    i += 51;
-                },
-                // 'd' — draw: dstid[4]@1 srcid[4]@5 maskid[4]@9 r[16]@13 sp[8]@29
-                //   mp[8]@37; always SoverD in Phase 2 (devdraw.c:1578).
-                'd' => {
-                    if (a.len < 45) return error.ShortDraw;
-                    const dstid = rdU32(a, 1);
-                    const srcid = rdU32(a, 5);
-                    const maskid = rdU32(a, 9);
-                    const r = rdRect(a, 13);
-                    const sp = rdPoint(a, 29);
-                    const mp = rdPoint(a, 37);
-                    self.backend.draw(dstid, srcid, maskid, r, sp, mp) catch |e| return opError(e);
-                    i += 45;
-                },
-                // 'f' — free: id[4]@1 (devdraw.c:1640).
-                'f' => {
-                    if (a.len < 5) return error.ShortDraw;
-                    const id = rdU32(a, 1);
-                    self.backend.freeImage(id) catch |e| return opError(e);
-                    self.forget(id);
-                    self.freeFont(id); // 'i'-promoted images drop their metrics too
-                    i += 5;
-                },
-                // 'y' — load pixels: id[4]@1 r[16]@5 data[..]@21 (devdraw.c:2082-2101).
-                //   The fixed check is the 21-byte header only; the backend consumes
-                //   `Dy*bytesperline` payload bytes and returns that count so the loop
-                //   advances past exactly the payload — more verbs may follow (G17).
-                'y' => {
-                    if (a.len < 21) return error.ShortDraw;
-                    const id = rdU32(a, 1);
-                    const r = rdRect(a, 5);
-                    const consumed = self.backend.loadPixels(id, r, a[21..]) catch |e| return opError(e);
-                    i += 21 + consumed;
-                },
-                // 'i' — init font: fontid[4]@1 nchars[4]@5 ascent[1]@9 (devdraw.c:1662-1686).
-                //   id 0 (display) ⇒ BadDraw; unknown id ⇒ NoDrawImage; nchars out of
-                //   (0,4096] ⇒ BadDraw. Replaces any prior metrics with a zeroed table.
-                'i' => {
-                    if (a.len < 10) return error.ShortDraw;
-                    const fontid = rdU32(a, 1);
-                    if (fontid == 0) return error.BadDraw; // "cannot use display as font" ⇒ BadDraw (R-P3-4)
-                    if (!self.isAllocated(fontid)) return error.NoDrawImage;
-                    const nchars = rdU32(a, 5);
-                    if (nchars == 0 or nchars > 4096) return error.BadDraw; // "bad font size" ⇒ BadDraw
-                    const ascent = a[9];
-                    const chars = self.allocator.alloc(FChar, nchars) catch return error.IoError;
-                    @memset(chars, zero_fchar);
-                    const gop = self.fonts.getOrPut(self.allocator, fontid) catch {
-                        self.allocator.free(chars);
-                        return error.IoError;
-                    };
-                    if (gop.found_existing) self.allocator.free(gop.value_ptr.chars);
-                    gop.value_ptr.* = .{ .ascent = ascent, .chars = chars };
-                    i += 10;
-                },
-                // 'l' — load char: fontid[4]@1 srcid[4]@5 index[2]@9 r[16]@11 sp[8]@27
-                //   left[1]@35 (SIGNED) width[1]@36 (devdraw.c:1688-1713). The glyph
-                //   bits are stamped into the font image by an op-S copy (:1705); the
-                //   metrics record the rect verbatim (miny/maxy TRUNCATED to u8, G18).
-                'l' => {
-                    if (a.len < 37) return error.ShortDraw;
-                    const fontid = rdU32(a, 1);
-                    const font = try self.fontLadder(fontid);
-                    const srcid = rdU32(a, 5);
-                    const ci = rdU16(a, 9);
-                    if (ci >= font.chars.len) return error.BadIndex;
-                    const r = rdRect(a, 11);
-                    const sp = rdPoint(a, 27);
-                    self.backend.copy(fontid, srcid, r, sp) catch |e| return opError(e);
-                    font.chars[ci] = .{
-                        .minx = r.min.x,
-                        .maxx = r.max.x,
-                        .miny = @truncate(@as(u32, @bitCast(r.min.y))),
-                        .maxy = @truncate(@as(u32, @bitCast(r.max.y))),
-                        .left = @bitCast(a[35]),
-                        .width = a[36],
-                    };
-                    i += 37;
-                },
-                // 's' — string: dstid[4]@1 srcid[4]@5 fontid[4]@9 p[8]@13 clipr[16]@21
-                //   sp[8]@37 ni[2]@45 indices[2·ni]@47 (devdraw.c:1949-2014). Two-stage
-                //   short check: 47 header first, then +2·ni once ni is known. The wire
-                //   clipr REPLACES dst.clipr for the op and is restored on every exit
-                //   path (incl. BadIndex mid-string and backend faults) (:1976-2011).
-                's' => {
-                    if (a.len < 47) return error.ShortDraw;
-                    const ni = rdU16(a, 45);
-                    if (a.len < 47 + 2 * @as(usize, ni)) return error.ShortDraw;
-                    const dstid = rdU32(a, 1);
-                    const srcid = rdU32(a, 5);
-                    const fontid = rdU32(a, 9);
-                    const p = rdPoint(a, 13); // baseline point (client added ascent)
-                    const clipr = rdRect(a, 21);
-                    var sp = rdPoint(a, 37);
-                    const dst_info = self.backend.imageInfo(dstid) catch |e| return opError(e);
-                    _ = self.backend.imageInfo(srcid) catch |e| return opError(e);
-                    const font = try self.fontLadder(fontid);
-                    const ascent: i32 = font.ascent;
-                    const old_clipr = dst_info.clipr;
-                    self.backend.setClipr(dstid, clipr) catch |e| return opError(e);
-                    var q = p;
-                    var k: usize = 0;
-                    while (k < ni) : (k += 1) {
-                        const ci = rdU16(a, 47 + 2 * k);
-                        if (ci >= font.chars.len) {
-                            self.backend.setClipr(dstid, old_clipr) catch {};
-                            return error.BadIndex; // prior glyphs stay painted (G5)
-                        }
-                        const fc = font.chars[ci];
-                        const left: i32 = fc.left;
-                        const miny: i32 = fc.miny;
-                        // drawchar geometry (devdraw.c:894-900, G19): baseline at p.y.
-                        const r = draw_backend.Rect{
-                            .min = .{ .x = q.x + left, .y = p.y - (ascent - miny) },
-                            .max = .{ .x = q.x + left + (fc.maxx - fc.minx), .y = p.y - (ascent - miny) + (@as(i32, fc.maxy) - miny) },
-                        };
-                        const sp1 = draw_backend.Point{ .x = sp.x + left, .y = sp.y + miny };
-                        const mp = draw_backend.Point{ .x = fc.minx, .y = miny };
-                        self.backend.draw(dstid, srcid, fontid, r, sp1, mp) catch |e| {
-                            self.backend.setClipr(dstid, old_clipr) catch {};
-                            return opError(e);
-                        };
-                        q.x += fc.width; // pen + source advance (devdraw.c:927-928)
-                        sp.x += fc.width;
-                    }
-                    self.backend.setClipr(dstid, old_clipr) catch {};
-                    i += 47 + 2 * @as(usize, ni);
-                },
-                // 'v' — visible/flush: bare byte (devdraw.c:2075).
-                'v' => {
-                    self.backend.flush();
-                    i += 1;
-                },
-                else => return error.BadDraw, // unknown verb (devdraw.c:1462 "bad draw command")
-            }
-        }
-    }
-
     /// Drop `id` from the reset list (called after a successful backend free so
     /// a later clunk-reset does not double-free it).
-    fn forget(self: *Self, id: u32) void {
+    pub fn forget(self: *Self, id: u32) void {
         for (self.allocated.items, 0..) |v, idx| {
             if (v == id) {
                 _ = self.allocated.swapRemove(idx);
@@ -512,49 +313,6 @@ pub const DevDraw = struct {
     }
 };
 
-// ===========================================================================
-// Fault mapping (R-P2-4). ONE table from a backend fault to a 9P Rerror.
-// ===========================================================================
-
-fn opError(e: draw_backend.Error) OpError {
-    return switch (e) {
-        error.UnknownImage => error.NoDrawImage, // "unknown id for draw image"
-        error.ImageExists, error.BadChan, error.BadRect, error.Unsupported => error.BadDraw,
-        error.OutOfMemory => error.IoError,
-        // R-P3-9: 3a carries the opError arms for the new backend Error members; the rest of §3 is B1's.
-        error.WriteOutside => error.WriteOutside,
-        error.ShortData => error.BadWriteImage,
-    };
-}
-
-// ===========================================================================
-// Wire helpers (little-endian, G1). Coordinates are signed i32; ids/chan/color
-// are u32 (devdraw.c:871-877, draw.h:508-511).
-// ===========================================================================
-
-fn rdU32(a: []const u8, off: usize) u32 {
-    return std.mem.readInt(u32, a[off..][0..4], .little);
-}
-
-fn rdU16(a: []const u8, off: usize) u16 {
-    return std.mem.readInt(u16, a[off..][0..2], .little);
-}
-
-fn rdI32(a: []const u8, off: usize) i32 {
-    return std.mem.readInt(i32, a[off..][0..4], .little);
-}
-
-fn rdRect(a: []const u8, off: usize) draw_backend.Rect {
-    return .{
-        .min = .{ .x = rdI32(a, off + 0), .y = rdI32(a, off + 4) },
-        .max = .{ .x = rdI32(a, off + 8), .y = rdI32(a, off + 12) },
-    };
-}
-
-fn rdPoint(a: []const u8, off: usize) draw_backend.Point {
-    return .{ .x = rdI32(a, off + 0), .y = rdI32(a, off + 4) };
-}
-
 /// The inverse of `rdRect`: four little-endian i32 at `off` (G1). The only
 /// rectangle this device ever writes is the `refresh` exposure record.
 fn putRect(a: []u8, off: usize, r: draw_backend.Rect) void {
@@ -564,244 +322,37 @@ fn putRect(a: []u8, off: usize, r: draw_backend.Rect) void {
     std.mem.writeInt(i32, a[off + 12 ..][0..4], r.max.y, .little);
 }
 
-/// Chan-code → its canonical string (chantostr, chan.c). Phase 2 only ever
-/// emits the display chan (XRGB32); the rest round out the known set (G9).
-fn chanToStr(ch: u32) []const u8 {
-    return switch (ch) {
-        draw_backend.XRGB32 => "x8r8g8b8",
-        draw_backend.RGBA32 => "r8g8b8a8",
-        draw_backend.RGB24 => "r8g8b8",
-        draw_backend.GREY8 => "k8",
-        draw_backend.GREY1 => "k1",
-        else => "x8r8g8b8",
-    };
-}
-
-/// Right-justify `s` in an 11-column field followed by one space (`%11s `).
-fn putStrField(out: *[conn_line_len]u8, pos: *usize, s: []const u8) void {
-    std.debug.assert(s.len <= 11);
-    var pad: usize = 11 - s.len;
-    while (pad > 0) : (pad -= 1) {
-        out[pos.*] = ' ';
-        pos.* += 1;
-    }
-    @memcpy(out[pos.*..][0..s.len], s);
-    pos.* += s.len;
-    out[pos.*] = ' ';
-    pos.* += 1;
-}
-
-/// Right-justify a decimal integer in an 11-column field + space (`%11d `).
-/// Formatted via plain `{d}` (no sign padding) into `tmp`, then justified —
-/// Zig 0.16's `{d:>11}` prints a `+` for positive signed ints, which the
-/// kernel's `snprint("%11d")` never does.
-fn putIntField(out: *[conn_line_len]u8, pos: *usize, tmp: *[16]u8, v: i64) void {
-    const s = std.fmt.bufPrint(tmp, "{d}", .{v}) catch unreachable;
-    putStrField(out, pos, s);
-}
-
 // ===========================================================================
 // Tests (§D 10-17). Hand-encoded draw frames over a chan.Pipe + Server +
 // HeadlessBackend — deliberately NO dependency on src/draw (G7 independence).
 // Frozen hash per R-P2-7: spot-checks are authoritative and verified first; the
 // Wyhash literal is frozen only after they pass, with a scene comment.
+//
+// The builders and the `Harness` fixture live in `draw_testsrv.zig` since phase
+// 16a; the aliases below keep every test body byte-identical.
 // ===========================================================================
 
 const testing = std.testing;
 const chan = ninep.chan;
-
-// -- local verb-byte builders (independent of src/draw/proto.zig, G7) --------
-
-fn wU32(buf: []u8, off: usize, v: u32) void {
-    std.mem.writeInt(u32, buf[off..][0..4], v, .little);
-}
-fn wRect(buf: []u8, off: usize, r: draw_backend.Rect) void {
-    std.mem.writeInt(i32, buf[off + 0 ..][0..4], r.min.x, .little);
-    std.mem.writeInt(i32, buf[off + 4 ..][0..4], r.min.y, .little);
-    std.mem.writeInt(i32, buf[off + 8 ..][0..4], r.max.x, .little);
-    std.mem.writeInt(i32, buf[off + 12 ..][0..4], r.max.y, .little);
-}
-
-/// Build a 51-byte 'b' (alloc) frame (G7).
-fn buildB(buf: *[51]u8, id: u32, ch: u32, repl: bool, r: draw_backend.Rect, clipr: draw_backend.Rect, color: u32) void {
-    buf[0] = 'b';
-    wU32(buf, 1, id);
-    wU32(buf, 5, 0); // screenid
-    buf[9] = 0; // refresh = backup
-    wU32(buf, 10, ch);
-    buf[14] = @intFromBool(repl);
-    wRect(buf, 15, r);
-    wRect(buf, 31, clipr);
-    wU32(buf, 47, color);
-}
-
-/// Build a 45-byte 'd' (draw) frame with sp = mp = origin (G7).
-fn buildD(buf: *[45]u8, dstid: u32, srcid: u32, maskid: u32, r: draw_backend.Rect) void {
-    buf[0] = 'd';
-    wU32(buf, 1, dstid);
-    wU32(buf, 5, srcid);
-    wU32(buf, 9, maskid);
-    wRect(buf, 13, r);
-    @memset(buf[29..45], 0); // sp[8] + mp[8]
-}
-
-fn wU16(buf: []u8, off: usize, v: u16) void {
-    std.mem.writeInt(u16, buf[off..][0..2], v, .little);
-}
-fn wPoint(buf: []u8, off: usize, p: draw_backend.Point) void {
-    std.mem.writeInt(i32, buf[off + 0 ..][0..4], p.x, .little);
-    std.mem.writeInt(i32, buf[off + 4 ..][0..4], p.y, .little);
-}
-
-/// Build a 21-byte 'y' (load pixels) header; the caller appends the payload.
-fn buildYHdr(buf: []u8, id: u32, r: draw_backend.Rect) void {
-    buf[0] = 'y';
-    wU32(buf, 1, id);
-    wRect(buf, 5, r);
-}
-
-/// Build a 10-byte 'i' (init font) frame.
-fn buildI(buf: *[10]u8, fontid: u32, nchars: u32, ascent: u8) void {
-    buf[0] = 'i';
-    wU32(buf, 1, fontid);
-    wU32(buf, 5, nchars);
-    buf[9] = ascent;
-}
-
-/// Build a 37-byte 'l' (load char) frame (left is a signed i8 @35).
-fn buildL(buf: *[37]u8, fontid: u32, srcid: u32, index: u16, r: draw_backend.Rect, sp: draw_backend.Point, left: i8, width: u8) void {
-    buf[0] = 'l';
-    wU32(buf, 1, fontid);
-    wU32(buf, 5, srcid);
-    wU16(buf, 9, index);
-    wRect(buf, 11, r);
-    wPoint(buf, 27, sp);
-    buf[35] = @bitCast(left);
-    buf[36] = width;
-}
-
-/// Build a 's' (string) frame of 47 + 2·ni bytes into `buf`.
-fn buildS(buf: []u8, dstid: u32, srcid: u32, fontid: u32, p: draw_backend.Point, clipr: draw_backend.Rect, sp: draw_backend.Point, indices: []const u16) void {
-    buf[0] = 's';
-    wU32(buf, 1, dstid);
-    wU32(buf, 5, srcid);
-    wU32(buf, 9, fontid);
-    wPoint(buf, 13, p);
-    wRect(buf, 21, clipr);
-    wPoint(buf, 37, sp);
-    wU16(buf, 45, @intCast(indices.len));
-    for (indices, 0..) |ci, k| wU16(buf, 47 + 2 * k, ci);
-}
-
-const R = draw_backend.Rect;
-const P = draw_backend.Point;
-const unit = R.init(0, 0, 1, 1);
-const repl_clipr = R.init(-0x3FFFFFFF, -0x3FFFFFFF, 0x3FFFFFFF, 0x3FFFFFFF); // G10
-const WHITE: u32 = 0xFFFFFFFF;
-const RED: u32 = 0xFF0000FF;
-const BLUE: u32 = 0x0000FFFF;
-
-/// Heap-pinned harness: a Pipe + Server(DevDraw.ops) over a HeadlessBackend.
-/// The backend and DevDraw must not move (the Server holds pointers to them).
-const Harness = struct {
-    alloc: std.mem.Allocator,
-    pipe: *chan.Pipe,
-    hb: draw_backend.HeadlessBackend,
-    dd: DevDraw,
-    srv: Server,
-    rbuf: [1024]u8 = undefined,
-    tag: u16 = 0,
-
-    fn create(alloc: std.mem.Allocator, w: u32, h: u32) !*Harness {
-        const self = try alloc.create(Harness);
-        errdefer alloc.destroy(self);
-        self.alloc = alloc;
-        self.tag = 0;
-        self.pipe = try chan.Pipe.init(alloc, 16384);
-        self.hb = try draw_backend.HeadlessBackend.init(alloc, w, h);
-        self.dd = DevDraw.init(alloc, self.hb.backend());
-        self.srv = try Server.init(alloc, self.pipe.serverEnd(), &DevDraw.ops, &self.dd, 8192);
-        return self;
-    }
-
-    fn destroy(self: *Harness) void {
-        self.srv.deinit();
-        self.dd.deinit();
-        self.hb.deinit();
-        self.pipe.deinit();
-        self.alloc.destroy(self);
-    }
-
-    fn nextTag(self: *Harness) u16 {
-        self.tag += 1;
-        return self.tag;
-    }
-
-    /// Encode `m`, push it into the server, step once, decode the one reply.
-    fn transact(self: *Harness, m: msg.Message) !msg.Message {
-        var enc: [2048]u8 = undefined;
-        const n = try msg.encode(&m, &enc);
-        try self.pipe.clientEnd().writeMsg(enc[0..n]);
-        _ = try self.srv.step();
-        const reply = try self.pipe.clientEnd().readMsg(&self.rbuf);
-        return try msg.decode(reply);
-    }
-
-    fn version(self: *Harness) !void {
-        const r = try self.transact(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
-        try testing.expect(r.body == .rversion);
-    }
-
-    fn attach(self: *Harness, fid: u32) !void {
-        const r = try self.transact(.{ .tag = self.nextTag(), .body = .{ .tattach = .{ .fid = fid, .afid = msg.NOFID, .uname = "glenda", .aname = "" } } });
-        try testing.expect(r.body == .rattach);
-    }
-
-    fn walk(self: *Harness, fid: u32, newfid: u32, names: []const []const u8) !msg.Message {
-        return self.transact(.{ .tag = self.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(fid, newfid, names) } });
-    }
-
-    fn open(self: *Harness, fid: u32, mode: u8) !msg.Message {
-        return self.transact(.{ .tag = self.nextTag(), .body = .{ .topen = .{ .fid = fid, .mode = mode } } });
-    }
-
-    fn write(self: *Harness, fid: u32, data: []const u8) !msg.Message {
-        return self.transact(.{ .tag = self.nextTag(), .body = .{ .twrite = .{ .fid = fid, .offset = 0, .data = data } } });
-    }
-
-    fn read(self: *Harness, fid: u32, offset: u64, count: u32) !msg.Message {
-        return self.transact(.{ .tag = self.nextTag(), .body = .{ .tread = .{ .fid = fid, .offset = offset, .count = count } } });
-    }
-
-    fn clunk(self: *Harness, fid: u32) !msg.Message {
-        return self.transact(.{ .tag = self.nextTag(), .body = .{ .tclunk = .{ .fid = fid } } });
-    }
-
-    fn stat(self: *Harness, fid: u32) !Stat {
-        const r = try self.transact(.{ .tag = self.nextTag(), .body = .{ .tstat = .{ .fid = fid } } });
-        try testing.expect(r.body == .rstat);
-        return try Stat.decode(r.body.rstat.stat);
-    }
-
-    /// Bring up a live connection: version, attach root (fid 0), walk `new`
-    /// (fid 1), open it (morphs to ctl). Returns with ctl on fid 1.
-    fn connect(self: *Harness) !void {
-        try self.version();
-        try self.attach(0);
-        const w = try self.walk(0, 1, &.{"new"});
-        try testing.expect(w.body == .rwalk);
-        const o = try self.open(1, msg.ORDWR);
-        try testing.expect(o.body == .ropen);
-    }
-
-    /// Walk `1/data` (fid 2) and open it ORDWR, ready for draw batches.
-    fn openData(self: *Harness) !void {
-        const w = try self.walk(0, 2, &.{ "1", "data" });
-        try testing.expect(w.body == .rwalk);
-        const o = try self.open(2, msg.ORDWR);
-        try testing.expect(o.body == .ropen);
-    }
-};
+const testsrv = @import("draw_testsrv.zig");
+const wU32 = testsrv.wU32;
+const wU16 = testsrv.wU16;
+const wRect = testsrv.wRect;
+const wPoint = testsrv.wPoint;
+const buildB = testsrv.buildB;
+const buildD = testsrv.buildD;
+const buildYHdr = testsrv.buildYHdr;
+const buildI = testsrv.buildI;
+const buildL = testsrv.buildL;
+const buildS = testsrv.buildS;
+const R = testsrv.R;
+const P = testsrv.P;
+const unit = testsrv.unit;
+const repl_clipr = testsrv.repl_clipr;
+const WHITE = testsrv.WHITE;
+const RED = testsrv.RED;
+const BLUE = testsrv.BLUE;
+const Harness = testsrv.Harness;
 
 test "devdraw: walk, open new, read connection line" {
     const h = try Harness.create(testing.allocator, 640, 480);
