@@ -11,6 +11,34 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 15 — ADR-0005 native-host SPIKE (merged `efeb3fe`, 2026-09-14)
+
+**For you — try it:** `zig build run-native` (uses `~/proj/plan9port/bin/devdraw`; set
+`PLAN9=~/proj/plan9port` or `DEVDRAW=…/devdraw` if it is not found). A real `snarf` window:
+two columns, `/` on the right. Type; B3 `mnt/`; select a word and B2 `Look` — **the pointer
+warps onto the hit**, the paper's behavior, for the first time. Resize the window; it reflows.
+
+**The finding:** the editor core needed ZERO adapter-forced changes. `src/draw` and
+`src/ninep` are byte-identical to before; the only core change is the warp feature the ADR
+ordered. "Two hosts, one core" is proven, not asserted.
+
+**What changed:** `src/host/devdraw/` — a `drawfcall` codec, a `Conn` that spawns `devdraw`
+over a pipe and keeps one mouse and one keyboard long-poll outstanding, and two 9P devices
+(`/dev/draw` forwarding the core's draw bytes as `Twrdraw`; `/dev/mouse`,`/dev/kbd`,
+`/dev/cursor`,`/dev/snarf`,`/dev/label`); `main_native.zig` wires them exactly like the
+browser host. **Warp is now a core feature**: acme's `moveto` points are written to
+`/dev/mouse` (Plan 9 `mouse(3)`) from the search-hit and open-window sites; the browser
+device refuses the write and nothing happens; the native device does `Tmoveto`.
+
+**Decisions made for you:** no warp when the `:addr` was invalid (acme's rule; reviewer
+caught it). `permission denied` as the browser's refusal string (no new error member).
+Single-threaded `poll(2)` loop rather than a reader thread (Zig 0.16 has no mutex/condvar).
+
+**Found along the way:** browser **ArrowDown does nothing** — the core's `Kdown` constant
+took plan9port's value while the browser device uses Plan 9 4e's; native works by accident.
+First item of the debt pass. Also devdraw's own `Rrdmouse` clobbers the timestamp's middle
+byte (reproduced on the wire; we timestamp locally).
+
 ## Phase 14b — `/mnt/opfs` (merged `851d0dc`, 2026-09-14) — ABI v6
 
 **For you — try it:** reload; B3 `mnt/` then `opfs/`: an empty directory window on the

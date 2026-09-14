@@ -6,17 +6,27 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase15`** (worktree `../snarf-wt/phase15`, 2026-09-14, larry's Mac, local only) — ADR-0005
-  NATIVE-HOST SPIKE: NEW `src/host/devdraw/{wsys,dev_draw,dev_input}.zig`, `main_native.zig`
-  rewrite, `build.zig` native exe; the ONE core change = warp requests as `/dev/mouse` writes
-  (R-EDIT-25 amendment). Contract `agents/contracts/phase15-native-spike.md`.
+- **`phase16`** (worktree `../snarf-wt/phase16`, 2026-09-14, larry's Mac, local only) — DEBT
+  PASS in sub-waves 16a structure (pure moves) / 16b small cited fixes / 16c tab-width fidelity
+  (ONE sanctioned re-freeze of FROZEN-ACCEPT-3) / 16d size tooling. Contract
+  `agents/contracts/phase16-debt-pass.md`. Touches many files — no other branch meanwhile.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b are MERGED to `main`; `main` is green.**
-  665/665 tests (≈3.5 s), node smoke 40/40, `zig fmt` clean, Zig 0.16.0, **ABI v6**, wasm
-  ≈ 2186 KiB ReleaseSafe (user keeps ReleaseSafe; size is a debt-pass item).
+- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b, 15 are MERGED to `main`; `main` is green.**
+  692/692 tests, node smoke 40/40, `zig build native` OK, `zig fmt` clean, Zig 0.16.0,
+  **ABI v6**, wasm ≈ 2196 KiB ReleaseSafe (user keeps ReleaseSafe).
+- **Phase 15 MERGED (`efeb3fe`, 2026-09-14) — ADR-0005 SPIKE DONE, PASSED**: zero adapter-
+  forced core changes (`src/draw`,`src/ninep` byte-identical); NEW `src/host/devdraw/{wsys,Conn,
+  dev_draw,dev_input}.zig` + `main_native.zig` (`zig build run-native` opens a devdraw window);
+  warp = `/dev/mouse` write from `core/warp.zig` (R-EDIT-25 amended, R-02 v6; browser refuses
+  with `permission denied`). devdraw facts: strings `len[4]`; info line via `Twrdraw "JI"` +
+  `Trddraw 144`; `Rrdmouse.resized` overlaps `msec`; devdraw sends p9p `Kdown=0x80`. ENV:
+  `PLAN9=~/proj/plan9port` or `DEVDRAW=<path>`, `NOLIBTHREADDAEMONIZE=1` is set by `Conn`.
+  DEBT: browser `Kdown` bug (`typing.zig:43` 0x80 vs 4e 0xF800 — fix core + translate in
+  `dev_input.zig`); `Conn.zig` 611 / `wsys.zig` 407 pre-test; `warp.to` = the one sanctioned
+  sync-walker use on `/dev`.
 - **Phase 14b MERGED (`851d0dc`, 2026-09-14) — `/mnt/opfs`** — see agents/reports/phase14b-opfs.md
   and REVIEW-NOTES: `dev/opfs*.zig` (parked ops over a `Requester`; slot table pending→ready→
   taken), `shim/FsRecord.zig` op-record codec (version 1), `env.fsOp` + `fsStage`/`fsPush`
@@ -136,10 +146,9 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: phase 15 — the ADR-0005 native-host SPIKE** (core natively + `devdraw` adapter as
-  9P devices under `src/host/devdraw/`; warp = `/dev/mouse` write; pass criterion = zero
-  adapter-forced changes in core/draw/ninep). Then the DEBT PASS (list above + 12b/13b/14a
-  items), then recommendations to Larry. — R-EDIT-03 + paper
+- **NEXT: phase 16 — the DEBT PASS** (contract in the worktree; 16a→16d), then
+  recommendations to Larry (REVIEW-NOTES + a `NEXT-PHASES.md` proposal). Planned queue then
+  EMPTY — stop and ask. — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:
