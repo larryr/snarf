@@ -305,8 +305,10 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
 pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump_in: bool) Text.Error!void {
     const t = &w.body;
     var r = File.Range{ .q0 = t.q0, .q1 = t.q1 }; // look.c:876 eval=FALSE default
-    // look.c:892 `if(eval == FALSE) e->jump = FALSE` — an out-of-order OR
-    // unparseable address suppresses the warp (review fix, phase 15).
+    // look.c:892 `if(eval == FALSE) e->jump = FALSE` — an out-of-order address,
+    // or one that parsed and then failed to evaluate, suppresses the warp
+    // (review fix, phase 15). A run that is not an address at all does NOT:
+    // see the `error.Edit` arm below (16b item 5).
     var jump = jump_in;
     if (a0) |ap| {
         if (applyAddress(ed, t, ap)) |got| {
@@ -314,9 +316,22 @@ pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump_in: bool) 
                 ed.warning("addresses out of order\n", .{}); // look.c:882-884
                 jump = false;
             } else r = got;
-        } else |e| {
-            ed.warning("{s}\n", .{addr_eval.describe(e)});
-            jump = false;
+        } else |e| switch (e) {
+            // NOT AN ADDRESS AT ALL. `address()` reads runes one at a time and
+            // its `default:` arm — anything that is not an address character —
+            // simply stops and returns the range it came in with, the current
+            // dot, leaving `*evalp` TRUE. So acme shows dot, says nothing, and
+            // still jumps. Only an address that PARSED and then failed to
+            // evaluate is announced, and `number()`/`regexp()` are the ones
+            // that announce it ("address out of range", "no match for
+            // regexp") — which is the arm below.
+            // [addr.c:193-195 address() default; :141 number() Rescue;
+            //  :167 regexp(); look.c:876-893]
+            error.Edit => {},
+            else => {
+                ed.warning("{s}\n", .{addr_eval.describe(e)});
+                jump = false;
+            },
         }
     }
     try t.show(r.q0, r.q1, true); // look.c:894 textshow(t, r.q0, r.q1, 1)
@@ -336,6 +351,15 @@ pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump_in: bool) 
 /// (edit.c:665-686) — the same grammar `address()` implements by hand, so `3`,
 /// `/^main/`, `#12`, `1,5` and `$` all mean here exactly what they mean in an
 /// `Edit` command.
+///
+/// IT STOPS AT THE FIRST RUNE IT CANNOT USE, exactly as `address()` does
+/// (addr.c:193-195 `default: *qp = q-1; return r`), and the remainder is
+/// ignored: `file:3x` is line 3 and `file:12,` is line 12 through `$` (the
+/// comma's right-hand side defaults to end of file, addr.c:204-206). The
+/// expansion hands over the whole run between the colon and the next white
+/// space (look.c:630-636 `amax`), so a trailing non-address rune is ordinary,
+/// not exceptional. `error.Edit` means the run named NO address — the caller
+/// treats that as acme's `default:` arm, not as a failure.
 pub fn applyAddress(ed: *Editor, t: *Text, runes: []const u21) (ast.Error || addr_eval.Error)!File.Range {
     var arena_state = std.heap.ArenaAllocator.init(ed.allocator);
     defer arena_state.deinit();
@@ -487,4 +511,41 @@ test "Load: a missing file's window stays empty+named and warns can't open into 
         _ = try srv.poll();
     }
     try testing.expectEqual(warnings_before, ed.warnings.items.len);
+}
+
+// ---------------------------------------------------------------------------
+// 16b item 5 smoke: the `:addr` half stops at the first rune it cannot use.
+// ---------------------------------------------------------------------------
+const Buffer = @import("Buffer.zig");
+
+test "Load: applyAddress stops at the first non-address rune (16b item 5)" {
+    // [addr.c:175-296 address(); look.c:630-636 the amax run]
+    const a = testing.allocator;
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var file = File.init(a, try Buffer.initFromBytes(a, "abc\ndef\nghi\njkl\n"));
+    defer file.deinit();
+    const rect = draw.proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
+    var t = try Text.init(&file, a, rect, fx.font, &fx.disp.image, fx.cols());
+    defer t.deinit();
+    try t.fill();
+
+    const line2 = File.Range{ .q0 = 4, .q1 = 8 };
+    // (No white space in these: the expansion's `amax` already ends the run
+    // at the first space/tab/newline — look.c:630-636.)
+    for ([_][]const u8{ "2", "2x", "2x9", "2:z" }) |s| {
+        var buf: [8]u21 = undefined;
+        for (s, 0..) |c, i| buf[i] = c;
+        try testing.expectEqual(line2, try applyAddress(&ed, &t, buf[0..s.len]));
+    }
+    // `file:12,` — the comma's right-hand side defaults to `$` (addr.c:204-206).
+    var comma = [_]u21{ '2', ',' };
+    try testing.expectEqual(File.Range{ .q0 = 4, .q1 = 16 }, try applyAddress(&ed, &t, &comma));
+
+    // A run that names no address at all is `address()`'s `default:` arm, not
+    // an error the user hears about: dot, in silence.
+    var junk = [_]u21{'x'};
+    try testing.expectError(error.Edit, applyAddress(&ed, &t, &junk));
 }
