@@ -27,8 +27,10 @@ authorization for this file only). Prune freely — git keeps history.
   (OQ-9P-1) = YES, own wave BEFORE directory windows**: `bind -a/-b` in the mount table +
   synthesized listings for mount-point dirs (`/`, `/n`, `/mnt`), origin `bin/` unioned into
   `/bin` so command lookup is acme's "window dir, then path"; (4) self mount stays
-  **`/mnt/snarf-self`** (no /mnt/acme compatibility claim). Still to ask: per-host device
-  scoping (/dev/dom), dump location (follows $home).
+  **`/mnt/snarf-self`** (no /mnt/acme compatibility claim); (5) **`/dev/dom` kept,
+  browser-host only, LOW priority** — no wave until someone needs to script the page from
+  inside Snarf; S-02 gets a per-device "host" column (browser / native / both) in the
+  unions wave's doc pass. Dump location follows $home (deferred). Round complete.
 - **Phase 12b MERGED (`96d7cb5`, 2026-09-13)** — see agents/reports/phase12b-paper-fidelity.md:
   `Look` builtin; `activecol` + `makenewwindow` placement (new `core/place.zig`, wired to
   the served `new` walk; `New` unchanged, faithful); `+Errors` windows (new
