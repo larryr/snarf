@@ -218,10 +218,17 @@ Allowed imports (anything not listed is a review error; no cycles by constructio
 - `draw/*` → `ninep/client|msg`, `std`
 - `ninep/*` → `std` only
 - `dev/*` → `ninep/server|msg`, `shim/*`, `std`
+- `host/*` → `ninep/server|msg`, `dev/*`, `std` — the NATIVE host's device layer
+  (ADR-0005, phase 15: `host/devdraw/{wsys,Conn,dev_draw,dev_input}.zig`). It is the
+  peer of `dev/` on the other host and obeys the same rule: it may never be imported by
+  `core`, `draw` or `ninep`, and it never imports them. It imports `dev` for exactly one
+  thing — `dev.input.formatMouseRec`, the 49-byte `/dev/mouse` record — so the two hosts
+  cannot drift in what a record is. It never imports `shim` (that is the browser's
+  boundary, not this one).
 - `shim/*` → `std` only
-- `main_wasm.zig` → everything; `main_native.zig` → everything except `shim`
+- `main_wasm.zig` → everything except `host`; `main_native.zig` → everything except `shim`
 
-`core` importing `dev` or `shim` is forbidden — that is the R-CON-02 boundary that keeps
+`core` importing `dev`, `host` or `shim` is forbidden — that is the R-CON-02 boundary that keeps
 the editor natively testable. Mechanically: `zig build test` compiles `core`+`draw`+
 `ninep` with a stub namespace and no shim module on the path, so a violating import is a
 compile error, not a convention.
@@ -240,6 +247,11 @@ Diagram source: [diagrams/module-deps.puml](diagrams/module-deps.puml)
 | §4–§5 tree & mapping | S-00 §3 (owns the detail now) |
 | §6 dependency rules | R-OV-03, R-CON-02 |
 
+> Revision log: 2026-09-14 — §6 gains the `host/*` line (the native host's device layer,
+> ADR-0005 / phase 15) and the two entry-point lines are made symmetric: each host's glue
+> is invisible to the other and to `core`. Per agents/contracts/phase15-native-spike.md
+> §3d.
+>
 > Revision log: 2026-07-20 — §5 `addr.c` mapping note (phase 10 fills `addr.zig`
 > from ecmd.c's cmdaddress family; acme's addr.c proper comes with external
 > clients) and §6 `core/served/* → ninep/server` line added (both per phase-10

@@ -1,6 +1,7 @@
 # ADR-0005 — Two hosts, one core: the browser stays; a native host speaks plan9port `devdraw`
 
-Status: **Accepted (2026-09-14)** · Satisfies: R-OV-03, R-OV-09 (new) · Fed back into
+Status: **Accepted (2026-09-14) · SPIKE DONE (2026-09-14) — findings below** ·
+Satisfies: R-OV-03, R-OV-09 (new) · Fed back into
 requirements [R-01](../../requirements/01-overview.md) (v3 revision is this decision) ·
 Related: ADR-0001 (target), ADR-0002 (dependencies), ADR-0003 (/dev/draw), ADR-0004 (input)
 
@@ -112,3 +113,78 @@ Concretely:
 - R-02 R-EDIT-25 and R-05 R-IN-09 are re-scoped to the browser host at their next
   revision (no renumbering; a note suffices until then).
 - HANDOFF backlog carries "native host spike (ADR-0005)" until it is a phase.
+
+## Spike results (2026-09-14, phase 15)
+
+The spike §5 asked for was built: `zig build native` produces `snarf-native`, which
+spawns `$PLAN9/bin/devdraw`, speaks `drawfcall` over its pipe, and runs the unchanged
+editor core in a real window. Contract: `agents/contracts/phase15-native-spike.md`;
+report: `agents/reports/phase15-native-spike.md`.
+
+### The honesty check (R-P15-2) — PASSED
+
+> "if the core needs to change to run under `devdraw`, the boundary was not as clean as
+> claimed and that is the first thing to fix."
+
+`git diff main -- src/draw src/ninep` is **empty**. `git diff main -- src/core` is six
+files and every line of it is the warp feature this ADR itself ordered (R-EDIT-25's
+amendment) — **zero adapter-forced changes**. The whole native host is new code under
+`src/host/`, plus a rewritten `src/main_native.zig` and a build step. `core`, `draw` and
+`ninep` are the *same module objects* the wasm build links: no `-D` fork, no host switch,
+no conditional compilation anywhere inside them.
+
+R-OV-03 therefore has a second, independent implementation, which was the point.
+
+### What the adapter had to absorb (all of it below `/dev`)
+
+1. **plan9port's `devdraw` has no file system.** The kernel's "open `/dev/draw/new`,
+   read the 144-byte connection line" has no counterpart; the line is produced by two
+   DRAW VERBS — `J` (install the screen image as id 0) then `I` (queue its info) —
+   read back with `Trddraw`, exactly as libdraw's `getimage0` does (`init.c:122-152`).
+   A re-read must free image 0 first or `J` fails `Eimageexists` (`devdraw.c:920`).
+   All of that lives in `src/host/devdraw/dev_draw.zig` and is invisible above it. So
+   the answer to the contract's open question "what does `Trddraw` return after
+   `Tinit`?" is: **nothing by itself** — `Trddraw` returns whatever the last draw
+   read-verb queued, and after a bare `Tinit` that is an `Rerror "no draw data"`
+   (`devdraw.c:617-637`).
+2. **Two errors in the protocol table** we were working from, both corrected against
+   the pinned source and recorded in `src/host/devdraw/wsys.zig`: `drawfcall` strings
+   are `len[4] bytes` (not `len[2]`), and `Tinit` carries `winsize` + `label` only (the
+   `font[s]` in the header comment is never encoded).
+3. **A bug in the reference codec**, reproduced bug-for-bug because both ends of the
+   wire agree on it: `Rrdmouse` writes `msec` at offset 18 and then stamps `resized` at
+   offset **19**, inside `msec` (`drawfcall.c:132-137`, `:237-242`). Bits 16..23 of
+   every timestamp are destroyed. The adapter therefore timestamps mouse records from
+   the local monotonic clock and never trusts `Rrdmouse.msec`.
+4. **No exclusive-open on the native `/dev/mouse`**, unlike the browser device: the warp
+   needs a write fid while the host loop holds a standing read fid, and Plan 9's own
+   `/dev/mouse` is one read-write file that acme does both through (`mouse.c:9-12`).
+
+### What carried over untouched
+
+* `draw.Display` — the connection-line parse, the `data` write batching, and
+  `getWindow` — drove a second, completely different display server with no change.
+* Phase 12c's resize path (`Rrdmouse.resized` → `Display.getWindow` → `Tree.resize`,
+  `acme.c:548-555`) is the same code on both hosts; only what sits under `ctl` differs.
+* `ninep.server`'s parked reads, `Client`'s standing tickets and `input_pump.drain`
+  needed nothing: `/dev/mouse` and `/dev/kbd` park and complete identically whether the
+  records come from a browser event or from `Rrdmouse`.
+* ADR-0004's profile/chord emulation is simply ABSENT on this host — `devdraw` delivers
+  real three-button records — which is the ADR's "host-scoped divergence" working in the
+  other direction, and it needed no switch in the core either.
+
+### Deviation from the contract worth recording
+
+Contract §3a specified a reader `std.Thread` feeding a mutex-protected frame queue. Zig
+0.16 removed `std.Thread.Mutex`/`Condition`; the replacements (`std.Io.Mutex`,
+`Io.Condition`) require an `Io` at every lock and offer no timed wait. `Conn` is instead
+single-threaded over `poll(2)` — which is libdraw's own `canreadfd`
+(`drawclient.c:470-490`) used as the loop's wait rather than as a peek — and the whole
+device stack stays on one thread, which is what the 9P servers above it want anyway.
+
+### Still open for the native waves that follow
+
+Host file system as a real 9P server, a process service (`+Errors` with real output,
+`win`, the plumber — OQ-EDIT-3 reopens here), `/dev/snarf` wired to the editor's snarf
+buffer, and CI for a host that needs a window. The layout/scroll `moveto` sites
+(`cols.c`, `scrl.c`, `wind.c`, `util.c`) are still unported on both hosts.

@@ -62,7 +62,7 @@ rather than staying silent (R-EDIT-25).
 | R-EDIT-22 | **Point-to-type** (paper §Nuances): there is no click-to-type. Keyboard input goes to the text under the mouse pointer; scroll wheel likewise scrolls the text under the pointer. ACME's `-b` click-to-type variant is out of scope unless a later revision adds it as an option. There are no pop-up or pull-down menus. |
 | R-EDIT-23 | **Window placement heuristics** (paper §Nuances): a new window appears in the **active** column, the one most recently used for typing or B1 selection — executing and searching do NOT change the active column. Within the column: consume large blank space, keep existing text visible, divide large windows before small ones, and place the new window near the one whose action created it. When a window is deleted its neighbour regrows. Concretely this is ACME's `makenewwindow` (column choice, emptiest-else-biggest window) plus `coladd`/`colclose` geometry. |
 | R-EDIT-24 | **Single-click expansion** (paper §Nuances): a B2 or B3 click with a null selection SHALL be expanded to the text around it. First, a click inside the window's B1 selection uses that selection (so repeated B3 clicks step through occurrences and a selected multi-word command becomes a menu item). Otherwise, for B2 the "word" is the largest run of file-name characters around the click; for B3 the editor looks for a file name (with optional `:addr`) that names an existing file per R-EDIT-20, else takes the largest alphanumeric run. |
-| R-EDIT-25 | **No mouse warping — recorded divergence.** The paper moves the pointer to a new window's selection, to a search hit, to a moved layout box, and back to its origin when a pop-up window is deleted. Browsers cannot move the pointer, so Snarf SHALL NOT attempt it and SHALL instead make the target obvious: the hit or new window's selection is highlighted and scrolled into view, and layout-box clicks keep operating on the same window under a stationary pointer where possible. This is the one paper behavior Snarf knowingly does not honour. |
+| R-EDIT-25 | **Mouse warping is REQUESTED by the core and honoured per host** (*amended v6, 2026-09-14, ADR-0005 / phase 15; was "no mouse warping"*). The paper moves the pointer to a new window's selection, to a search hit, to a moved layout box, and back to its origin when a pop-up window is deleted. The editor core SHALL express each such warp as a **write to `/dev/mouse`** — Plan 9's own warp (`mouse(3)`: "writing the mouse file, in the same format, causes the mouse cursor to move to the position specified by the *x* and *y* coordinates"), which is exactly what ACME's `moveto` performs. The core SHALL ignore the write failing. A host that can move the pointer SHALL honour it; a host that cannot SHALL refuse the write and SHALL instead make the target obvious: the hit or new window's selection is highlighted and scrolled into view, and layout-box clicks keep operating on the same window under a stationary pointer where possible. **Browser host: cannot warp** (no page may move the pointer) — this remains the one paper behavior Snarf knowingly does not honour *there*. **Native host: warps** (`Tmoveto`). **Touch profile:** neither — the warps map onto moving focus/dot instead (see `agents/HANDOFF.md`, design note pending). Implemented sites: a search hit with `e.jump` (`look.c:219`) and the window `openfile` opened (`look.c:897`); the layout/scroll `moveto`s (`cols.c`, `scrl.c`, `wind.c`, `util.c`) are not ported yet on any host. |
 
 ## 7. Open questions
 
@@ -102,6 +102,17 @@ rather than staying silent (R-EDIT-25).
   (R-EDIT-22), placement heuristics (R-EDIT-23), single-click expansion (R-EDIT-24), and
   the recorded no-warp divergence (R-EDIT-25). Noted the in-memory-buffer divergence on
   R-EDIT-10. Implementation gaps found in the same pass are in `agents/HANDOFF.md`.
+- **v6** (2026-09-14, phase 15 — the ADR-0005 native-host spike) — no IDs added,
+  changed or renumbered; **R-EDIT-25 AMENDED** from "no mouse warping — recorded
+  divergence" to "warping is requested by the core and honoured per host". The
+  divergence was always a *host* property, not an editor property, and ADR-0005 made
+  that concrete by adding a second host that can warp. The core now issues the paper's
+  warps as `/dev/mouse` writes (Plan 9 `mouse(3)`, `9/port/devmouse.c:458-476`) and
+  swallows the failure; the browser device refuses the write, the native `devdraw`
+  device answers it with `Tmoveto`. Ruling R-P15-3. Spec: S-04 §1. Code:
+  `src/core/warp.zig`, `src/host/devdraw/dev_input.zig`. The rest of R-EDIT-25's
+  guidance (highlight + scroll the target on a host that cannot warp) is unchanged and
+  still what the browser does.
 - **v5** (2026-09-14, phase 13b) — no requirement IDs added, changed or renumbered; one
   BROWSER-HOST note recorded against **R-EDIT-07** (and it applies equally to R-EDIT-03
   and R-EDIT-13): ACME decides whether B3'd text is a file name with a synchronous

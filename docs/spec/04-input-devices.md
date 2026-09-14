@@ -12,8 +12,25 @@ m x[11] y[11] buttons[11] msec[11]
 ```
 
 `buttons` bitmask: B1=1, B2=2, B3=4; wheel as buttons 8 (up) / 16 (down), one event per
-notch. Reads block (R-9P-13); `Tflush` cancels. Writes to `/dev/mouse` move nothing (no
-warp in a browser) and return an error. `/dev/cursor` is in S-03 §1.
+notch. Reads block (R-9P-13); `Tflush` cancels. `/dev/cursor` is in S-03 §1.
+
+**Writing `/dev/mouse` is the WARP** (phase 15, R-P15-3; ADR-0005). Plan 9's mouse file
+is read-write: "writing the mouse file, in the same format, causes the mouse cursor to
+move to the position specified by the *x* and *y* coordinates of the message"
+(`mouse(3)`, `sys/man/3/mouse:41-48`); the kernel's `mousewrite` `case Qmouse` skips the
+leading `m`, reads two integers with `strtoul`, and warps if the point lies on screen
+(`9/port/devmouse.c:458-476`). The editor core issues that write — and only that write —
+wherever ACME calls `moveto` (`src/core/warp.zig`; the record goes out as
+`m <x> <y> 0 0`, `buttons` and `msec` zero because the kernel ignores them). Each host
+then answers for itself:
+
+| Host | `/dev/mouse` mode | A warp write |
+|------|-------------------|--------------|
+| browser (`src/dev/input.zig`) | `0444` | `Rerror "permission denied"` — no page may move the pointer (R-EDIT-25's founding divergence) |
+| native (`src/host/devdraw/dev_input.zig`) | `0666` | `Tmoveto x y` to `devdraw`; the pointer moves (`drawclient.c:346-357`) |
+
+The core swallows every failure: a warp is a courtesy, never a precondition, so a host
+that cannot warp is not a host that behaves differently in any other way.
 
 **The core consumes only this file.** Everything below happens inside `devinput`.
 
