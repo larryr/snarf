@@ -62,17 +62,6 @@ const alloc = std.heap.wasm_allocator;
 const clampDim = screen.clampDim;
 const dimOf = screen.dimOf;
 
-/// The initial window body (a few demo lines so the scene shows text + wraps).
-const demo_body =
-    \\Snarf — the ACME port, phase 8.
-    \\
-    \\A row of columns of windows, each a tag over a body.
-    \\Point the mouse at a window and type (point-to-type).
-    \\B1 sweeps a selection; B1+B2 cuts, B1+B3 pastes.
-    \\The left strip of each body is its scrollbar.
-    \\
-;
-
 /// Standing-ticket read buffers. Mouse reads land exactly one 49-byte record
 /// (dev/input.zig mouse_rec_len); kbd reads land a short UTF-8 burst.
 const mouse_buf_len = dev.input.mouse_rec_len; // 49
@@ -189,12 +178,13 @@ fn boot(width: u32, height: u32) !void {
     // `OriginMount` captures `&a.ns` later, so this must not move.
     a.ns = ninep.mount.Namespace.init(alloc);
 
-    // ---- window tree: Chrome + Row + Column + initial Window (phase 8) ----
-    // boot draws the whole scene (white ground, rowtag/columntag/window chrome,
-    // the demo body); no hand-built palette or manual ground fill needed.
+    // ---- window tree: Chrome + Row + TWO empty Columns (acme.c:242-257) ----
+    // The acme no-argument boot (phase 13b): `ncol = 2` and no window yet. The
+    // scratch demo window that stood here through phase 12 is gone; the
+    // directory window for `/` is opened below, once the namespace exists
+    // (acme.c:258-259 `readfile(row.col[row.ncol-1], wdir)`).
     a.tree = try core.boot.boot(alloc, a.display, &a.font, screen_rect, .{
-        .win_name = "scratch",
-        .body = demo_body,
+        .dir_boot = true,
         .ns = &a.ns,
     });
 
@@ -249,6 +239,19 @@ fn boot(width: u32, height: u32) !void {
     // a mounted entry (R-9P-16, devroot.c's role).
     try ns_boot.mountDevices(&a.ns, &a.cl, root.fid, &a.cl_input, iroot.fid);
     try a.self_tree.start(alloc, &a.editor, &a.ns);
+
+    // ---- the boot directory window (acme.c:258-259, R-EDIT-03) ----
+    // `readfile(row.col[row.ncol-1], wdir)`: the working directory — `/` here
+    // (R-P13b-3) — in the RIGHTMOST column, the left one left empty. Boot does
+    // NOT wait for it: the listing arrives through `Editor.loads` over the next
+    // frames (`Load.stepAll` from `frameEnd`), which with the in-process pipes
+    // is a frame or two. `/n/origin` and `/bin` are not mounted yet, so the
+    // first listing reads `dev/ mnt/`; a `Get` after the origin attaches adds
+    // `bin/` and `n/` (acme does not auto-refresh a directory window either).
+    {
+        const cols = a.tree.row.col.items;
+        _ = try core.openfile.readFile(&a.editor, cols[cols.len - 1], "/");
+    }
 
     // ---- origin mount (R-P12-5) ----
     // Boot NEVER waits on the socket: `dial` asks the shim to open it and

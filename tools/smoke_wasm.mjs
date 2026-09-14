@@ -168,13 +168,52 @@ check("pixel (0,0) is the row-tag pale blue (0xEAFFFF)", () => {
   return p.r === 234 && p.g === 255 && p.b === 255;
 });
 
+// Phase 13b boot layout (acme.c:242-260): TWO columns, the left one EMPTY and
+// the `/` directory window in the RIGHT one. `rowadd` steals 3/5 of the last
+// column (rows.c:60-63), so at 800 px the right column starts at x = 480 and
+// its only window's body frame starts at 480 + Scrollwid(12) + Scrollgap(4) =
+// 496; the window's first body line runs y 59..77 (row tag 18 + border, column
+// tag 18 + border, window tag 18, divider 1).
+const BODY_X0 = 496, BODY_X1 = 795, BODY_Y0 = 56, BODY_Y1 = 240;
+const BODY_PT = { x: 560, y: 66 }; // inside the right window's FIRST body line
+// Where a command is typed and B2'd. The LEFT column's tag: it is the one
+// surface whose geometry never moves — the left column stays empty (warnings
+// mint `+Errors` in the RIGHTMOST column, util.c:98) and a column tag is never
+// recomposed. Its caret already sits at the end of
+// "New Cut Paste Snarf Sort Zerox Delcol " (38 runes, cols.c:46-47), so a typed
+// word lands at x = 16 (Scrollwid+Scrollgap) + 38*9 = 358, delimited by the
+// space after "Delcol". Typing into the `/` window's body instead would merge
+// the word with the neighbouring `mnt/`, every rune of which is `isfilec`
+// (look.c:442-450); and a directory window shrinks to its content
+// (cols.c:117), so its body is only two lines tall once `+Errors` appears.
+const COLTAG_PT = { x: 400, y: 28 };   // inside the left column tag, past its text
+const COLTAG_WORD_X = 368;             // 2nd rune of a word typed at the caret
+
+function bodyInk(b) {
+  if (!b) return -1;
+  let n = 0;
+  for (let y = BODY_Y0; y < BODY_Y1; y++) {
+    for (let x = BODY_X0; x < BODY_X1; x++) {
+      const p = pixelAt(b.ptr, b.fbW, x, y);
+      if (p.r === 0 && p.g === 0 && p.b === 0) n++;
+    }
+  }
+  return n;
+}
+
+// Let the boot directory load finish: it is an `Editor.loads` job advanced ONE
+// 9P state per frame (13b), so the `/` listing needs a handful of ticks.
+for (let i = 0; i < 16; i++) ex.tick(100 + i * 16);
+check("boot: the `/` directory window drew text in the right column (13b)", () =>
+  bodyInk(blits[blits.length - 1]) > 0);
+
 // Phase 6 end-to-end: inject a typed 'h' through the real input path
 // (pushEvent -> devinput -> parked 9P read -> Editor -> Text -> frame -> blit)
-// and watch ink appear in the first cell.
+// and watch the body region gain ink.
 const blitsBefore = blits.length;
-// Point-to-type (R-P8-9): position the pointer inside the window BODY first
-// (below row tag ~18 + col tag ~18 + win tag ~18 + bands; x past the scrollbar).
-ex.pushEvent(3 /* pointer_move */, 60, 80, 0, 900);
+const inkBefore = bodyInk(blits[blits.length - 1]);
+// Point-to-type (R-P8-9): position the pointer inside the window BODY first.
+ex.pushEvent(3 /* pointer_move */, BODY_PT.x, BODY_PT.y, 0, 900);
 ex.tick(8);
 ex.pushEvent(5 /* key */, 0x68 /* 'h' */, 0, 0, 1000);
 ex.tick(16);
@@ -182,14 +221,7 @@ check("typed key produced a new blit", () => blits.length > blitsBefore);
 check("typed rune added ink somewhere in the body region", () => {
   const b = blits[blits.length - 1];
   if (!b) return "pending";
-  // Body region: demo text starts after the chrome strips; scan a generous band.
-  for (let y = 56; y < 200; y++) {
-    for (let x = 16; x < 300; x++) {
-      const p = pixelAt(b.ptr, b.fbW, x, y);
-      if (p.r === 0 && p.g === 0 && p.b === 0) return true;
-    }
-  }
-  return false;
+  return bodyInk(b) > inkBefore;
 });
 
 // R-GFX-05: a resize event re-sizes the framebuffer and repaints EVERYTHING —
@@ -408,19 +440,20 @@ if (!originUp) {
   const banner2 = await waitLine(srv, /snarf-origin: http:\/\/127\.0\.0\.1:(\d+)\//, 3000);
   if (banner2) portBox.port = Number(banner2.match(/:(\d+)\//)[1]);
 
-  // B1-click to place the dot at (60,80) — point-to-type inserts at the DOT,
-  // not at the pointer, so the word must be anchored where we'll B2-click.
-  ex2.pushEvent(1 /* pointer_down */, 60, 80, 0 /* B1 */, (now += 16));
-  ex2.tick((now += 16));
-  ex2.pushEvent(2 /* pointer_up */, 60, 80, 0, (now += 16));
+  // Let this instance's own boot directory load settle first (13b).
+  for (let i = 0; i < 16; i++) ex2.tick((now += 16));
+  // Point-to-type into the LEFT column's tag (its caret already sits at the
+  // end, cols.c:46-47 — no B1 needed), then B2 the typed word, exactly as a
+  // user executes a command from a tag.
+  ex2.pushEvent(3 /* pointer_move */, COLTAG_PT.x, COLTAG_PT.y, 0, (now += 16));
   ex2.tick((now += 16));
   for (const ch of "Reconnect") {
     ex2.pushEvent(5 /* key */, ch.codePointAt(0), 0, 0, (now += 16));
     ex2.tick((now += 16));
   }
-  ex2.pushEvent(1 /* pointer_down */, 70, 80, 1 /* B2 */, (now += 16));
+  ex2.pushEvent(1 /* pointer_down */, COLTAG_WORD_X, COLTAG_PT.y, 1 /* B2 */, (now += 16));
   ex2.tick((now += 16));
-  ex2.pushEvent(2 /* pointer_up */, 70, 80, 1, (now += 16));
+  ex2.pushEvent(2 /* pointer_up */, COLTAG_WORD_X, COLTAG_PT.y, 1, (now += 16));
   ex2.tick((now += 16));
   for (let i = 0; i < 60 && !srv.lines.some((l) => l.includes("9p attach /")); i++) {
     ex2.tick((now += 16));
