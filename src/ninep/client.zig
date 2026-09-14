@@ -461,6 +461,58 @@ pub fn stat(self: *Client, fid: u32) Error!stat_mod {
     }
 }
 
+/// What `create` reports back: the new file's qid and the server's iounit
+/// (0 = no guarantee). [`5/open` Rcreate]
+pub const CreateResult = msg.mut.Rcreate;
+
+/// Create `name` in the directory `fid` and open the RESULT as `fid` (`5/open`):
+/// on success this client's cached qid for `fid` becomes the new file's. `perm`
+/// carries DMDIR for a directory; the server masks it against the parent.
+pub fn create(self: *Client, fid: u32, name: []const u8, perm: u32, mode: u8) Error!CreateResult {
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .tcreate = .{ .fid = fid, .name = name, .perm = perm, .mode = mode },
+    } });
+    switch (reply.body) {
+        .rcreate => |c| {
+            self.seedQid(fid, c.qid); // the fid now names the new file
+            return c;
+        },
+        else => return error.ProtocolError,
+    }
+}
+
+/// Remove the file `fid` names. `5/remove`: the server clunks the fid even when
+/// the remove fails, so the number is recycled either way — exactly like
+/// `clunk`.
+pub fn remove(self: *Client, fid: u32) Error!void {
+    defer self.freeFid(fid);
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .tremove = .{ .fid = fid },
+    } });
+    switch (reply.body) {
+        .rremove => return,
+        else => return error.ProtocolError,
+    }
+}
+
+/// Change `fid`'s directory entry. Fields `st` leaves at their "don't touch"
+/// values (`~0`, empty strings) are not altered (`5/stat`); build one with
+/// `stat_mod.dontTouch()`. The blob is encoded into a local scratch buffer, so
+/// nothing aliases `wbuf`.
+pub fn wstat(self: *Client, fid: u32, st: stat_mod) Error!void {
+    // A legal maximum stat is 2 + 39 + 4*(2+255) = 1069 bytes (stat(5)); 1024 would
+    // reject a 255-byte name with MessageTooBig (review nit, 14a).
+    var blob: [1100]u8 = undefined;
+    const n = st.encode(&blob) catch return error.MessageTooBig;
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .twstat = .{ .fid = fid, .stat = blob[0..n] },
+    } });
+    switch (reply.body) {
+        .rwstat => return,
+        else => return error.ProtocolError,
+    }
+}
+
 /// Ask the server to abandon the pending request tagged `oldtag`. In v1 the
 /// server is synchronous so this always returns promptly. [`5/flush`]
 pub fn flushTag(self: *Client, oldtag: u16) Error!void {
@@ -951,4 +1003,152 @@ test "client: flushed ticket surfaces error.Interrupted via checkRead" {
     try st.pushReply(.{ .tag = 0, .body = .{ .rerror = .{ .ename = "interrupted" } } });
     try testing.expectError(error.Interrupted, client.checkRead(ticket));
     try testing.expect(!client.pending.contains(0)); // consumed
+}
+
+test "client: create/remove/wstat sync helpers (phase 14a)" {
+    // Smoke only — T4 in the phase-14a contract §4 pins the pumped-pipe and
+    // ticket paths.
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+    try doVersion(&client, &st);
+
+    const newq = Qid{ .path = 77, .vers = 1 };
+    try st.pushReply(.{ .tag = 0, .body = .{ .rcreate = .{ .qid = newq, .iounit = 8168 } } });
+    const res = try client.create(5, "made", 0o644, msg.OWRITE);
+    try testing.expectEqual(@as(u64, 77), res.qid.path);
+    try testing.expectEqual(@as(u32, 8168), res.iounit);
+    const tc = (try st.sentMsg(1)).body.tcreate;
+    try testing.expectEqual(@as(u32, 5), tc.fid);
+    try testing.expectEqualStrings("made", tc.name);
+    try testing.expectEqual(@as(u32, 0o644), tc.perm);
+    try testing.expectEqual(@as(u8, msg.OWRITE), tc.mode);
+    // The fid now names the new file (`5/open`), so the client's cache agrees.
+    try testing.expectEqual(@as(u64, 77), client.fids.get(5).?.path);
+
+    var want = stat_mod.dontTouch();
+    want.name = "renamed";
+    try st.pushReply(.{ .tag = 1, .body = .rwstat });
+    try client.wstat(5, want);
+    const tw = (try st.sentMsg(2)).body.twstat;
+    try testing.expectEqual(@as(u32, 5), tw.fid);
+    try testing.expectEqualStrings("renamed", (try stat_mod.decode(tw.stat)).name);
+
+    try st.pushReply(.{ .tag = 2, .body = .rremove });
+    try client.remove(5);
+    try testing.expectEqual(@as(u32, 5), (try st.sentMsg(3)).body.tremove.fid);
+    // `5/remove` clunks the fid even on error, so the number was recycled.
+    try testing.expectEqual(@as(?Qid, null), client.fids.get(5));
+    try testing.expectEqual(@as(u32, 5), client.allocFid());
+}
+
+// ==========================================================================
+// T4 (phase-14a contract §4): the smoke test above only pins the wire shape
+// against a `ScriptedTransport`, which never drives `Client.pump`. This pins
+// `tickets.begin`/`check` decoding a REAL Tcreate/Tremove round trip, and
+// `Client.create`/`remove`/`wstat` working over a genuinely pumped
+// `chan.Pipe` + `server.Server` — the shape every real caller (nsjob, the
+// served tree, tools/origin) actually uses.
+// ==========================================================================
+const chan = @import("chan.zig");
+const server = @import("server.zig");
+
+/// A minimal tree: root(1, dir) → "x"(2, file). `create` always mints path 3
+/// and re-opens the fid on it; `remove`/`wstat` are no-op successes. Only the
+/// WIRE is under test here — the per-check battery (open-fid, non-dir, bad
+/// name, iounit default) is `server_mut.zig`'s T3.
+const T4Tree = struct {
+    fn qidOf(path: u64) Qid {
+        return .{ .path = path, .qtype = .{ .dir = path == 1 } };
+    }
+    fn attachOp(_: *anyopaque, _: *server.Server, _: *server.Fid, _: []const u8) errors.OpError!Qid {
+        return qidOf(1);
+    }
+    fn walk1Op(_: *anyopaque, _: *server.Server, fid: *server.Fid, name: []const u8) server.OpBlockError!Qid {
+        if (fid.qid.path == 1 and std.mem.eql(u8, name, "x")) return qidOf(2);
+        return error.FileDoesNotExist;
+    }
+    fn openOp(_: *anyopaque, _: *server.Server, fid: *server.Fid, _: u8) server.OpBlockError!Qid {
+        return fid.qid;
+    }
+    fn readOp(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, _: []u8) server.ReadError!usize {
+        return 0;
+    }
+    fn writeOp(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, data: []const u8) server.OpBlockError!usize {
+        return data.len;
+    }
+    fn statOp(_: *anyopaque, _: *server.Server, fid: *server.Fid) server.OpBlockError!stat_mod {
+        return .{ .qid = fid.qid, .mode = if (fid.qid.qtype.dir) stat_mod.DMDIR | 0o555 else 0o644, .length = 0, .name = "x" };
+    }
+    fn createOp(_: *anyopaque, _: *server.Server, _: *server.Fid, name: []const u8, _: u32, _: u8) server.OpBlockError!server.CreateResult {
+        _ = name;
+        return .{ .qid = qidOf(3) };
+    }
+    fn removeOp(_: *anyopaque, _: *server.Server, _: *server.Fid) server.OpBlockError!void {}
+    fn wstatOp(_: *anyopaque, _: *server.Server, _: *server.Fid, _: stat_mod) server.OpBlockError!void {}
+
+    const ops = server.Ops{
+        .attach = attachOp,
+        .walk1 = walk1Op,
+        .open = openOp,
+        .read = readOp,
+        .write = writeOp,
+        .stat = statOp,
+        .create = createOp,
+        .remove = removeOp,
+        .wstat = wstatOp,
+    };
+};
+
+fn t4Pump(ctx: *anyopaque) anyerror!void {
+    const s: *server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+test "client: tickets decode Tcreate/Tremove replies, and create/remove/wstat work over a real pumped pipe (T4)" {
+    const a = testing.allocator;
+    var tree = T4Tree{};
+    const pipe = try chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try server.Server.init(a, pipe.serverEnd(), &T4Tree.ops, &tree, 8192);
+    defer srv.deinit();
+    var cl = try Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = t4Pump };
+    _ = try cl.version(8192);
+    const root = try cl.attach("glenda", "");
+
+    // --- ticket path: begin/check decode a real Tcreate/Tremove round trip.
+    var buf1: [512]u8 = undefined;
+    const t1 = try tickets.begin(&cl, .{ .tag = 0, .body = .{
+        .tcreate = .{ .fid = root.fid, .name = "made", .perm = 0o644, .mode = msg.OWRITE },
+    } }, &buf1);
+    // Nothing has driven the server yet: `check` must not pump (R-P13a-3).
+    try testing.expectEqual(@as(?Message, null), try tickets.check(&cl, t1));
+    _ = try srv.poll();
+    const r1 = (try tickets.check(&cl, t1)).?;
+    try testing.expectEqual(msg.Kind.rcreate, r1.body.kind());
+    try testing.expectEqual(@as(u64, 3), r1.body.rcreate.qid.path);
+
+    var buf2: [512]u8 = undefined;
+    const t2 = try tickets.begin(&cl, .{ .tag = 0, .body = .{
+        .tremove = .{ .fid = root.fid },
+    } }, &buf2);
+    _ = try srv.poll();
+    const r2 = (try tickets.check(&cl, t2)).?;
+    try testing.expectEqual(msg.Kind.rremove, r2.body.kind());
+
+    // --- sync helpers over the SAME real pumped server, a fresh fid.
+    const root2 = try cl.attach("glenda", "");
+    const cres = try cl.create(root2.fid, "made2", 0o644, msg.OWRITE);
+    try testing.expectEqual(@as(u64, 3), cres.qid.path);
+    try testing.expectEqual(@as(u64, 3), cl.fids.get(root2.fid).?.path);
+
+    var want = stat_mod.dontTouch();
+    want.name = "renamed2";
+    try cl.wstat(root2.fid, want);
+
+    try cl.remove(root2.fid);
+    try testing.expectEqual(@as(?Qid, null), cl.fids.get(root2.fid));
 }

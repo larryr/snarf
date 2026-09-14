@@ -31,6 +31,11 @@ C references (cite in doc comments as `file:line`):
   then Rerror: tauth → "authentication not required"; tcreate/tremove/twstat →
   "permission denied"; unknown codes / Terror / malformed → "bad message" (tag
   recoverable iff `frame.len >= 7`, else drop the frame).
+  **R5 LIFTED by phase 14a** (`agents/contracts/phase14a-server-parking-create.md`):
+  `Ops` now has `create`/`remove`/`wstat` slots (optional, default null ⇒ lib9p's
+  `"create prohibited"`/`"remove prohibited"`/`"wstat prohibited"`), `msg.zig` +
+  `msg_mut.zig` carry the six new arms, and the handlers live in `server_mut.zig`. Only
+  `Tauth`/`Rauth` still travel the `error.Unsupported` path described above.
 - **R8 (post-B1 as-built deltas)** `Ops.attach` signature is
   `fn (ctx, srv, fid: *Fid, aname: []const u8) OpError!Qid` — the contract's separate
   `uname` parameter was dropped; the framework dups uname into `fid.uname` BEFORE the

@@ -13,6 +13,10 @@ pub const Client = @import("client.zig").Client;
 /// outstanding T-message (R-9P-13, S-01 §3.2).
 pub const tickets = @import("tickets.zig");
 pub const server = @import("server.zig");
+/// The server framework's two size-seam files, re-exported so their colocated
+/// tests are reachable from this root (phase-1 orchestration lesson).
+pub const park = @import("park.zig");
+pub const server_mut = @import("server_mut.zig");
 pub const mount = @import("mount.zig");
 pub const nspath = @import("nspath.zig");
 pub const nsdir = @import("nsdir.zig");

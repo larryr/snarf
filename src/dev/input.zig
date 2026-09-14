@@ -899,6 +899,50 @@ test "devinput: Tflush cancels a parked read; next read re-parks" {
     try testing.expectEqualSlices(u8, "z", r.body.rread.data);
 }
 
+test "devinput: completeReads and retryParked are interchangeable on a parked read (T10)" {
+    // R-P14a-1: `completeReads` is a thin alias over the general mechanism.
+    // Drive the SAME parked-read scenario once through each entry point and
+    // confirm both deliver byte-identical Rread payloads.
+    const h = try Harness.create(testing.allocator);
+    defer h.destroy();
+    try h.connect();
+    try h.walkOpen(1, "mouse", msg.OREAD);
+
+    try h.send(.{ .tag = 80, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 256 } } });
+    try testing.expect((try h.recv()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+
+    h.dev.pushPointer(.down, 3, 4, 0, 12);
+    var want: [mouse_rec_len]u8 = undefined;
+    formatMouseRec(.{ .x = 3, .y = 4, .buttons = B1, .msec = 12 }, &want);
+
+    // First round: the general entry point. Copy the reply bytes out of
+    // `h.rbuf` immediately — the SECOND round's `recv` reuses that same
+    // buffer, which would otherwise alias `r1` right out from under it.
+    try testing.expectEqual(@as(usize, 1), try h.srv.retryParked());
+    const r1 = (try h.recv()).?;
+    try testing.expect(r1.body == .rread);
+    try testing.expectEqual(@as(u16, 80), r1.tag);
+    try testing.expectEqualSlices(u8, &want, r1.body.rread.data);
+    var got1: [mouse_rec_len]u8 = undefined;
+    @memcpy(&got1, r1.body.rread.data[0..mouse_rec_len]);
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+
+    // Second round, same scenario: the phase-6 path-filtered spelling.
+    try h.send(.{ .tag = 81, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 256 } } });
+    try testing.expect((try h.recv()) == null);
+    h.dev.pushPointer(.down, 3, 4, 0, 12);
+    try testing.expectEqual(@as(usize, 1), try h.srv.completeReads(DevInput.mousePath()));
+    const r2 = (try h.recv()).?;
+    try testing.expect(r2.body == .rread);
+    try testing.expectEqual(@as(u16, 81), r2.tag);
+    try testing.expectEqualSlices(u8, &want, r2.body.rread.data);
+    try testing.expectEqual(@as(usize, 0), h.srv.parkedCount());
+
+    // Both entry points produced the identical bytes.
+    try testing.expectEqualSlices(u8, &got1, r2.body.rread.data);
+}
+
 test {
     std.testing.refAllDecls(@This());
 }

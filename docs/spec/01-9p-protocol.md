@@ -25,16 +25,25 @@ chunked by the client as usual.
 | `Tread`/`Rread`, `Twrite`/`Rwrite` | offset semantics per file type (see S-02 per-file notes; directories: standard stat-record stream) |
 | `Tclunk`/`Rclunk` | |
 | `Tstat`/`Rstat` | |
+| `Tcreate`/`Rcreate` | directory fid, unopened; `perm` masked against the parent by the server; the fid then names the NEW file, opened with `mode` (`5/open`) |
+| `Tremove`/`Rremove` | "a clunk with the side effect of removing the file": the fid is clunked even when the remove fails (`5/remove`) |
+| `Twstat`/`Rwstat` | "don't touch" = `~0` / empty strings; type, dev, qid, muid and the DMDIR bit may never be changed (`5/stat`) |
 | `Tflush`/`Rflush` | MUST be honored; critical for cancelling blocked reads (`/dev/mouse`) |
 | `Rerror` | error strings, Plan 9 style; no errno numbers |
+
+The framework decodes and dispatches all of the above. create/remove/wstat are
+*mandatory for the framework, optional per server*: a server that leaves the `create`,
+`remove` or `wstat` slot unbound answers lib9p's refusal strings — `"create prohibited"`,
+`"remove prohibited"`, `"wstat prohibited"` (`lib9p/srv.c:18,20,24`) — so a read-only
+tree needs no code at all. Which trees bind them: `/mnt/host`, `/mnt/opfs`,
+`/dev/storage`, `/n/origin` (server permitting); `/dev/dom` deliberately does NOT
+(element creation is a `ctl` verb, so it keeps answering `"create prohibited"`).
 
 ### 2.2 Conditional
 
 | Message | Required for |
 |---------|--------------|
-| `Tcreate`/`Rcreate`, `Tremove`/`Rremove` | writable trees: `/mnt/host`, `/mnt/opfs`, `/dev/storage`, `/n/origin` (server permitting), `/dev/dom` (element creation via directories is done with `ctl` instead — devdom returns `Rerror "create prohibited"` and documents the `ctl` verbs) |
-| `Twstat`/`Rwstat` | rename/truncate on writable trees; others return `Rerror` |
-| `Tauth`/`Rauth` | optional everywhere; `/n/origin` MAY implement it (OQ-9P-3), in-browser servers return `Rerror "authentication not required"` |
+| `Tauth`/`Rauth` | the ONLY pair Snarf does not implement. Optional everywhere; `/n/origin` MAY implement it (OQ-9P-3), in-browser servers return `Rerror "authentication not required"` |
 
 ### 2.3 Qids
 
@@ -82,6 +91,23 @@ Files like `/dev/mouse`, `/dev/kbd`, `/dev/dom/events`, and window `event` files
 data exists. Servers implement this by parking the request (tag) in a wait queue; the SAB
 or async machinery (S-00 §2) wakes them. A client dropping interest MUST `Tflush`. The
 sequence diagram below shows the common walk/open/read flow against `/mnt/host`:
+
+**ANY operation may park, not just reads.** A device that has to ask the browser cannot
+answer a walk, an open, a create or a stat synchronously either, so the framework signal
+is uniform: an `Ops` callback returns `error.WouldBlock` and the server files the WHOLE
+T-frame on the FIFO, unanswered. A retry re-decodes that frame and re-dispatches it
+through the ordinary handler — there is no partially-applied operation to resume, which
+is why a blocked handler must leave no observable trace (the rule `read` always obeyed).
+`attach`, `clunk` and `flush` may NOT park, and their vtable signatures make that a
+compile-time fact rather than a runtime check. A `Tflush` of a parked tag answers the
+old tag `Rerror "interrupted"` and then `Rflush`; a `Tclunk` sweeps everything parked on
+that fid the same way; a `Tversion` discards the queue silently.
+
+The queue is BOUNDED (64 entries) and the overflowing request is refused with
+`Rerror "too many parked requests"`. Plan 9 has no such limit — a kernel mount point
+simply blocks the calling process — but Snarf's servers share one wasm heap with the
+editor and have no way to apply back-pressure to a misbehaving client, so the bound is
+the server's memory budget.
 
 ![9p-session](diagrams/9p-session.puml)
 
@@ -143,6 +169,12 @@ pump on its own.
 > Rerror "interrupted" BEFORE Rflush, clunk/version sweeps. Devices signal parking
 > via error.WouldBlockRead (never a wire string).
 >
+> 2026-09-14 (phase 14a) — §2 create/remove/wstat moved from Conditional to Mandatory
+> (framework-level; `Tauth`/`Rauth` is now the only unimplemented pair) and §4 parking
+> generalised from reads to every operation, with the bound added. Implemented in
+> `src/ninep/msg_mut.zig` (codec), `src/ninep/park.zig` (queue) and
+> `src/ninep/server_mut.zig` (handlers); lifts phase-1 ruling R5.
+>
 > 2026-09-14 — §4.1 added (phase 13a): R-9P-13 extended from "blocking reads" to every
 > 9P operation the editor issues. `src/ninep/tickets.zig` holds the generic ticket (the
 > phase-6 read ticket becomes its `.payload` mode, byte-identical — a raw-frame slot
@@ -155,6 +187,16 @@ pump on its own.
 `"bad message"`, `"file is a directory"`, `"connection closed"`, `"interrupted"` (flush),
 `"no user gesture"` (devhost: FS Access needs user activation), `"quota exceeded"`
 (devstorage). Servers should prefer these before inventing new strings.
+
+The framework itself also emits, verbatim from lib9p and the Plan 9 kernel:
+`"create prohibited"`, `"remove prohibited"`, `"wstat prohibited"`
+(`lib9p/srv.c:18,20,24` — an unbound `Ops` slot), `"9P protocol botch"` (create on an
+already-open fid), `"create in non-directory"`, `"bad directory in wstat"`,
+`"wstat -- attempt to change {type,dev,qid,muid,DMDIR bit}"`, `"file name syntax"`
+(`9/port/error.h:15`) and `"too many parked requests"` (§4, Snarf-specific). These are
+capability refusals and protocol botches rather than file errors, so they have no typed
+counterpart in `errors.OpError` and a client sees them as `error.Other` plus the raw
+text.
 
 ## 6. Zig mapping (informative)
 
