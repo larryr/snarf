@@ -33,6 +33,10 @@ pub const nsio = @import("nsio.zig");
 
 test {
     std.testing.refAllDecls(@This());
+    // The message codec's tests live beside it in `msg_test.zig` since phase
+    // 16a (the `core/core.zig` convention — refAllDecls does not reach a file
+    // nothing names).
+    _ = @import("msg_test.zig");
 }
 
 // ===========================================================================
