@@ -379,3 +379,93 @@ test "Load: with no namespace a load warns instead of trapping" {
     try testing.expectEqual(@as(usize, 0), ed.loads.items.len);
     try testing.expectEqualStrings("can't open /nowhere: no namespace\n", ed.warningText());
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T11).
+// ===========================================================================
+const draw = @import("draw");
+const boot = @import("boot.zig");
+const openfile = @import("openfile.zig");
+const served_fsys = @import("served/fsys.zig");
+const Column = @import("Column.zig");
+
+fn pumpT11(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+test "Load: a missing file's window stays empty+named and warns can't open into +Errors (T11)" {
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var ns = ninep.mount.Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    var tree = try boot.boot(testing.allocator, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "",
+        .ns = &ns,
+    });
+    defer tree.deinit();
+
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    // Serve /mnt/snarf-self for real so a StatJob against a name under it gets
+    // a genuine "file does not exist" from the SERVER (text.c:216's actual
+    // failure shape), not merely nsjob's "nothing is mounted here" verdict.
+    var fsys = served_fsys.Fsys.init(&ed);
+    var pipe = try ninep.chan.Pipe.init(testing.allocator, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(testing.allocator, pipe.serverEnd(), &served_fsys.Fsys.ops, &fsys, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(testing.allocator, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpT11 };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    try ns.mount("/mnt/snarf-self", &cl, root.fid);
+
+    const col = tree.row.col.items[0];
+    const target = try openfile.readFile(&ed, col, "/mnt/snarf-self/nonexistent");
+
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        try ed.frameEnd(fx.disp); // steps Load.stepAll then flushes warnings (§3b)
+        _ = try srv.poll();
+    }
+
+    try testing.expect(!ed.warningsPending()); // drained into `+Errors`
+
+    // The window being loaded stays: empty, still named, never flipped to a
+    // directory (text.c:216 "the window stays" — acme leaves a failed load's
+    // window exactly as it was).
+    try testing.expectEqual(@as(usize, 0), target.body.file.buffer.len());
+    try testing.expectEqualStrings("/mnt/snarf-self/nonexistent", target.body.file.name.items);
+    try testing.expect(!target.isdir);
+
+    // The `+Errors` window landed in the rightmost column (util.c:98) with the
+    // exact "can't open" text.
+    const errw = col.w.items[col.w.items.len - 1];
+    try testing.expectEqualStrings("+Errors", errw.body.file.name.items);
+    var ebuf: [256]u8 = undefined;
+    const etxt = errw.body.file.buffer.read(0, errw.body.file.buffer.len(), &ebuf);
+    try testing.expect(std.mem.startsWith(u8, etxt, "can't open /mnt/snarf-self/nonexistent: "));
+
+    // --- a window deleted mid-load drops its Load without error ------------
+    const w2 = try openfile.readFile(&ed, col, "/mnt/snarf-self/gone-too");
+    try testing.expectEqual(@as(usize, 1), ed.loads.items.len);
+    try col.close(&ed, w2, true); // dropTextRefs -> Load.dropWindow (tombstone-safe)
+    try testing.expectEqual(@as(usize, 0), ed.loads.items.len);
+
+    // The server's reply, when it eventually lands, hits a tombstoned ticket
+    // harmlessly — a few more frames must not trap or warn again.
+    const warnings_before = ed.warnings.items.len;
+    i = 0;
+    while (i < 8) : (i += 1) {
+        try ed.frameEnd(fx.disp);
+        _ = try srv.poll();
+    }
+    try testing.expectEqual(warnings_before, ed.warnings.items.len);
+}

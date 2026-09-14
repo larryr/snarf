@@ -797,3 +797,83 @@ test "served: root dir read lists sorted window dirs" {
     }
     try testing.expectEqual(want2.len, idx);
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T14).
+// ===========================================================================
+const dirwin = @import("../dirwin.zig");
+
+test "served: ctl reports isdir 1 and the 27px dir tab width for a real directory window (T14)" {
+    const h = try Harness.create(testing.allocator, "one", "stale\n");
+    defer h.destroy();
+    try h.connect();
+    const w = h.tree.row.col.items[0].w.items[0];
+
+    const stats = [_]Stat{
+        .{ .qid = .{ .path = 0 }, .mode = Stat.DMDIR, .length = 0, .name = "a" },
+        .{ .qid = .{ .path = 0 }, .mode = 0, .length = 0, .name = "b" },
+    };
+    try dirwin.applyListing(&h.ed, w, &stats);
+    try testing.expect(w.isdir);
+    try testing.expectEqual(@as(i32, 27), w.body.fr.maxtab);
+
+    _ = try h.walk(0, 1, &.{ "1", "ctl" });
+    _ = try h.open(1, msg.OREAD);
+    const rr = try h.read(1, 0, 4096);
+    try testing.expect(rr.body == .rread);
+
+    const dx: u32 = @intCast(w.body.fr.r.max.x - w.body.fr.r.min.x);
+    var expbuf: [256]u8 = undefined;
+    const exp = try std.fmt.bufPrint(&expbuf, "{d:>11} {d:>11} {d:>11} {d:>11} {d:>11} {d:>11} fixed9x18 {d:>11} {d:>11} {d:>11} ", .{
+        @as(u32, w.id),
+        @as(usize, w.tag.file.buffer.len()),
+        @as(usize, w.body.file.buffer.len()),
+        @as(u32, 1), // isdir (wind.c:695, LIVE since phase 13b)
+        @as(u32, @intFromBool(w.dirty)),
+        dx,
+        @as(u32, 27), // maxtab: TABDIR-narrowed (text.c:148), not the libframe 72
+        @as(u32, 0),
+        @as(u32, 0),
+    });
+    try testing.expectEqualStrings(exp, rr.body.rread.data);
+
+    // A normal (non-dir) window in the SAME tree still reports isdir 0 and the
+    // libframe default maxtab — "served: ctl line exact" pins this alone; this
+    // leg confirms it holds with a dir sibling in the same served tree.
+    const w2 = try h.tree.addWindow("two", "hi\n");
+    try testing.expect(!w2.isdir);
+    try testing.expectEqual(@as(i32, 72), w2.body.fr.maxtab);
+}
+
+test "served: /mnt/snarf-self/ns renders every mount in order; empty with no namespace (T14)" {
+    const h = try Harness.create(testing.allocator, "one", "a\n");
+    defer h.destroy();
+
+    var ns = ninep.mount.Namespace.init(testing.allocator);
+    defer ns.deinit();
+    var t1 = ninep.nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var dev = try ninep.nsdir.FakeServer.init(testing.allocator, &t1);
+    defer dev.deinit();
+    try ns.mount("/dev", dev.client, dev.root_fid);
+    var t2 = ninep.nsdir.FakeTree{ .names = &.{"x"}, .tag = "x\n" };
+    var n = try ninep.nsdir.FakeServer.init(testing.allocator, &t2);
+    defer n.deinit();
+    try ns.mount("/n", n.client, n.root_fid);
+    h.ed.ns = &ns;
+
+    try h.connect();
+    _ = try h.walk(0, 1, &.{"ns"});
+    _ = try h.open(1, msg.OREAD);
+    const rr = try h.read(1, 0, 4096);
+    try testing.expect(rr.body == .rread);
+    try testing.expectEqualStrings("mount /dev\nmount /n\n", rr.body.rread.data);
+
+    // With no namespace bound at all (every headless harness before this
+    // wave), the file exists but reads empty rather than erroring.
+    h.ed.ns = null;
+    _ = try h.walk(0, 2, &.{"ns"});
+    _ = try h.open(2, msg.OREAD);
+    const rr2 = try h.read(2, 0, 4096);
+    try testing.expect(rr2.body == .rread);
+    try testing.expectEqual(@as(usize, 0), rr2.body.rread.data.len);
+}

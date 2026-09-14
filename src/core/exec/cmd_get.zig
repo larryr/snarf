@@ -95,3 +95,96 @@ test "cmd_get: Get on a file window warns and changes nothing" {
     try testing.expectEqual(@as(usize, 8), w.body.file.buffer.len());
     try testing.expectEqual(@as(usize, 0), ed.loads.items.len);
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T12).
+// ===========================================================================
+const ninep = @import("ninep");
+const served_fsys = @import("../served/fsys.zig");
+
+fn pumpT12(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+fn bodyOfT12(a: std.mem.Allocator, w: *@import("../Window.zig")) ![]u8 {
+    const n = w.body.file.buffer.len();
+    if (n == 0) return a.alloc(u8, 0);
+    const dest = try a.alloc(u8, n * 4);
+    defer a.free(dest);
+    return a.dupe(u8, w.body.file.buffer.read(0, n, dest));
+}
+
+test "cmd_get: Get on the / dir window re-lists after a new namespace prefix mounts, showing n/ (T12)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{
+        .dir_boot = true,
+        .ns = &ns,
+    });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    // /dev, the same fake tree every phase-13b harness mounts.
+    var dev_tree = ninep.nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var dev = try ninep.nsdir.FakeServer.init(a, &dev_tree);
+    defer dev.deinit();
+    try ns.mount("/dev", dev.client, dev.root_fid);
+
+    // /mnt/snarf-self, served for real.
+    var fsys = served_fsys.Fsys.init(&ed);
+    var pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(a, pipe.serverEnd(), &served_fsys.Fsys.ops, &fsys, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpT12 };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    try ns.mount("/mnt/snarf-self", &cl, root.fid);
+
+    const cols = tree.row.col.items;
+    const w = try openfile.readFile(&ed, cols[cols.len - 1], "/");
+
+    var i: usize = 0;
+    while (i < 24) : (i += 1) {
+        try Load.stepAll(&ed);
+        _ = try srv.poll();
+        _ = try dev.srv.poll();
+    }
+
+    try testing.expect(w.isdir);
+    const body0 = try bodyOfT12(a, w);
+    defer a.free(body0);
+    try testing.expectEqualStrings("dev/\tmnt/\n", body0);
+
+    // A new prefix mounts — the origin attaching, in acme's own shape
+    // (acme does not auto-refresh a directory window; Get is how it appears).
+    var n_tree = ninep.nsdir.FakeTree{ .names = &.{"x"}, .tag = "x\n" };
+    var n_srv = try ninep.nsdir.FakeServer.init(a, &n_tree);
+    defer n_srv.deinit();
+    try ns.mount("/n", n_srv.client, n_srv.root_fid);
+
+    try get(&ed, &w.body, null, null, true, false, "");
+    i = 0;
+    while (i < 24) : (i += 1) {
+        try Load.stepAll(&ed);
+        _ = try srv.poll();
+        _ = try dev.srv.poll();
+        _ = try n_srv.srv.poll();
+    }
+
+    const body1 = try bodyOfT12(a, w);
+    defer a.free(body1);
+    try testing.expectEqualStrings("dev/\tmnt/\tn/\n", body1);
+    try testing.expect(w.isdir);
+    try testing.expect(!w.dirty);
+}

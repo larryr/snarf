@@ -368,3 +368,171 @@ test "openfile: isMtpt refuses the self mount point itself, not its files" {
     try testing.expect(!isMtpt("/mnt/snarf-self/index"));
     try testing.expect(!isMtpt("/mnt"));
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T5/T6/T8/T9/T10). T8 lives here
+// (rather than look.zig/expand.zig, where the contract table lists it)
+// because `NsHarness`, above, is what it needs and the fixture is private to
+// this file's test section.
+// ===========================================================================
+
+test "openfile: openFile(\"/\") mints a window via makeNewWindow and columnates dev/ mnt/ (T5)" {
+    const a = testing.allocator;
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    const c = h.tree.row.col.items[0];
+    const src = c.w.items[0]; // the reference window makeNewWindow places beside
+    const w = try openFile(&h.ed, &src.body, .{ .name = "/" });
+    try h.frames(24);
+
+    // makeNewWindow(ed, t) picked `src`'s own column (place.colOf(t)).
+    try testing.expectEqual(c, w.col.?);
+    try testing.expect(w.isdir);
+    try testing.expect(!w.filemenu);
+    try testing.expectEqualStrings("/", w.body.file.name.items);
+    const body = try bodyText(w);
+    defer a.free(body);
+    try testing.expectEqualStrings("dev/\tmnt/\n", body);
+    try testing.expectEqual(@as(i32, 27), w.body.fr.maxtab);
+}
+
+test "openfile: openFile reuses an already-open window; trailing-slash names match (T6)" {
+    const look = @import("look.zig");
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    const c = h.tree.row.col.items[0];
+    const root = try readFile(&h.ed, c, "/");
+    try h.frames(24);
+    try testing.expect(root.isdir);
+
+    // Open "/mnt/" via B3 on the "mnt/" entry of "dev/\tmnt/\n" (col 6).
+    try look.look(&h.ed, &root.body, 6, 6, false);
+    try h.frames(24);
+    const mnt = errors.lookFile(h.tree.row, "/mnt").?;
+    try testing.expect(mnt.isdir);
+    const n_windows = c.w.items.len;
+
+    // Re-open by the exact same absolute name: reused, no new window, no load.
+    const again = try openFile(&h.ed, null, .{ .name = "/mnt/" });
+    try testing.expectEqual(mnt, again);
+    try testing.expectEqual(n_windows, c.w.items.len);
+    try testing.expectEqual(@as(usize, 0), h.ed.loads.items.len);
+
+    // Re-open by the BARE name (no trailing slash): `errors.lookFile`'s
+    // trimSlash rule (look.c:768/776) matches the same window too.
+    const again2 = try openFile(&h.ed, null, .{ .name = "/mnt" });
+    try testing.expectEqual(mnt, again2);
+    try testing.expectEqual(n_windows, c.w.items.len);
+    try testing.expectEqual(@as(usize, 0), h.ed.loads.items.len);
+}
+
+test "openfile: B3 on a directory-window entry opens it; B3 on a nonfile falls back to search (T8)" {
+    const a = testing.allocator;
+    const look = @import("look.zig");
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    const c = h.tree.row.col.items[0];
+    const root = try readFile(&h.ed, c, "/");
+    try h.frames(24);
+    const body0 = try bodyText(root);
+    defer a.free(body0);
+    try testing.expectEqualStrings("dev/\tmnt/\n", body0);
+
+    // B3 on "dev/" (the FIRST entry): the fake /dev mount exists, so the
+    // StatJob resolves and a "/dev/" directory window opens listing it.
+    try look.look(&h.ed, &root.body, 1, 1, false);
+    try testing.expect(h.ed.pending_look != null);
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+    const devw = errors.lookFile(h.tree.row, "/dev").?;
+    try testing.expect(devw.isdir);
+    const devbody = try bodyText(devw);
+    defer a.free(devbody);
+    try testing.expectEqualStrings("mouse/\n", devbody);
+
+    // B3 on "zzz", which names no file anywhere in this namespace: the parked
+    // StatJob errors and falls through to the literal (alnum) search — the
+    // SECOND "zzz" is found and selected, and no new window opens.
+    const hay = try h.tree.addWindow("hay", "zzz one zzz\n");
+    try hay.body.setSelect(0, 0);
+    const n_before = c.w.items.len;
+    try look.look(&h.ed, &hay.body, 1, 1, false);
+    try testing.expect(h.ed.pending_look != null);
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+    try testing.expectEqual(@as(usize, 8), hay.body.q0);
+    try testing.expectEqual(@as(usize, 11), hay.body.q1);
+    try testing.expectEqual(n_before, c.w.items.len); // no window opened
+}
+
+test "openfile: a bare :addr selects the line, a regexp addr selects the match, an out-of-order addr warns (T9)" {
+    const a = testing.allocator;
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "one", .body = "l1\nl2\nl3\nl4\nl5\n" });
+    defer h.deinit();
+
+    const w = h.tree.row.col.items[0].w.items[0];
+    const path = try std.fmt.allocPrint(a, "/mnt/snarf-self/{d}/body", .{w.id});
+    defer a.free(path);
+
+    // A bare line number selects the WHOLE line, including its newline
+    // (edit/addr.zig "addr: absolute line"; addr.c line addressing).
+    const addr3 = [_]u21{'3'};
+    const opened = try openFile(&h.ed, null, .{ .name = path, .addr = &addr3 });
+    try h.frames(24);
+    try testing.expectEqual(@as(usize, 6), opened.body.q0);
+    try testing.expectEqual(@as(usize, 9), opened.body.q1);
+
+    // A regexp address selects the MATCH, not the whole line (the window is
+    // already open, so this evaluates synchronously — no more frames needed).
+    const addr_re = [_]u21{ '/', 'l', '4', '/' };
+    _ = try openFile(&h.ed, null, .{ .name = path, .addr = &addr_re });
+    try testing.expectEqual(@as(usize, 9), opened.body.q0);
+    try testing.expectEqual(@as(usize, 11), opened.body.q1);
+
+    // An out-of-order compound address ("5,1": line 5's start, line 1's end,
+    // q0 > q1) warns and leaves the selection exactly where it was
+    // (Load.addressAndShow's default `r`, look.c:882-884) — pinned by
+    // resetting the selection first so "unchanged" is unambiguous.
+    try opened.body.setSelect(0, 0);
+    const addr_oo = [_]u21{ '5', ',', '1' };
+    _ = try openFile(&h.ed, null, .{ .name = path, .addr = &addr_oo });
+    try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "addresses out of order") != null);
+    try testing.expectEqual(@as(usize, 0), opened.body.q0);
+    try testing.expectEqual(@as(usize, 0), opened.body.q1);
+}
+
+test "openfile: a relative name resolves against the clicked window's directory; with no window, against wdir (T10)" {
+    const look = @import("look.zig");
+    var h: NsHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    // A window whose OWN name is a directory: a relative click inside it
+    // resolves against THAT directory (R-EDIT-20, `errors.dirName`), not wdir.
+    const selfdir = try h.tree.addWindow("/mnt/snarf-self/", "index\n");
+    try look.look(&h.ed, &selfdir.body, 2, 2, false); // inside "index"
+    try testing.expect(h.ed.pending_look != null);
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+    try testing.expect(errors.lookFile(h.tree.row, "/mnt/snarf-self/index") != null);
+
+    // A click with NO window behind it (the row tag): falls back to wdir="/".
+    // "dev" names the /dev mount itself, which exists, so it resolves and
+    // opens — landing on "/dev", not "/mnt/snarf-self/dev".
+    const nc = h.tree.row.tag.file.buffer.len();
+    try h.tree.row.tag.insertAt(nc, "dev", true);
+    try testing.expect(h.tree.row.tag.w == null); // the no-window case (T10)
+    try look.look(&h.ed, &h.tree.row.tag, nc + 1, nc + 1, false);
+    try testing.expect(h.ed.pending_look != null);
+    try h.frames(24);
+    try testing.expect(h.ed.pending_look == null);
+    try testing.expect(errors.lookFile(h.tree.row, "/dev") != null);
+    try testing.expect(errors.lookFile(h.tree.row, "/mnt/snarf-self/dev") == null);
+}

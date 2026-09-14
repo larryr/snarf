@@ -204,7 +204,7 @@ function bodyInk(b) {
 // Let the boot directory load finish: it is an `Editor.loads` job advanced ONE
 // 9P state per frame (13b), so the `/` listing needs a handful of ticks.
 for (let i = 0; i < 16; i++) ex.tick(100 + i * 16);
-check("boot: the `/` directory window drew text in the right column (13b)", () =>
+check("boot: the `/` directory window drew text in the right column (13b) (T15)", () =>
   bodyInk(blits[blits.length - 1]) > 0);
 
 // Phase 6 end-to-end: inject a typed 'h' through the real input path

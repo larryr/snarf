@@ -266,3 +266,206 @@ test "dirwin: dirCmp orders by rune then by length" {
 test "dirwin: the directory tab width is 3 zeroes, not 4" {
     try testing.expectEqual(@as(i32, 3), @min(default_maxtab, TABDIR));
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T1-T4).
+// ===========================================================================
+const Frame = draw.Frame;
+const proto = draw.proto;
+const File = @import("File.zig");
+const Buffer = @import("Buffer.zig");
+const boot = @import("boot.zig");
+
+test "dirwin: dirCmp — a < ab < b, length breaks a shared prefix, rune value not byte order (T1)" {
+    // a < ab < b (text.c:121-133: compare min(nr) runes, then length).
+    const a = [_]u21{'a'};
+    const ab = [_]u21{ 'a', 'b' };
+    const b = [_]u21{'b'};
+    try testing.expectEqual(std.math.Order.lt, dirCmp(&a, &ab));
+    try testing.expectEqual(std.math.Order.lt, dirCmp(&ab, &b));
+    try testing.expectEqual(std.math.Order.lt, dirCmp(&a, &b));
+
+    // "foo/" vs "foo": same prefix, the QTDIR-slashed name is LONGER and sorts
+    // after (text.c:132 `da->nr - db->nr`).
+    const foo = [_]u21{ 'f', 'o', 'o' };
+    const foo_slash = [_]u21{ 'f', 'o', 'o', '/' };
+    try testing.expectEqual(std.math.Order.lt, dirCmp(&foo, &foo_slash));
+    try testing.expectEqual(std.math.Order.gt, dirCmp(&foo_slash, &foo));
+
+    // RUNE-wise, not byte-wise: 0x02 vs 0x100. A little-endian BYTE memcmp of
+    // the raw u21 storage would see 0x100's low byte (0x00) before 0x02's
+    // (0x02) and order 0x100 first; comparing rune VALUES orders 0x02 first,
+    // which is what the dirwin.zig doc comment claims this port does.
+    const low = [_]u21{0x02};
+    const high = [_]u21{0x100};
+    try testing.expectEqual(std.math.Order.lt, dirCmp(&low, &high));
+    try testing.expectEqual(std.math.Order.gt, dirCmp(&high, &low));
+}
+
+/// Build an `Entry` from an ASCII literal: `wid` from the FIXTURE's real font
+/// (9x18, `stringWidth("0")==9`), `name` decoded to runes so `columnate`'s
+/// output-comparison is byte-for-byte against `ascii`.
+fn asciiEntry(a: std.mem.Allocator, t: *Text, ascii: []const u8) !Entry {
+    const runes = try a.alloc(u21, ascii.len);
+    for (ascii, 0..) |c, i| runes[i] = c;
+    return .{ .name = runes, .wid = t.fr.font.stringWidth(ascii) };
+}
+
+test "dirwin: columnate golden — 7 names into a 640px body at the 9x18 font (T2)" {
+    // mint = stringWidth("0") = 9; maxtab = min(default_maxtab=4, TABDIR=3)*9 = 27
+    // (text.c:146-148). Hand-derivation (also cross-checked by simulating the
+    // exact text.c:151-198 algorithm offline — see the phase-13b test report):
+    //
+    //   name        wid  colw-pass-w   colw
+    //   Makefile     72   81            \
+    //   README.md    81  108            |
+    //   src          27   54            | max = 108
+    //   docs         36   54            |
+    //   build.zig    81  108            |
+    //   LICENSE      63   81            |
+    //   zig-cache    81  108           /
+    //
+    //   dx=640, ncol = max(1, 640/108) = 5, ndl=7, nrow = ceil(7/5) = 2.
+    //
+    // Row 0 (i=0, step nrow=2): indices 0,2,4,6 = Makefile, src, build.zig,
+    // zig-cache (last in row: no trailing tabs). Row 1 (i=1): indices 1,3,5 =
+    // README.md, docs, LICENSE (last in row).
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var file = File.init(a, Buffer.initEmpty(a));
+    defer file.deinit();
+    // dx = (max.x - min.x) - (Scrollwid+Scrollgap) = 656 - 16 = 640 (text.c's
+    // body Text, `textinit` scrollbar carve, S-07 divergence note in Text.init).
+    var text = try Text.init(&file, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
+    defer text.deinit();
+    try testing.expectEqual(@as(i32, 640), text.fr.r.max.x - text.fr.r.min.x);
+
+    const names = [_][]const u8{ "Makefile", "README.md", "src", "docs", "build.zig", "LICENSE", "zig-cache" };
+    var entries: [names.len]Entry = undefined;
+    for (names, 0..) |n, i| entries[i] = try asciiEntry(a, &text, n);
+    defer for (entries) |e| a.free(e.name);
+
+    try columnate(&text, &entries);
+
+    try testing.expectEqual(@as(i32, 27), text.fr.maxtab); // TABDIR win (text.c:148)
+
+    const n = text.file.buffer.len();
+    const dest = try a.alloc(u8, n * Buffer.max_bytes_per_rune);
+    defer a.free(dest);
+    const got = text.file.buffer.read(0, n, dest);
+    try testing.expectEqualStrings(
+        "Makefile\t\tsrc\t\t\tbuild.zig\tzig-cache\n" ++
+            "README.md\tdocs\t\t\tLICENSE\n",
+        got,
+    );
+}
+
+test "dirwin: columnate sets the dir body's maxtab to 27; a normal Text stays at 72 (T3)" {
+    // SNARF DIVERGENCE (dirwin.zig doc comment above `columnate`, pre-existing,
+    // NOT introduced by this wave): `Text.init` never ports acme's `textinit`
+    // maxtab override (text.c:53-60, would be 36 at this font); a non-directory
+    // Text keeps libframe's `frinit` default `8*stringWidth("0")` = 72
+    // (frinit.c:7-26, pinned by `served: ctl line exact` in fsys.zig). Moving
+    // that default would shift FROZEN-ACCEPT-3's pixels, so it stays as is —
+    // this test pins BOTH sides of the divergence so a future fix has to touch
+    // this file on purpose.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    // A normal (non-directory) window body: default maxtab, untouched by dirwin.
+    var file1 = File.init(a, try Buffer.initFromBytes(a, "hello\n"));
+    defer file1.deinit();
+    var normal = try Text.init(&file1, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
+    defer normal.deinit();
+    try testing.expectEqual(@as(i32, 72), normal.fr.maxtab); // 8*9, libframe frinit default
+
+    // A directory body: columnate narrows it to 27 (3*9, TABDIR).
+    var file2 = File.init(a, Buffer.initEmpty(a));
+    defer file2.deinit();
+    var dir = try Text.init(&file2, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
+    defer dir.deinit();
+    try testing.expectEqual(@as(i32, 72), dir.fr.maxtab); // unset before columnate runs
+
+    const e = try asciiEntry(a, &dir, "aaa");
+    defer a.free(e.name);
+    try columnate(&dir, &.{e});
+    try testing.expectEqual(@as(i32, 27), dir.fr.maxtab);
+}
+
+test "dirwin: applyListing — trailing slash, isdir/filemenu, Get-not-Put tag, sorted dirnames (T4)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    // "one" is not yet a directory window; applyListing gives it the slash and
+    // flips every flag textload's QTDIR arm flips (text.c:216-266).
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "one",
+        .body = "stale\n",
+    });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    const w = tree.row.col.items[0].w.items[0];
+    // A recorded body edit before the listing lands, so `dirty`/`mod` are LIVE
+    // going in — applyListing must clear both (look.c:865-870), not just leave
+    // them at their already-false defaults.
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "X", true);
+    try testing.expect(w.dirty);
+
+    const stats = [_]Stat{
+        .{ .qid = .{ .path = 0 }, .mode = Stat.DMDIR, .length = 0, .name = "zzz" },
+        .{ .qid = .{ .path = 0 }, .mode = 0, .length = 0, .name = "aaa" },
+    };
+    try applyListing(&ed, w, &stats);
+
+    try testing.expect(w.isdir);
+    try testing.expect(!w.filemenu);
+    try testing.expectEqualStrings("one/", w.body.file.name.items); // text.c:220-226
+
+    try testing.expect(!w.dirty); // look.c:867
+    try testing.expect(!w.body.file.mod); // look.c:866
+
+    // dirnames sorted ("aaa" < "zzz/", text.c:262-264), the QTDIR entry slashed.
+    try testing.expectEqual(@as(usize, 2), w.dirnames.items.len);
+    const n0 = try utf8Of(a, w.dirnames.items[0]);
+    defer a.free(n0);
+    try testing.expectEqualStrings("aaa", n0);
+    const n1 = try utf8Of(a, w.dirnames.items[1]);
+    defer a.free(n1);
+    try testing.expectEqualStrings("zzz/", n1);
+
+    // The tag: name + " Del Snarf" + " Get" (wind.c:520-523, OUTSIDE the
+    // filemenu arm) + " |" + " Look " — no "Undo"/"Redo"/"Put" (filemenu==FALSE).
+    const tag = try tagOf(a, &w.tag);
+    defer a.free(tag);
+    try testing.expectEqualStrings("one/ Del Snarf Get | Look ", tag);
+    // Caret parked at the tag end (look.c:868-869).
+    try testing.expectEqual(w.tag.file.buffer.len(), w.tag.q1);
+}
+
+fn utf8Of(a: std.mem.Allocator, runes: []const u21) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var tmp: [4]u8 = undefined;
+    for (runes) |r| {
+        const n = std.unicode.utf8Encode(r, &tmp) catch unreachable;
+        try out.appendSlice(a, tmp[0..n]);
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn tagOf(a: std.mem.Allocator, t: *Text) ![]u8 {
+    const n = t.file.buffer.len();
+    if (n == 0) return a.alloc(u8, 0);
+    const dest = try a.alloc(u8, n * Buffer.max_bytes_per_rune);
+    defer a.free(dest);
+    return a.dupe(u8, t.file.buffer.read(0, n, dest));
+}

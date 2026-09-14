@@ -407,3 +407,75 @@ test "expand: isAddrC and isRegexC match addr.c's sets" {
     try testing.expect(isRegexC('z'));
     try testing.expect(!isRegexC(' '));
 }
+
+// ===========================================================================
+// Named battery (phase-13b contract §4, T7).
+// ===========================================================================
+const draw = @import("draw");
+const File = @import("File.zig");
+const Buffer = @import("Buffer.zig");
+const Frame = draw.Frame;
+const proto = draw.proto;
+
+test "expand: expandFile — file+addr, bare addr, url, include, no-addr, whitespace (T7)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    const Case = struct {
+        text: []const u8,
+        click: usize,
+        kind: ?Kind, // null: expandFile returns null (Isntfile / empty click)
+        name: []const u8 = "",
+        addr: []const u8 = "",
+        has_addr: bool = false,
+    };
+    // Click offsets are RUNE indices into `text`; see the phase-13b test
+    // report for the full look.c:592-729 hand-trace behind each one.
+    const cases = [_]Case{
+        // "dat.h:27", click inside "dat.h" (index 2, 't'): name + line addr.
+        .{ .text = "dat.h:27", .click = 2, .kind = .file, .name = "dat.h", .addr = "27", .has_addr = true },
+        // ":/^main/", click inside "main" (index 3): nname==0 ("the window's
+        // own file", look.c:822-826), addr is the whole regexp after the ':'.
+        .{ .text = ":/^main/", .click = 3, .kind = .file, .name = "", .addr = "/^main/", .has_addr = true },
+        // A URL: taken WHOLE, the "http://" colon is not a splitting colon
+        // (look.c:607/615's breakingColon).
+        .{ .text = "http://x/y:80", .click = 4, .kind = .url, .name = "http://x/y:80" },
+        // "<stdio.h>": an include name, brackets stripped (look.c:691-699).
+        .{ .text = "<stdio.h>", .click = 4, .kind = .include, .name = "stdio.h" },
+        // A bare name, no colon at all: no address half.
+        .{ .text = "foo", .click = 1, .kind = .file, .name = "foo", .has_addr = false },
+        // A click squarely between two spaces: nothing isfilec/isaddrc/isregexc
+        // on either side ⇒ n==0 ⇒ Isntfile (look.c:648-650).
+        .{ .text = "a  b", .click = 2, .kind = null },
+    };
+
+    for (cases) |c| {
+        var file = File.init(a, Buffer.initEmpty(a));
+        defer file.deinit();
+        var text = try Text.init(&file, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
+        defer text.deinit();
+        try text.insertAt(0, c.text, true);
+
+        const got = expandFile(&text, c.click, c.click);
+        if (c.kind == null) {
+            try testing.expect(got == null);
+            continue;
+        }
+        const cand = got.?;
+        try testing.expectEqual(c.kind.?, cand.kind);
+
+        const name = try runeText(a, &text, cand.name_q0, cand.name_q1);
+        defer a.free(name);
+        try testing.expectEqualStrings(c.name, name);
+
+        if (c.has_addr) {
+            try testing.expect(cand.has_addr);
+            const addr = try runeText(a, &text, cand.addr_q0, cand.addr_q1);
+            defer a.free(addr);
+            try testing.expectEqualStrings(c.addr, addr);
+        } else if (cand.kind == .file) {
+            try testing.expect(!cand.has_addr);
+        }
+    }
+}
