@@ -416,9 +416,14 @@ pub fn show(self: *Text, q0: usize, q1: usize, doselect: bool) Error!void {
 /// `textbswidth` (text.c:535-564): how many runes an erase key would remove,
 /// starting at the caret `q0`. `^H` (0x08) erases one; `^U` (0x15) erases to
 /// the line start, eating at most one preceding '\n'; `^W` (0x17) erases one
-/// alnum word (skipping trailing non-alnum first). DIVERGENCE: `isalnum` here
-/// is ASCII-only (r < 0x80) — Plan 9's `isalnum` is Latin-1; full Unicode word
-/// classes are deferred.
+/// alnum word (skipping trailing non-alnum first).
+///
+/// `isalnum` is acme's OWN predicate, not libc's: `fns.h:62-64` does
+/// `#undef isalnum` / `#define isalnum acmeisalnum` and `util.c:327-342`
+/// defines it over a whole Rune — "assume anything above the Latin control
+/// characters is potentially an alphanumeric". So `_` is a word character and
+/// so is every rune above 0xA0, which is why this shares `select.isAlnum` with
+/// double-click word selection (text.c:1448-1453 calls the same function).
 pub fn bsWidth(self: *Text, c: u21) usize {
     // there is known to be at least one character to erase (text.c:542-544).
     if (c == 0x08) return 1; // ^H: erase character
@@ -443,10 +448,8 @@ pub fn bsWidth(self: *Text, c: u21) usize {
     return self.q0 - q; // text.c:563
 }
 
-/// ASCII-only `isalnum` (see `bsWidth` DIVERGENCE note).
-fn isalnum(r: u21) bool {
-    return r < 0x80 and std.ascii.isAlphanumeric(@intCast(r));
-}
+/// acme's `isalnum` (util.c:327-342), shared with `select` — see `bsWidth`.
+const isalnum = @import("select.zig").isAlnum;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -761,4 +764,28 @@ test "text: insert/delete before org slide org" {
     try t.deleteRange(0, 3, true);
     try testing.expectEqual(@as(usize, 70), t.org);
     try testing.expectEqual(@as(usize, 70), t.iq1);
+}
+
+test "text: ^W erases an acme word, underscore and all (16b item 10)" {
+    // acme's isalnum is `acmeisalnum` (fns.h:62-64 #undef/#define,
+    // util.c:327-342), not libc's: `_` is a word character and so is every
+    // rune above 0xA0. `bsWidth` used an ASCII-only stand-in, so ^W stopped at
+    // the underscore.
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var file = try makeFile(a, "foo_bar caf\u{e9}");
+    defer file.deinit();
+    var t = try Text.init(&file, a, proto.Rect.make(0, 0, 400, 200), fx.font, &fx.disp.image, fx.cols());
+    defer t.deinit();
+    try t.fill();
+
+    const nc = file.buffer.len();
+    t.q0 = nc;
+    t.q1 = nc;
+    try testing.expectEqual(@as(usize, 4), t.bsWidth(0x17)); // "café" — the é counts
+
+    t.q0 = 7; // just past "foo_bar"
+    t.q1 = 7;
+    try testing.expectEqual(@as(usize, 7), t.bsWidth(0x17)); // the WHOLE word, not "bar"
 }
