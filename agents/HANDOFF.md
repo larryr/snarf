@@ -6,7 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 12e merged; remote has only `main`)*
+- **`phase13a`** (worktree `../snarf-wt/phase13a`, 2026-09-14, larry's Mac, local only) —
+  async 9P tickets (NEW `ninep/tickets.zig`, `client.zig` shrinks), namespace jobs (NEW
+  `ninep/nsjob.zig`), `Editor.ns` handle, real boot namespace in `main_wasm` (`/dev`,
+  `/dev/draw`, `/mnt/snarf-self` served at runtime — retires R-P10-E). Owns those files +
+  `core/boot.zig`, `served/fsys.zig` (optional `ns` file), S-01/S-02/R-03 docs. Contract
+  `agents/contracts/phase13a-async-namespace.md`. 13b (directory windows UI) follows.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
