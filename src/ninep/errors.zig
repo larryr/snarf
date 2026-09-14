@@ -42,6 +42,20 @@ pub const OpError = error{
     // agents/contracts/phase10-served.md). [ref: acme/xfid.c:20-21]
     DeletedWindow,
     BadCtl,
+    // OPFS device errors (phase 14b, S-02 §4): the four Plan 9 conditions a
+    // creatable tree can report that no earlier Snarf server could. Strings
+    // are the kernel's / the canonical file servers'. [ref: 9/port/error.h:10
+    // Eexist, :12 Enotdir; p9p ramfs.c:122 Enotempty; 9/cmd/ext2srv/errstr.h:11
+    // Enospace]
+    FileExists,
+    NotADirectory,
+    DirNotEmpty,
+    NoSpace,
+    /// A wstat the server will not honour — the same text the framework sends
+    /// when `Ops.wstat` is absent (`server_mut.wstat_prohibited`), available as
+    /// a typed error so a server that supports SOME wstats can refuse the rest.
+    /// [lib9p/srv.c:24 Enowstat]
+    WstatProhibited,
     // ctl `del` on a dirty window (wave 10b-B3 amendment, agents/contracts/
     // phase10-served.md R-P10-H): the two-strike clean refusal message, kept
     // distinct from the generic `BadCtl` since it is not an ill-formed
@@ -78,6 +92,11 @@ pub fn errorString(e: OpError) []const u8 {
         error.DeletedWindow => "deleted window",
         error.BadCtl => "ill-formed control message",
         error.FileDirty => "file dirty",
+        error.FileExists => "file already exists",
+        error.NotADirectory => "not a directory",
+        error.DirNotEmpty => "directory not empty",
+        error.NoSpace => "no space on device",
+        error.WstatProhibited => "wstat prohibited",
         error.Other => "i/o error",
     };
 }
@@ -111,6 +130,11 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "deleted window")) return error.DeletedWindow;
     if (eq(u8, s, "ill-formed control message")) return error.BadCtl;
     if (eq(u8, s, "file dirty")) return error.FileDirty;
+    if (eq(u8, s, "file already exists")) return error.FileExists;
+    if (eq(u8, s, "not a directory")) return error.NotADirectory;
+    if (eq(u8, s, "directory not empty")) return error.DirNotEmpty;
+    if (eq(u8, s, "no space on device")) return error.NoSpace;
+    if (eq(u8, s, "wstat prohibited")) return error.WstatProhibited;
     return error.Other;
 }
 
@@ -142,6 +166,11 @@ test "errors: round-trip every member" {
         error.DeletedWindow,
         error.BadCtl,
         error.FileDirty,
+        error.FileExists,
+        error.NotADirectory,
+        error.DirNotEmpty,
+        error.NoSpace,
+        error.WstatProhibited,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));
