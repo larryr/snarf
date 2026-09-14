@@ -18,7 +18,8 @@
 //! keeps the table. `resolve` hands back the whole `Entry`, so its shape is
 //! unchanged from v1 (ruling R-P12d-1).
 //!
-//! `list` renders the table `ns(1)`-style for `/dev/ns` (S-02 §1).
+//! `list` renders the table `ns(1)`-style for `/mnt/snarf-self/ns` (S-02 §1.3 —
+//! Snarf has no `/dev` server of its own, ruling R-P13a-4).
 //!
 //! Imports: std + client.zig + nspath.zig only (S-07 §6).
 const std = @import("std");
@@ -217,7 +218,7 @@ pub const Namespace = struct {
         return .{ .entry = entry, .remainder = best_remainder };
     }
 
-    /// Render the table `ns(1)`-style, insertion order, for `/dev/ns`
+    /// Render the table `ns(1)`-style, insertion order, for `/mnt/snarf-self/ns`
     /// (S-02 §1). One line per union member, mirroring `/proc/n/ns`
     /// (devproc.c:954-966 `mount [flags] ...` / `bind [flags] ...`):
     /// the head of each union prints as `mount <prefix>`, every stacked
