@@ -6,19 +6,29 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase12c`** (worktree `../snarf-wt/phase12c`, 2026-09-14, larry's Mac, local only) —
-  canvas fills the browser window + live resize at DPR 1 (R-GFX-05 resize half). Owns
-  `web/index.html`, `web/shim.js`, `tools/smoke_wasm.mjs`, `src/shim/abi.zig` (ABI v5:
-  `init(w,h)`, `EventKind.resize=8`), `src/dev/draw_backend.zig`, `src/dev/draw_canvas.zig`,
-  `src/dev/draw.zig` (refresh), `src/draw/Display.zig` (`getWindow`), `src/core/boot.zig`
-  (`Tree.resize`), `src/main_wasm.zig`. Contract `agents/contracts/phase12c-canvas-resize.md`.
+- *(none as of 2026-09-14 — phase 12c merged `e351203`; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12 and 12b are MERGED to `main`; `main` is green.**
-  547/547 tests, node smoke 20/20, `zig fmt` clean, Zig 0.16.0, wasm ≈ 1581 KiB (watch —
-  +48 KiB in phase 12, +27 KiB in 12b).
+- **Phases 1–12, 12b, 12c are MERGED to `main`; `main` is green.**
+  557/557 tests, node smoke 25/25, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1591 KiB
+  (watch — +48 KiB in phase 12, +27 KiB in 12b, +10 KiB in 12c).
+- **Phase 12c MERGED (`e351203`, 2026-09-14)** — see agents/reports/phase12c-canvas-resize.md:
+  the canvas fills the browser window at boot (`init(w,h)`) and follows resizes
+  (`EventKind.resize=8` → backend resize → `refresh` exposure → `Display.getWindow` →
+  `Tree.resize`/`Row.resize`, acme.c:548-555). DPR stays 1 (R-P12c-6: crisp Retina needs a
+  2× font — REMAINING half of R-GFX-05). `Row.resize` floors columns at 34 px (libframe traps
+  below ~25). MANUAL for Larry: reload, `make run`, drag the window edge.
+- **Namespace decisions with the user (2026-09-14, one at a time)**: (1) origin mount
+  moves `/mnt/origin` → **`/n/origin`** (Plan 9 network-mount idiom; do the rename in code,
+  S-02 §5, R-9P-10, tests, HANDOFF together in the unions wave); (2) **`$home` DEFERRED**
+  until unions exist — strict acme per-window directories meanwhile; (3) **unions
+  (OQ-9P-1) = YES, own wave BEFORE directory windows**: `bind -a/-b` in the mount table +
+  synthesized listings for mount-point dirs (`/`, `/n`, `/mnt`), origin `bin/` unioned into
+  `/bin` so command lookup is acme's "window dir, then path"; (4) self mount stays
+  **`/mnt/snarf-self`** (no /mnt/acme compatibility claim). Still to ask: per-host device
+  scoping (/dev/dom), dump location (follows $home).
 - **Phase 12b MERGED (`96d7cb5`, 2026-09-13)** — see agents/reports/phase12b-paper-fidelity.md:
   `Look` builtin; `activecol` + `makenewwindow` placement (new `core/place.zig`, wired to
   the served `new` walk; `New` unchanged, faithful); `+Errors` windows (new
@@ -59,7 +69,7 @@ authorization for this file only). Prune freely — git keeps history.
   a stray user edit; if it recurs unprompted, chase it. Known cosmetic gaps: canvas is
   fixed 640×480 (canvasResize + DPR, R-GFX-05, still deferred — `web/index.html:15`),
   so the editor occupies the top-left corner of the browser window; DPR=1 renders
-  chunky on Retina.
+  chunky on Retina. **(Fixed size RETIRED by phase 12c; the DPR half remains.)**
 - **STANDING AUTHORIZATION (user, 2026-07-19)**: run phases autonomously — merge each
   phase to `main` WITHOUT per-phase sign-off once orchestrator-inspected + suite green +
   fmt clean + boundary check passes; leave a report per phase in `agents/reports/`
@@ -69,7 +79,8 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT after 12c: directory windows (user-queued 2026-09-14)** — R-EDIT-03 + paper
+- **NEXT: unions + `/n/origin` rename (user decision 2026-09-14, see above), THEN directory
+  windows (user-queued 2026-09-14)** — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:
