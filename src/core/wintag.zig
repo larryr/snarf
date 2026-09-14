@@ -12,6 +12,7 @@ const std = @import("std");
 const draw = @import("draw");
 const Text = @import("text/Text.zig");
 const Window = @import("Window.zig");
+const Editor = @import("Editor.zig");
 
 const Rect = draw.Rect;
 const Error = Text.Error;
@@ -211,6 +212,33 @@ fn shiftClamp(v: usize, shift: isize) usize {
 /// `setTag1` (a single Text per File in v1).
 pub fn setTag(w: *Window) Error!void {
     try w.setTag1();
+}
+
+/// The `frameEnd` LIVE-TAG SWEEP (R-P9-4; acme.c:512-515 redraws after draining
+/// its warnings): for every window whose `{undo, redo, mod}` tuple differs from
+/// the cached `w.tag_state`, recompose the tag (`setTag1`, wind.c:497-536) and
+/// update the cache. The C rewrites a tag on the events that change it; the
+/// cache is what keeps this per-frame scan from doing a tag rewrite every tick.
+/// Moved out of `Editor.frameEnd` in phase 16a — it is tag composition.
+pub fn sweep(ed: *Editor) Error!void {
+    if (ed.row) |row| {
+        for (row.col.items) |c| {
+            for (c.w.items) |w| {
+                const f = w.body.file;
+                const undo = f.undoSeq() != 0;
+                const redo = f.redoSeq() != 0;
+                const mod = f.mod;
+                if (undo != w.tag_state.undo or
+                    redo != w.tag_state.redo or
+                    mod != w.tag_state.mod)
+                {
+                    try setTag1(w); // wind.c:497-536 recompose Undo/Redo/mod words
+                    w.tag_state = .{ .undo = undo, .redo = redo, .mod = mod };
+                    ed.needs_flush = true;
+                }
+            }
+        }
+    }
 }
 
 // ===========================================================================

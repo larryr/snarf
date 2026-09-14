@@ -34,28 +34,16 @@ const look = @import("look.zig");
 const Load = @import("Load.zig");
 const expand = @import("expand.zig");
 const Regx = @import("edit/Regx.zig");
+const originhook = @import("originhook.zig");
+const wintag = @import("wintag.zig");
 
 const Editor = @This();
 const Point = draw.Point;
 const Rect = draw.Rect;
 
-/// The origin-transport seam (R-P12-7), installed on the `origin` field below by
-/// whichever root owns the connection — `src/main_wasm.zig` in the browser, no
-/// one in the native harnesses.
-///
-/// Deliberately ONE verb. The core has no business knowing that the origin is a
-/// WebSocket, that it has a connection id, or whether it is currently up: it
-/// asks for a re-dial and learns the outcome the same way the user does, from
-/// the warning the connection's own poll emits when it resolves.
-pub const OriginHook = struct {
-    ctx: *anyopaque,
-    /// Close any live origin connection and start a fresh dial. Returns
-    /// IMMEDIATELY: the dial is asynchronous (R-P12-5), so success or failure
-    /// arrives later as one warning line from the platform's tick, NOT from
-    /// this call. Infallible by contract — a re-dial that cannot even start
-    /// reports itself through that same warning.
-    redial: *const fn (ctx: *anyopaque) void,
-};
+/// The origin-transport seam (R-P12-7): type + rationale in `originhook.zig`
+/// since phase 16a, aliased here because roots install by this name.
+pub const OriginHook = originhook.OriginHook;
 
 /// One logical mouse sample, decoded from a `/dev/mouse` record by the adapter
 /// (main_wasm). Button STATE (not edges) per the kernel record; the state
@@ -137,15 +125,10 @@ warnings: std.ArrayList(errors.Warning) = .empty,
 but2col: ?*draw.Image = null,
 /// The B3 sweep-highlight solid (`but3col`, acme.c:1085); same null fallback.
 but3col: ?*draw.Image = null,
-/// The platform seam the `Reconnect` builtin routes through (R-P12-7).
-///
-/// `core` may never import `shim` or `dev` (R-OV-03, R-CON-02, S-07 §6), so the
-/// origin's WebSocket lives entirely outside it and reaches the editor two ways
-/// only: through the 9P namespace (files) and through this hook (the one
-/// command that must talk to the transport itself). `src/main_wasm.zig` installs
-/// it after boot; every native harness leaves it null, which makes `Reconnect`
-/// a single warning line instead of a crash. Same inversion as `draw.Backend`
-/// and the input device's vtables — an erased ctx plus one function pointer.
+/// The platform seam the `Reconnect` builtin routes through (R-P12-7) — an
+/// erased ctx plus one verb; `originhook.zig` carries the rationale. Installed
+/// by `src/main_wasm.zig` after boot; every native harness leaves it null,
+/// which makes `Reconnect` a single warning line instead of a crash.
 origin: ?OriginHook = null,
 /// The session mount table (S-02 §1); null in headless unit tests that never
 /// touch the namespace. `core` reads files only through this — never through a
@@ -309,24 +292,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     // live tag composed by the sweep below, in this same frame (util.c:211-258).
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try errors.flushWarnings(ed);
-    if (ed.row) |row| {
-        for (row.col.items) |c| {
-            for (c.w.items) |w| {
-                const f = w.body.file;
-                const undo = f.undoSeq() != 0;
-                const redo = f.redoSeq() != 0;
-                const mod = f.mod;
-                if (undo != w.tag_state.undo or
-                    redo != w.tag_state.redo or
-                    mod != w.tag_state.mod)
-                {
-                    try w.setTag1(); // wind.c:497-536 recompose Undo/Redo/mod words
-                    w.tag_state = .{ .undo = undo, .redo = redo, .mod = mod };
-                    ed.needs_flush = true;
-                }
-            }
-        }
-    }
+    try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
     if (!ed.needs_flush) return;
     try display.flush();
     ed.needs_flush = false;
