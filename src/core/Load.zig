@@ -276,9 +276,20 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
         .redo = t.file.redoSeq() != 0,
         .mod = t.file.mod,
     };
+    try addressAndShow(ed, w, self.addr);
+}
 
+/// look.c:874-897 on a body that is already in place: evaluate the `:addr` half
+/// of the expansion, show the range it names (the current dot when there is no
+/// address or it does not evaluate, look.c:891-893) and record the body as the
+/// command target. `openfile.openFile` runs this directly on the path that
+/// REUSES an already-open window — the one path with no load to wait for.
+///
+/// `moveto` (look.c:897) is permanently DROPPED — R-EDIT-25 / R-P13b-6.
+pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21) Text.Error!void {
+    const t = &w.body;
     var r = File.Range{ .q0 = t.q0, .q1 = t.q1 }; // look.c:876 eval=FALSE default
-    if (self.addr) |ap| {
+    if (a0) |ap| {
         if (applyAddress(ed, t, ap)) |got| {
             if (got.q0 > got.q1) {
                 ed.warning("addresses out of order\n", .{}); // look.c:882-884
@@ -290,7 +301,6 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
     try t.show(r.q0, r.q1, true); // look.c:894 textshow(t, r.q0, r.q1, 1)
     try w.setTag1(); // look.c:895
     ed.seltext = t; // look.c:896
-    // look.c:897 `moveto` DROPPED — R-EDIT-25 / R-P13b-6, no warp.
     ed.needs_flush = true;
 }
 

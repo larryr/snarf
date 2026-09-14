@@ -26,6 +26,8 @@ pub const look = @import("look.zig");
 pub const dirwin = @import("dirwin.zig");
 /// One in-flight window load — the asynchronous `textload` (text.c:192-317).
 pub const Load = @import("Load.zig");
+/// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
+pub const openfile = @import("openfile.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");
