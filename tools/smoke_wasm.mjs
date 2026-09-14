@@ -592,6 +592,10 @@ function makeFsStub() {
         node.data = grown;
         return { status: FS_STATUS.ok, payload: new Uint8Array(0) };
       }
+      // Record version 2: "that write sequence is over". This stub holds no
+      // writable stream, so it is a no-op that only has to be accepted.
+      case FS_OP.close:
+        return { status: FS_STATUS.ok, payload: new Uint8Array(0) };
       default:
         return { status: FS_STATUS.io, payload: new Uint8Array(0) };
     }
@@ -646,11 +650,11 @@ function makeFsStub() {
   };
 }
 
-check(`opfs: web/opfs.js mirror is FS_OP_VERSION ${FS_OP_VERSION} with 8 ops / 9 statuses (T1)`, () =>
-  FS_OP_VERSION === 1 &&
-  Object.keys(FS_OP).length === 8 &&
+check(`opfs: web/opfs.js mirror is FS_OP_VERSION ${FS_OP_VERSION} with 9 ops / 9 statuses (T1)`, () =>
+  FS_OP_VERSION === 2 &&
+  Object.keys(FS_OP).length === 9 &&
   Object.keys(FS_STATUS).length === 9 &&
-  FS_OP.stat === 1 && FS_OP.truncate === 8 &&
+  FS_OP.stat === 1 && FS_OP.truncate === 8 && FS_OP.close === 9 &&
   FS_STATUS.ok === 0 && FS_STATUS.io === 8);
 
 {

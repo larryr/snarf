@@ -105,6 +105,10 @@ pub const DevOpfs = struct {
     /// Per-PATH `stat` memo, keyed by the path's qid hash and so shared across
     /// every fid that names the file (14b review; 16b item 3). See `statOf`.
     stat_memo: std.AutoHashMapUnmanaged(u64, FsRecord.StatReply) = .empty,
+    /// Fids with a write sequence outstanding: the browser is holding a
+    /// `createWritable` stream open for their path, and their clunk is what
+    /// tells it to close (record version 2; 16b item 4). See `clunkOp`.
+    writers: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// Scratch for building one child path (never held across a call).
     path_buf: [tree.max_path]u8 = undefined,
     /// Scratch the outgoing record is encoded into; grows to the largest
@@ -122,6 +126,7 @@ pub const DevOpfs = struct {
         while (it.next()) |v| self.allocator.free(v.*);
         self.listings.deinit(self.allocator);
         self.stat_memo.deinit(self.allocator);
+        self.writers.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.paths.deinit(self.allocator);
         self.rec_buf.deinit(self.allocator);
@@ -425,10 +430,42 @@ pub const DevOpfs = struct {
         self.forgetStat(path);
     }
 
+    /// Note that `fid` has written: the browser is now holding a writable
+    /// stream open for its path (record version 2; 16b item 4). A failure to
+    /// record it costs a stream that is closed by the backend's own guard
+    /// rather than by us, so it is swallowed.
+    pub fn markWriter(self: *Self, fid: u32) void {
+        self.writers.put(self.allocator, fid, {}) catch {};
+    }
+
+    /// `5/clunk`. Besides forgetting the fid's slots and listing, this is where
+    /// a write sequence ENDS: the backend has kept one
+    /// `FileSystemWritableFileStream` open for the path since the first Twrite
+    /// (a stream writes to a swap file until closed, so opening one per write
+    /// cost three platform round trips per Twrite), and `close` is what commits
+    /// it. FIRE AND FORGET: the record goes out under ticket 0, which matches
+    /// no slot, so the completion is dropped exactly as a completion for an
+    /// already-clunked fid is (R-P14b-3). `Ops.clunk` returns void and may not
+    /// park, so there is nothing to wait for — and nothing needs to: the
+    /// backend also closes the stream before any operation that must see the
+    /// file's committed contents, making `close` an optimisation, not a fence.
     fn clunkOp(ctx: *anyopaque, _: *Server, fid: *Fid) void {
         const self = devOf(ctx);
+        if (self.writers.remove(fid.fid)) {
+            if (self.paths.get(fid.qid.path)) |path| self.issueUnwatched(.{ .op = .close, .path = path });
+        }
         self.pending.dropFid(self.allocator, fid.fid);
         self.dropListing(fid.fid);
+    }
+
+    /// Send one record with no slot and no ticket anybody waits on. Silent on
+    /// an encoding failure: the caller has no way to report one and no reply to
+    /// lose.
+    fn issueUnwatched(self: *Self, rec: FsRecord) void {
+        const n = rec.encodedSize();
+        self.rec_buf.resize(self.allocator, n) catch return;
+        _ = rec.encode(self.rec_buf.items) catch return;
+        self.req.issue(self.req.ctx, 0, self.rec_buf.items);
     }
 };
 
@@ -952,4 +989,43 @@ test "devopfs: the per-path stat memo is shared across fids and dropped by a wri
     try testing.expect(st2.body == .rstat);
     try testing.expectEqual(@as(u64, 5), (try Stat.decode(st2.body.rstat.stat)).length);
     try testing.expectEqual(FsRecord.Op.stat, (try FsRecord.decode(sc.log.items[sc.log.items.len - 1])).op);
+}
+
+test "devopfs: a write sequence is closed once, at the clunk of the fid that wrote (16b item 4)" {
+    const a = testing.allocator;
+    var sc = Script{ .alloc = a };
+    defer sc.deinit();
+    const h = try Wire.create(a, sc.requester());
+    defer h.destroy();
+    sc.dev = &h.dev;
+    try h.connect();
+
+    var sb: [FsRecord.StatReply.len]u8 = undefined;
+    (FsRecord.StatReply{ .is_dir = false, .size = 0, .mtime_ms = 1 }).encode(&sb);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twalk = msg.Body.Twalk.init(0, 1, &.{"f"}) } }, &.{.{ .status = .ok, .payload = &sb }})).body == .rwalk);
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .topen = .{ .fid = 1, .mode = msg.OWRITE } } }, &.{})).body == .ropen);
+
+    // Two sequential writes: two `write` records, no `close` between them —
+    // the browser keeps ONE createWritable open across the sequence.
+    var wc: [4]u8 = undefined;
+    std.mem.writeInt(u32, &wc, 2, .little);
+    for (0..2) |i| {
+        const w = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .twrite = .{ .fid = 1, .offset = @intCast(i * 2), .data = "hi" } } }, &.{.{ .status = .ok, .payload = &wc }});
+        try testing.expect(w.body == .rwrite);
+    }
+    for (sc.log.items) |r| try testing.expect((try FsRecord.decode(r)).op != .close);
+
+    // The clunk ends it: exactly one `close`, naming the path, fire and forget
+    // under ticket 0 (no slot, so `inflight` does not grow).
+    try testing.expect((try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tclunk = .{ .fid = 1 } } }, &.{})).body == .rclunk);
+    var closes: usize = 0;
+    for (sc.log.items, sc.tickets.items) |r, t| {
+        const rec = try FsRecord.decode(r);
+        if (rec.op != .close) continue;
+        closes += 1;
+        try testing.expectEqualStrings("/f", rec.path);
+        try testing.expectEqual(@as(u32, 0), t);
+    }
+    try testing.expectEqual(@as(usize, 1), closes);
+    try testing.expectEqual(@as(usize, 0), h.dev.inflight());
 }

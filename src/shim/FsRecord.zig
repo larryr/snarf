@@ -6,7 +6,7 @@
 //! `fsOp` import, and the small COMPLETION payloads the shim hands back through
 //! the `fsPush` export. Everything is little-endian, like 9P itself.
 //!
-//! Wire layout of a request (`fs_op_version` 1):
+//! Wire layout of a request (`fs_op_version` 2):
 //!
 //!     op[1] pathlen[2] path[pathlen] arg0[8] arg1[4] payloadlen[4] payload[…]
 //!
@@ -30,7 +30,17 @@
 //!     create_dir  (6) — as create_file.        reply: empty
 //!     remove      (7) — no args.               reply: empty
 //!     truncate    (8) — arg0=new length.       reply: empty
+//!     close       (9) — no args.               reply: empty
 //!
+//! `close` (version 2) is the counterpart of the browser's `createWritable`.
+//! A `FileSystemWritableFileStream` writes to a swap file until it is closed,
+//! so the v1 backend had to open and close one PER WRITE — three platform
+//! round trips for every 9P Twrite. Since v2 the backend keeps the stream open
+//! across a write sequence on one path and closes it when the module says so:
+//! `DevOpfs.clunkOp` issues `close` for any fid that wrote. It is a HINT, not
+//! a fence — the backend also closes the stream before any op that must see
+//! the file's committed contents — so a `close` that never arrives (a session
+//! that ends mid-write) costs nothing but a late commit.
 //! Every completion also carries a `Status`; a non-`ok` status means the
 //! payload is empty and the device turns the code into an Rerror (the mapping
 //! lives in `dev/opfs.zig`, which is the only place that may name `ninep`).
@@ -39,10 +49,11 @@
 //! and `EventKind` do:
 //!
 //!     const FS_OP = { stat:1, list:2, read:3, write:4,
-//!                     create_file:5, create_dir:6, remove:7, truncate:8 };
+//!                     create_file:5, create_dir:6, remove:7, truncate:8,
+//!                     close:9 };
 //!     const FS_STATUS = { ok:0, not_found:1, exists:2, not_dir:3, is_dir:4,
 //!                         permission:5, quota:6, not_empty:7, io:8 };
-//!     const FS_OP_VERSION = 1;
+//!     const FS_OP_VERSION = 2;
 //!
 //! Imports: `std` only (S-07 §6) — this file is part of the `shim` module and
 //! must stay nameable from a native test root.
@@ -52,7 +63,10 @@ const FsRecord = @This();
 
 /// The record format generation. Bumped if the layout above ever changes;
 /// re-exported as `abi.fs_op_version` and mirrored in JS as `FS_OP_VERSION`.
-pub const version: u32 = 1;
+/// 2 adds `Op.close` (16b item 4); the byte layout is untouched, so a v1
+/// backend still decodes every v1 op — it would simply answer `io` to the new
+/// one, which is exactly what the module's fire-and-forget `close` tolerates.
+pub const version: u32 = 2;
 
 /// What the module is asking the browser to do.
 pub const Op = enum(u8) {
@@ -64,6 +78,8 @@ pub const Op = enum(u8) {
     create_dir = 6,
     remove = 7,
     truncate = 8,
+    /// Version 2. [see the header: the `createWritable` lifetime]
+    close = 9,
 };
 
 /// How it went. `ok` alone means the payload is meaningful; every other code
@@ -126,7 +142,7 @@ pub fn encode(self: *const FsRecord, buf: []u8) error{ ShortBuffer, BadRecord }!
 pub fn decode(buf: []const u8) error{BadRecord}!FsRecord {
     if (buf.len < fixed_len) return error.BadRecord;
     const op: Op = switch (buf[0]) {
-        1...8 => @enumFromInt(buf[0]), // range-checked (no std.meta.intToEnum in 0.16)
+        1...9 => @enumFromInt(buf[0]), // range-checked (no std.meta.intToEnum in 0.16)
         else => return error.BadRecord,
     };
     const pathlen = std.mem.readInt(u16, buf[1..3], .little);
@@ -231,6 +247,7 @@ test "FsRecord: round-trips every op (T1)" {
         .{ .op = .create_dir, .path = "/d/sub", .arg1 = 0o755 },
         .{ .op = .remove, .path = "/d/sub" },
         .{ .op = .truncate, .path = "/f", .arg0 = 0 },
+        .{ .op = .close, .path = "/f" }, // version 2
     };
     for (cases) |c| {
         const n = try c.encode(&buf);
@@ -262,7 +279,9 @@ test "FsRecord: empty payload, long path, short buffer, bad op (T1)" {
     // Unknown op byte, truncation, and trailing slop are all BadRecord.
     var buf: [64]u8 = undefined;
     const m = try (FsRecord{ .op = .stat, .path = "/a" }).encode(&buf);
-    buf[0] = 9;
+    buf[0] = 10; // one past `close`, the highest op in version 2
+    try testing.expectError(error.BadRecord, decode(buf[0..m]));
+    buf[0] = 0;
     try testing.expectError(error.BadRecord, decode(buf[0..m]));
     buf[0] = 1;
     try testing.expectError(error.BadRecord, decode(buf[0 .. m - 1]));
@@ -298,7 +317,7 @@ test "FsRecord: stat/list/write reply payloads" {
 }
 
 test "FsRecord: op and status integers match the JS mirror (T1)" {
-    try testing.expectEqual(@as(u32, 1), version);
+    try testing.expectEqual(@as(u32, 2), version);
     try testing.expectEqual(@as(u8, 1), @intFromEnum(Op.stat));
     try testing.expectEqual(@as(u8, 2), @intFromEnum(Op.list));
     try testing.expectEqual(@as(u8, 3), @intFromEnum(Op.read));
@@ -307,6 +326,7 @@ test "FsRecord: op and status integers match the JS mirror (T1)" {
     try testing.expectEqual(@as(u8, 6), @intFromEnum(Op.create_dir));
     try testing.expectEqual(@as(u8, 7), @intFromEnum(Op.remove));
     try testing.expectEqual(@as(u8, 8), @intFromEnum(Op.truncate));
+    try testing.expectEqual(@as(u8, 9), @intFromEnum(Op.close)); // version 2
     try testing.expectEqual(@as(u8, 0), @intFromEnum(Status.ok));
     try testing.expectEqual(@as(u8, 1), @intFromEnum(Status.not_found));
     try testing.expectEqual(@as(u8, 2), @intFromEnum(Status.exists));

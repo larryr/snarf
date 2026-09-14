@@ -191,7 +191,7 @@ test "abi version is present and bumped to 6" {
 
 test "abi: fs_op_version and the FsRecord re-exports are the ABI's" {
     const t = @import("std").testing;
-    try t.expectEqual(@as(u32, 1), fs_op_version);
+    try t.expectEqual(@as(u32, 2), fs_op_version);
     try t.expectEqual(FsRecord.Op.stat, FsOp.stat);
     try t.expectEqual(FsRecord.Status.ok, FsStatus.ok);
 }

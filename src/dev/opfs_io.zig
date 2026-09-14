@@ -60,5 +60,6 @@ pub fn write(self: *Self, fid: *Fid, offset: u64, data: []const u8) OpBlockError
     }, offset);
     if (c.status != .ok) return tree.statusError(c.status);
     self.forgetStat(path); // the length and mtime just changed (16b item 3)
+    self.markWriter(fid.fid); // the fid's clunk owes the backend a `close` (16b item 4)
     return @min(data.len, FsRecord.decodeWriteCount(c.payload));
 }
