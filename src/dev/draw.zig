@@ -27,6 +27,11 @@ const msg = ninep.msg;
 /// The fixed size of a draw connection line (G8, devdraw.c:1197-1204).
 pub const conn_line_len: usize = 144;
 
+/// The size of one `refresh` exposure record: a bare rectangle, four
+/// little-endian i32 (S-03 §5; see `readOp`'s `.refresh` arm for why it is not
+/// the kernel's 5×4 big-endian `id`+rect record).
+pub const refresh_rec_len: usize = 16;
+
 /// Draw connection number. The kernel hands out `++sdraw.clientid` per client
 /// (devdraw.c:805, G3); Phase 2 serves exactly one connection, numbered 1.
 const conn_number: u64 = 1;
@@ -86,11 +91,32 @@ pub const DevDraw = struct {
     /// 'i' promotes it to a font (devdraw.c:1679-1684); 'f'/reset/deinit free
     /// the entry and its owned `chars` slice (leak-checked by the tests).
     fonts: std.AutoHashMapUnmanaged(u32, FontRec) = .empty,
+    /// The exposure rectangle a `refresh` read will hand back, or null when
+    /// nothing is pending (S-03 §5). Set by `noteResize`, cleared by the read
+    /// that reports it and by a connection reset.
+    pending_refresh: ?draw_backend.Rect = null,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, backend: draw_backend.Backend) Self {
         return .{ .allocator = allocator, .backend = backend };
+    }
+
+    /// The display image now covers `r` — queue it as the exposure rectangle for
+    /// the connection's `refresh` file (S-03 §5, the device half of R-GFX-05).
+    /// Called right after the BACKEND has been resized (the entry point does
+    /// `canvas.resize(w,h)` then `noteResize(new screen rect)`), so a `ctl` read
+    /// taken any time after this already reports the new display rect: `connLine`
+    /// re-reads `backend.displayInfo()` on every read and caches nothing —
+    /// VERIFIED at connLine below, and in `HeadlessBackend.displayInfoImpl`,
+    /// which derives its rect from the live `width`/`height`.
+    ///
+    /// Only the newest rectangle is kept. The kernel queues a `Refresh` list per
+    /// client and coalesces nothing (devdraw.c:344-367); a single pending rect is
+    /// enough here because the only producer is a whole-screen resize, and the
+    /// newest one subsumes every older one.
+    pub fn noteResize(self: *Self, r: draw_backend.Rect) void {
+        self.pending_refresh = r;
     }
 
     pub fn deinit(self: *Self) void {
@@ -339,6 +365,7 @@ pub const DevDraw = struct {
         self.allocated.clearRetainingCapacity();
         self.freeAllFonts();
         self.busy = false;
+        self.pending_refresh = null; // exposure is per-connection state
     }
 
     // -- Ops vtable (exact phase-1 signatures, R8) ---------------------------
@@ -425,7 +452,30 @@ pub const DevDraw = struct {
                 return conn_line_len;
             },
             .data => return error.BadDraw, // data is write-only (devdraw.c:1450 Qdata)
-            else => return 0, // refresh + directories: empty
+            // The exposure rectangle, reported exactly ONCE per `noteResize`
+            // (S-03 §5). NON-BLOCKING: nothing pending reads 0 bytes instead of
+            // parking. The kernel sleeps on `cl->refrend` until a rectangle
+            // exists (devdraw.c:1237-1248); a parked 9P read needs the ticket /
+            // parked-ops machinery that is phase 13's work (R-9P-13), so until
+            // then a poller reads empty and tries again — the editor path does
+            // not use this file at all (R-P12c-1).
+            //
+            // WIRE FORMAT DIVERGENCE, deliberate (contract §3d): 16 bytes,
+            // `x0 y0 x1 y1` as little-endian i32, matching the rectangle encoding
+            // every verb in this file already uses (G1, `rdRect`). The kernel
+            // emits 5×4 BIG-endian longs per record — `id` then the rect
+            // (devdraw.c:1250-1259) — but our refresh has exactly one producer
+            // and it always describes the display image (id 0), so the id field
+            // would be a constant, and BPLONG byte order contradicts G1.
+            .refresh => {
+                if (offset != 0) return 0; // the pending rect reads at 0 or not at all
+                const r = self.pending_refresh orelse return 0;
+                if (buf.len < refresh_rec_len) return error.ShortDraw; // devdraw.c:1235 n<5*4 ⇒ Ebadarg
+                putRect(buf, 0, r);
+                self.pending_refresh = null;
+                return refresh_rec_len;
+            },
+            else => return 0, // directories: empty
         }
     }
 
@@ -503,6 +553,15 @@ fn rdRect(a: []const u8, off: usize) draw_backend.Rect {
 
 fn rdPoint(a: []const u8, off: usize) draw_backend.Point {
     return .{ .x = rdI32(a, off + 0), .y = rdI32(a, off + 4) };
+}
+
+/// The inverse of `rdRect`: four little-endian i32 at `off` (G1). The only
+/// rectangle this device ever writes is the `refresh` exposure record.
+fn putRect(a: []u8, off: usize, r: draw_backend.Rect) void {
+    std.mem.writeInt(i32, a[off + 0 ..][0..4], r.min.x, .little);
+    std.mem.writeInt(i32, a[off + 4 ..][0..4], r.min.y, .little);
+    std.mem.writeInt(i32, a[off + 8 ..][0..4], r.max.x, .little);
+    std.mem.writeInt(i32, a[off + 12 ..][0..4], r.max.y, .little);
 }
 
 /// Chan-code → its canonical string (chantostr, chan.c). Phase 2 only ever
@@ -1303,4 +1362,90 @@ test "devdraw: clunk resets fonts" {
     const r2 = try h.write(4, &w1);
     try testing.expect(r2.body == .rwrite);
     try testing.expectEqual(@as(usize, 1), h.dd.fonts.count());
+}
+
+// ===========================================================================
+// Phase 12c — resize (R-GFX-05, contract §3d). Deliberately still NO
+// dependency on src/draw (G7): the ctl line is checked field-by-field here,
+// the way a real client (`Display.parseConnInfo`) would decode it, without
+// importing that module.
+// ===========================================================================
+
+/// Extract field `idx` (0-based) of a 144-byte connection line: 11 columns +
+/// one trailing space, so field `idx` starts at `idx*12` (devdraw.c:1197-1204).
+fn fieldAt(line: []const u8, idx: usize) []const u8 {
+    const start = idx * 12;
+    return std.mem.trim(u8, line[start..][0..11], " ");
+}
+
+fn parseFieldInt(line: []const u8, idx: usize) !i64 {
+    return std.fmt.parseInt(i64, fieldAt(line, idx), 10);
+}
+
+test "devdraw: ctl reflects a backend resize after noteResize (T3)" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect();
+
+    try h.hb.resize(800, 600);
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 800, 600));
+
+    const r1 = try h.read(1, 0, 256);
+    try testing.expect(r1.body == .rread);
+    const line = r1.body.rread.data;
+
+    // Fields 4-7: display image rect. Fields 8-11: clipr. (ground-truth table)
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 4));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 5));
+    try testing.expectEqual(@as(i64, 800), try parseFieldInt(line, 6));
+    try testing.expectEqual(@as(i64, 600), try parseFieldInt(line, 7));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 8));
+    try testing.expectEqual(@as(i64, 0), try parseFieldInt(line, 9));
+    try testing.expectEqual(@as(i64, 800), try parseFieldInt(line, 10));
+    try testing.expectEqual(@as(i64, 600), try parseFieldInt(line, 11));
+
+    // Idempotent, like the un-resized case: a second read is unchanged.
+    const r2 = try h.read(1, 0, 256);
+    try testing.expectEqualStrings(line, r2.body.rread.data);
+}
+
+test "devdraw: refresh reports the pending rect exactly once (T4)" {
+    const h = try Harness.create(testing.allocator, 640, 480);
+    defer h.destroy();
+    try h.connect(); // ctl on fid 1, connection busy
+
+    // Walk root → "1" → "refresh" (fid 2), open OREAD.
+    const w = try h.walk(0, 2, &.{ "1", "refresh" });
+    try testing.expect(w.body == .rwalk);
+    const o = try h.open(2, msg.OREAD);
+    try testing.expect(o.body == .ropen);
+
+    // Nothing pending: 0 bytes, with or without a resize having happened.
+    const r0 = try h.read(2, 0, 256);
+    try testing.expect(r0.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r0.body.rread.data.len);
+
+    try h.hb.resize(800, 600);
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 800, 600));
+
+    // First read after noteResize: exactly refresh_rec_len bytes, the rect.
+    const r1 = try h.read(2, 0, 256);
+    try testing.expect(r1.body == .rread);
+    try testing.expectEqual(@as(usize, refresh_rec_len), r1.body.rread.data.len);
+    const data = r1.body.rread.data;
+    try testing.expectEqual(@as(i32, 0), std.mem.readInt(i32, data[0..4], .little));
+    try testing.expectEqual(@as(i32, 0), std.mem.readInt(i32, data[4..8], .little));
+    try testing.expectEqual(@as(i32, 800), std.mem.readInt(i32, data[8..12], .little));
+    try testing.expectEqual(@as(i32, 600), std.mem.readInt(i32, data[12..16], .little));
+
+    // Reported exactly once: reading again with nothing new pending ⇒ 0 bytes.
+    const r2 = try h.read(2, 0, 256);
+    try testing.expect(r2.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r2.body.rread.data.len);
+
+    // A read at a non-zero offset never returns the rect, pending or not.
+    h.dd.noteResize(draw_backend.Rect.init(0, 0, 1024, 768));
+    const r3 = try h.read(2, 8, 256);
+    try testing.expect(r3.body == .rread);
+    try testing.expectEqual(@as(usize, 0), r3.body.rread.data.len);
 }

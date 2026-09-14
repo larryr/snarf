@@ -6,8 +6,9 @@
 //
 // It instantiates zig-out/www/snarf.wasm with a headless mirror of the shim env
 // (R-P5-7: env.consoleLog(ptr,len) + env.blit(ptr,fbW,fbH,x,y,w,h)), drives the
-// init/tick/wake lifecycle, and asserts the boot rendered the phase-4 demo scene
-// (R-P5-8) all the way to a blit — reading pixels straight out of wasm memory.
+// init(w,h)/tick/wake lifecycle, and asserts the boot rendered the phase-4 demo
+// scene (R-P5-8) all the way to a blit — reading pixels straight out of wasm
+// memory — then that a resize event re-sizes the display and repaints it whole.
 // Any env import the module needs beyond those two is auto-stubbed (warn+record)
 // so a link failure surfaces as a readable message, not a cryptic LinkError.
 //
@@ -21,9 +22,17 @@ import { spawn } from "node:child_process";
 
 const WASM_PATH = fileURLToPath(new URL("../zig-out/www/snarf.wasm", import.meta.url));
 const ORIGIN_BIN = fileURLToPath(new URL("../zig-out/bin/snarf-origin", import.meta.url));
-const EXPECT_ABI = 4; // R-P12-2: 3 -> 4 (ws import surface).
-const FB_W = 640;
-const FB_H = 480; // R-P5-3.
+const EXPECT_ABI = 5; // R-GFX-05: 4 -> 5 (init(w,h) + EventKind.resize).
+// The boot display size, passed to init(w, h). Deliberately NOT 640×480: the
+// module carries no size of its own any more (the R-P5-3 constants are gone), so
+// booting at 800×600 proves the caller's numbers are honoured. The frozen
+// acceptance goldens are unaffected — they build their own 640×480 headless
+// backends in src/accept.zig (R-P12c-3).
+const FB_W = 800;
+const FB_H = 600;
+// Where the resize event (EventKind.resize = 8) moves the display to.
+const RESIZE_W = 1024;
+const RESIZE_H = 768;
 
 // ---- recording env -------------------------------------------------------
 
@@ -116,7 +125,7 @@ check(`abi_version() === ${EXPECT_ABI}`, () => abi === EXPECT_ABI);
 let initTrapped = false;
 const logsBeforeInit = logs.length;
 try {
-  ex.init();
+  ex.init(FB_W, FB_H); // ABI v5: the display size comes from the caller.
 } catch (e) {
   initTrapped = true;
   console.error("init() trapped:", e);
@@ -129,7 +138,13 @@ check("init() logged no panic/failure", () =>
 check("blit called >= 1", () => (blits.length >= 1 ? true : "pending"));
 
 const last = blits[blits.length - 1];
-check("last blit fbW===640 && fbH===480", () =>
+// The size handed to init() is the size that reaches the pixel path (R-GFX-05):
+// the FIRST blit already reports it, so nothing downstream carries a size of its
+// own.
+check(`first blit fbW===${FB_W} && fbH===${FB_H}`, () =>
+  blits[0] ? blits[0].fbW === FB_W && blits[0].fbH === FB_H : "pending");
+
+check(`last blit fbW===${FB_W} && fbH===${FB_H}`, () =>
   last ? last.fbW === FB_W && last.fbH === FB_H : "pending");
 
 check("dirty rect within framebuffer bounds", () =>
@@ -141,7 +156,7 @@ check("dirty rect within framebuffer bounds", () =>
 // display (empty buffer) — the initial damage covers the full surface.
 check("dirty rect covers the full display", () =>
   last
-    ? last.x === 0 && last.y === 0 && last.w === 640 && last.h === 480
+    ? last.x === 0 && last.y === 0 && last.w === FB_W && last.h === FB_H
     : "pending");
 
 check("blit ptr + fbW*fbH*4 <= memory size", () =>
@@ -175,6 +190,37 @@ check("typed rune added ink somewhere in the body region", () => {
     }
   }
   return false;
+});
+
+// R-GFX-05: a resize event re-sizes the framebuffer and repaints EVERYTHING —
+// the browser clears the canvas when the backing store changes, so a partial
+// damage rect would leave the rest of the window blank.
+const blitsBeforeResize = blits.length;
+let resizeTrapped = false;
+try {
+  ex.pushEvent(8 /* resize */, RESIZE_W, RESIZE_H, 0, 1100);
+  ex.tick(1116);
+} catch (e) {
+  resizeTrapped = true;
+  console.error("resize event trapped:", e);
+}
+check("resize event handled without trap", () => !resizeTrapped);
+
+const afterResize = blits.slice(blitsBeforeResize);
+check(`resize produced a blit at ${RESIZE_W}x${RESIZE_H}`, () =>
+  afterResize.some((b) => b.fbW === RESIZE_W && b.fbH === RESIZE_H));
+
+check("resize blit covers the full new display", () => {
+  const b = afterResize.find((x) => x.fbW === RESIZE_W && x.fbH === RESIZE_H);
+  if (!b) return false;
+  return b.x === 0 && b.y === 0 && b.w === RESIZE_W && b.h === RESIZE_H;
+});
+
+check("resized display still draws the row-tag pale blue at (0,0)", () => {
+  const b = afterResize.find((x) => x.fbW === RESIZE_W && x.fbH === RESIZE_H);
+  if (!b) return false;
+  const p = pixelAt(b.ptr, b.fbW, 0, 0);
+  return p.r === 234 && p.g === 255 && p.b === 255;
 });
 
 let pumpTrapped = false;
@@ -297,7 +343,7 @@ if (!originUp) {
   const inst2 = await WebAssembly.instantiate(module, buildImports(module, wsEnv));
   ex2 = inst2.exports;
   memory = ex2.memory; // decode()/pixelAt() now read instance 2.
-  ex2.init();
+  ex2.init(FB_W, FB_H);
 
   // Pump: the socket connects on the JS event loop, so alternate ticks/sleeps.
   let now = 100;

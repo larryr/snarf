@@ -1013,3 +1013,148 @@ test "phase-10: Edit via B2 scene — s-global, one undo, live tag" {
     // Undo appearing, single-step whole-transaction undo. NEW freeze (R-P2-7).
     try testing.expectEqual(@as(u64, 0xe9014ecfa82cbc4b), hb.hash());
 }
+
+// ===========================================================================
+// Phase 12c — the display fills the browser window and follows resizes
+// (R-GFX-05). T5 and T10 both need the client (`draw.Display`) and the device
+// (`dev.draw.DevDraw`) live over the same pipe, which only this file's module
+// graph provides (R-P2-2) — `src/draw/Display.zig`'s own test module has no
+// `dev` import (G7 independence, deliberately preserved), so these scenes live
+// here rather than colocated in `draw/Display.zig` as the contract's summary
+// table names it.
+// ===========================================================================
+
+test "phase-12c: getWindow rebinds the display image after noteResize (T5)" {
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+
+    // Sanity: the client's initial view matches the 640x480 backend.
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, 640, 480), d.image.r);
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, 640, 480), d.image.clipr);
+
+    try hb.resize(800, 600);
+    dd.noteResize(dev.draw_backend.Rect.init(0, 0, 800, 600));
+
+    const clipr = try d.getWindow();
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, 800, 600), clipr);
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, 800, 600), d.image.r);
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, 800, 600), d.image.clipr);
+}
+
+/// Geometry-only tiling check shared by the T10 scene, before and after a
+/// resize: the row spans the whole screen, its one column spans the row's
+/// width and starts exactly one border below the row tag, and the window
+/// spans the column's width and lies within it. `tree` is `*core.boot.Tree`
+/// (passed as `anytype` so this helper needs no top-level `core` import,
+/// matching this file's per-test `@import("core")` convention).
+fn expectTiling(tree: anytype, border: i32, w: i32, h: i32) !void {
+    try testing.expectEqual(draw.proto.Rect.make(0, 0, w, h), tree.row.r);
+    try testing.expectEqual(@as(usize, 1), tree.row.col.items.len);
+    const c = tree.row.col.items[0];
+    try testing.expectEqual(@as(i32, 0), c.r.min.x);
+    try testing.expectEqual(w, c.r.max.x);
+    // Adjacent edge: the column starts exactly one border below the row tag
+    // (Row.resize hands every column the same `rr.min.y`, `rows.c:119-127`).
+    try testing.expectEqual(tree.row.tag.fr.r.max.y + border, c.r.min.y);
+    try testing.expect(c.r.max.y <= h);
+
+    try testing.expectEqual(@as(usize, 1), c.w.items.len);
+    const win = c.w.items[0];
+    // The window spans the column's width exactly (Column.resize never
+    // narrows a window in x, cols.c:252-269).
+    try testing.expectEqual(c.r.min.x, win.r.min.x);
+    try testing.expectEqual(c.r.max.x, win.r.max.x);
+    try testing.expect(win.r.min.y >= c.tag.fr.r.max.y + border);
+    try testing.expect(win.r.max.y <= h);
+}
+
+test "phase-12c: resize scene — grow then shrink keeps the tiling and the text (T10)" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "scratch",
+        .body = "hello, acme\n",
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    try ed.frameEnd(d);
+
+    try expectTiling(&tree, core.Chrome.border, 640, 480);
+
+    const w = tree.row.col.items[0].w.items[0];
+
+    // Grow: the R-P12c-1 flow — backend resize, noteResize, getWindow, then
+    // Tree.resize — driven directly (no shim/main_wasm in this test root).
+    try hb.resize(900, 700);
+    dd.noteResize(dev.draw_backend.Rect.init(0, 0, 900, 700));
+    const r1 = try d.getWindow();
+    try tree.resize(r1);
+    ed.needs_flush = true;
+    try ed.frameEnd(d);
+    try expectTiling(&tree, core.Chrome.border, 900, 700);
+
+    // Type a rune with the pointer in the body — the tree is still live and
+    // routes input after growing.
+    const p = w.body.fr.r;
+    ed.mouse_pt = .{ .x = p.min.x + 5, .y = p.min.y + 5 };
+    try ed.handleKey('Z');
+    try ed.frameEnd(d);
+    var rbuf: [256]u8 = undefined;
+    try testing.expect(std.mem.indexOfScalar(
+        u8,
+        w.body.file.buffer.read(0, w.body.file.buffer.len(), &rbuf),
+        'Z',
+    ) != null);
+
+    // Shrink back to the original size.
+    try hb.resize(640, 480);
+    dd.noteResize(dev.draw_backend.Rect.init(0, 0, 640, 480));
+    const r2 = try d.getWindow();
+    try tree.resize(r2);
+    ed.needs_flush = true;
+    try ed.frameEnd(d);
+    try expectTiling(&tree, core.Chrome.border, 640, 480);
+
+    // The typed rune survives both resizes.
+    try testing.expect(std.mem.indexOfScalar(
+        u8,
+        w.body.file.buffer.read(0, w.body.file.buffer.len(), &rbuf),
+        'Z',
+    ) != null);
+}

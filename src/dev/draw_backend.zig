@@ -428,6 +428,37 @@ pub const HeadlessBackend = struct {
         self.* = undefined;
     }
 
+    /// Reallocate the framebuffer to `w×h` (zeroed), reset `display_clipr` to the
+    /// new bounds, and mark the WHOLE screen dirty so the next flush repaints
+    /// everything — in the browser `canvas.width = …` CLEARS the canvas, so the
+    /// old presented pixels are gone and a partial dirty rect would leave the
+    /// rest blank (R-GFX-05, S-03 §5).
+    ///
+    /// Nothing else is dropped: the `images` map — every allocated image, font
+    /// cache included — survives verbatim, exactly as the kernel's reattach keeps
+    /// a client's images across a window resize (devdraw.c drawrefreshscreen has
+    /// no free path; only a client teardown frees ids). VERIFIED here rather than
+    /// assumed: image id 0 (`display_id`) has NO entry in `images` — `dstSurface`,
+    /// `view` and `imageInfoImpl` each special-case it to `self.fb` + `bounds()`
+    /// + `display_clipr` — so the display image is the framebuffer itself and is
+    /// re-described, not re-allocated, by this call. `displayInfoImpl` likewise
+    /// derives its rect from `bounds()` on every call and caches nothing, so the
+    /// `ctl` line devdraw composes from it reports the new size immediately.
+    ///
+    /// The old framebuffer is freed only after the new one is in hand: an OOM
+    /// leaves the backend exactly as it was.
+    pub fn resize(self: *Self, w: u32, h: u32) Error!void {
+        if (w == 0 or h == 0) return Error.BadRect; // a zero-area display is not a display
+        const fb = try self.allocator.alloc(u8, @as(usize, w) * @as(usize, h) * 4);
+        @memset(fb, 0);
+        self.allocator.free(self.fb);
+        self.fb = fb;
+        self.width = w;
+        self.height = h;
+        self.display_clipr = self.bounds();
+        self.dirty = self.bounds();
+    }
+
     fn bounds(self: *const Self) Rect {
         return Rect.init(0, 0, @intCast(self.width), @intCast(self.height));
     }
@@ -1224,4 +1255,54 @@ test "headless: setClipr and imageInfo" {
 
     // Unknown id ⇒ UnknownImage.
     try testing.expectError(Error.UnknownImage, be.imageInfo(999));
+}
+
+test "headless: resize grows and shrinks the framebuffer (T1)" {
+    var hb = try HeadlessBackend.init(testing.allocator, 640, 480);
+    defer hb.deinit();
+
+    try hb.resize(800, 600);
+    try testing.expectEqual(@as(usize, 800 * 600 * 4), hb.fb.len);
+    for (hb.fb) |b| try testing.expectEqual(@as(u8, 0), b);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), hb.display_clipr);
+    try testing.expectEqual(@as(u32, 800), hb.width);
+    try testing.expectEqual(@as(u32, 600), hb.height);
+    const info = hb.backend().displayInfo();
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), info.r);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), info.clipr);
+    try testing.expect(hb.dirty != null);
+    try testing.expectEqual(Rect.init(0, 0, 800, 600), hb.dirty.?);
+
+    // Shrink.
+    try hb.resize(320, 200);
+    try testing.expectEqual(@as(usize, 320 * 200 * 4), hb.fb.len);
+    for (hb.fb) |b| try testing.expectEqual(@as(u8, 0), b);
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), hb.display_clipr);
+    const info2 = hb.backend().displayInfo();
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), info2.r);
+    try testing.expect(hb.dirty != null);
+    try testing.expectEqual(Rect.init(0, 0, 320, 200), hb.dirty.?);
+
+    // Zero on either axis is rejected (contract §3c / harness note).
+    try testing.expectError(Error.BadRect, hb.resize(0, 480));
+    try testing.expectError(Error.BadRect, hb.resize(640, 0));
+}
+
+test "headless: images survive a resize and stay drawable (T2)" {
+    var hb = try HeadlessBackend.init(testing.allocator, FIX_W, FIX_H);
+    defer hb.deinit();
+    const be = hb.backend();
+
+    try allocWhiteMask(be, 1);
+    try allocSolid(be, 5, BLUE, RGBA32);
+
+    try hb.resize(96, 72);
+
+    // The image allocated before the resize is still present and drawable —
+    // no ImageExists/UnknownImage, and the pixels land where expected.
+    try be.draw(display_id, 5, 1, Rect.init(0, 0, 10, 10), .{}, .{});
+    try testing.expectEqual(@as(u32, 0x0000FFFF), hb.pixelAt(0, 0));
+    try testing.expectEqual(@as(u32, 0x0000FFFF), hb.pixelAt(9, 9));
+    // Outside the drawn rect but inside the new, larger bounds: untouched.
+    try testing.expectEqual(@as(u32, 0x00000000), hb.pixelAt(50, 50));
 }

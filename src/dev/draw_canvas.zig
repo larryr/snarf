@@ -48,6 +48,15 @@ pub const CanvasBackend = struct {
         self.headless.deinit();
     }
 
+    /// Follow the canvas to `w×h` (R-GFX-05). One-line delegation like every
+    /// other op — the wrapped compositor owns the framebuffer, and it marks the
+    /// whole new screen dirty, which is exactly what this side needs: the browser
+    /// cleared the canvas when the shim assigned `canvas.width`, so the next
+    /// `flush` must blit the entire surface, not an incremental damage rect.
+    pub fn resize(self: *Self, w: u32, h: u32) Error!void {
+        return self.headless.resize(w, h);
+    }
+
     /// Wrap as a `Backend`. `self` must stay pinned for the vtable's lifetime.
     pub fn backend(self: *Self) Backend {
         return .{ .ctx = self, .vtable = &vtable };

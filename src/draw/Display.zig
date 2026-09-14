@@ -167,6 +167,41 @@ pub fn init(allocator: std.mem.Allocator, client: *ninep.Client, draw_dir_fid: u
     return self;
 }
 
+/// libdraw `getwindow(display, Refnone)` (init.c:191-228): re-read the display's
+/// info line and rebind the display image's rect/clipr to what the device now
+/// reports. Returns the new clip rectangle — acme's resize arm uses exactly that
+/// (`rowresize(&row, screen->clipr)`, acme.c:555).
+///
+/// VERIFIED against the C, which is fatter than this for reasons Snarf does not
+/// have. `getwindow` calls `getimage0`, which frees the old screen image, writes
+/// a `J`+`I` verb to re-install it and reads 12×12 bytes back (init.c:123-152);
+/// it then rebuilds `_screen`/`screen` through `allocscreen`/`_allocwindow`
+/// (init.c:211-215) and re-picks hidpi fonts (init.c:218-225). Snarf has no
+/// Screen layer (windows are drawn straight onto the display image, R-P2-6); the
+/// display image is id 0 and is never re-allocated — it IS the device's
+/// framebuffer, which the device resized before we got here; and there is one
+/// font size (R-P12c-6 defers HiDPI). What remains of `getwindow` is exactly the
+/// info-line re-read, served from the `ctl` fid `init` already read it from:
+/// `ctl` reads at offset 0 are idempotent (dev/draw.zig readOp), so the fid is
+/// re-read, never re-walked, and the device recomposes the line from the live
+/// backend size on every read.
+///
+/// `Refnone` (no backing store) is the only refresh mode Snarf has: the device
+/// keeps no per-window backup, so a resize means the client repaints — which is
+/// what the caller (`core.boot.Tree.resize`) then does.
+pub fn getWindow(self: *Display) Error!proto.Rect {
+    var info_buf: [info_size + 1]u8 = undefined;
+    const n = try self.client.read(self.ctl_fid, 0, &info_buf);
+    if (n < info_size) return error.ShortInfo; // init.c:149-152 "short screen info"
+    const ci = try parseConnInfo(info_buf[0..n]);
+    self.conn = ci;
+    self.image.chan = ci.chan; // init.c:164
+    self.image.repl = ci.repl; // init.c:166
+    self.image.r = ci.r; // init.c:167-170
+    self.image.clipr = ci.clipr; // init.c:171-174
+    return self.image.clipr;
+}
+
 /// Best-effort teardown: free the two solids, flush, clunk the owned fids,
 /// release the buffer, destroy self. Errors are ignored — nothing is
 /// recoverable at teardown. (`draw_dir_fid` was borrowed and is left alone.)

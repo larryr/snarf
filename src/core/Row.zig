@@ -204,14 +204,46 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
     try neighbor.resize(r); // rows.c:236
 }
 
+/// The narrowest rectangle a `Column` may be laid out in (see the divergence
+/// note on `resize`): the scrollbar strip and its gap, which every `Text`
+/// carves off the left (text.c:85-87), plus room for one glyph in what is left.
+/// `font.height` bounds the pen advance of any glyph in the bitmap fonts Snarf
+/// ships (the fixed 9×18 is 9 wide by 18 tall, R-P3-1), so this is a safe
+/// over-estimate, not an exact metric — it exists to keep libframe out of its
+/// fatal corners, not to express a layout rule.
+///
+/// VERIFIED empirically (phase 12c) at the 9×18 font: a column 25 px wide —
+/// `scrollwid + scrollgap + 9` exactly — still lays out; 24 px dies in
+/// `frinsert`. This bound is 34 px, and never binds in practice: `rowadd`
+/// already refuses to create a column narrower than 100 px (rows.c:74-75).
+fn minColWidth(font_height: i32) i32 {
+    return Chrome.scrollwid + Chrome.scrollgap + font_height;
+}
+
 /// `rowresize` (rows.c:103-138): relayout the tag strip + black band, then scale
 /// every column in x proportionally to the row's width change (`deltax` shifts
 /// the origin), with a `Border`-px black band between adjacent columns.
+///
+/// SNARF DIVERGENCE (R-GFX-05, contract §3f) — each column's width is floored at
+/// `minColWidth` even when the proportional share is smaller. The C has no such
+/// floor and DIES when it underflows: a `Text` carves `Scrollwid+Scrollgap` off
+/// its left (text.c:85-87), and if what remains cannot hold one rune, libframe
+/// takes `drawerror(f->display, "_frcanfit==0")` (frinsert.c:148-149) or
+/// `"frinsert pt1 too far"` (frinsert.c:169-170) — both fatal, both faithfully
+/// ported as panics (frame/insert.zig I-5). In acme that is unreachable in
+/// practice because rio never hands acme a window that narrow; in a browser the
+/// user drags the window edge, and a trap is not an acceptable answer. The floor
+/// can push the rightmost columns past the screen edge; they are simply clipped
+/// away by `drawclip` (draw.c:236-245) — a tree tiling more than the screen is
+/// ugly, a dead module is not. `Tree.resize` (core/boot.zig) separately clamps
+/// the SCREEN rect, which is what protects the row tag itself.
 pub fn resize(row: *Row, r: Rect) Error!void {
     const font = row.chrome.font;
     const fh: i32 = font.height;
     const screen = &row.chrome.display.image;
     const bd = Chrome.border;
+
+    const min_col = minColWidth(fh);
 
     const or_ = row.r; // rows.c:110
     const deltax = r.min.x - or_.min.x; // rows.c:111
@@ -242,6 +274,11 @@ pub fn resize(row: *Row, r: Rect) Error!void {
             try screen.draw(r2, row.chrome.black, null, .{});
             r1.min.x = r2.max.x;
         }
+        // Snarf divergence (see the doc comment): never hand a column less than
+        // one glyph beside its scrollbar. Applied AFTER the band so it floors the
+        // column's own rect, and it cascades — the next column starts where this
+        // one really ends.
+        if (dx(r1) < min_col) r1.max.x = r1.min.x + min_col;
         try c.resize(r1); // rows.c:136 colresize
     }
 }

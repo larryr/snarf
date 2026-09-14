@@ -5,14 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Snarf</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #ffffea; }
-      /* Fixed 640×480 display (R-P5-3), matching the frozen goldens and the
-         main_wasm dimensions; canvasResize + DPR (R-GFX-05) land with input. */
-      canvas { display: block; width: 640px; height: 480px; image-rendering: pixelated; }
+      /* The display fills the browser window and follows every resize
+         (R-GFX-05). The canvas carries NO width/height attributes: shim.js sizes
+         the backing store from window.innerWidth/innerHeight at boot and on each
+         resize, and hands the same numbers to the module. `overflow: hidden`
+         keeps 100vw/100vh from provoking a scrollbar, which would shrink the
+         viewport and start a resize feedback loop. devicePixelRatio > 1 is
+         deliberately NOT applied (R-P12c-6): the bitmap font has one size, so a
+         DPR-scaled store would halve the text's physical size on a Retina
+         display — the browser upscales a CSS-pixel store instead. */
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #ffffea; }
+      canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
     </style>
   </head>
   <body>
-    <canvas id="screen" width="640" height="480"></canvas>
+    <canvas id="screen"></canvas>
     <!-- Hand-written shim, the single JS boundary (S-06 §4). -->
     <script type="module" src="./shim.js"></script>
   </body>

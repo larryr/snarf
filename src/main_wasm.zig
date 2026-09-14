@@ -10,12 +10,13 @@
 //! machine (core/Editor.zig, R-P6-12) is the only place gestures are interpreted;
 //! this file is purely the adapter: pushEvent → devinput; tick → drain the input
 //! device through standing read tickets (R-P6-4) → Editor.handle* → frameEnd.
+//! Two adapter seams live in sibling files so this one stays near the ~400-line
+//! cap (S-07): `input_pump.zig` (the device drain) and `screen.zig` (the resize
+//! sequence). Both take borrowed pointers, never the `App` context.
 //!
-//! Boot scene DIVERGES from phase 5 (R-P6-9/F-10): the acme palette (BACK ivory
-//! ground, HIGH highlight, black text) over an EMPTY buffer. The frozen phase-2..5
-//! goldens are untouched — this is a NEW scene, so smoke's phase-5 pixel/text
-//! assertions (white ground, "hello, acme" glyphs) are EXPECTED to fail until the
-//! orchestrator updates the smoke script in Wave C.
+//! The display size arrives from the browser through `init(w, h)` and follows the
+//! window from then on via `EventKind.resize` (ABI v5, R-GFX-05) — nothing in the
+//! module carries a size of its own any more.
 const std = @import("std");
 const core = @import("core");
 const dev = @import("dev");
@@ -23,6 +24,8 @@ const draw = @import("draw");
 const ninep = @import("ninep");
 const origin = @import("origin");
 const shim = @import("shim");
+const screen = @import("screen.zig");
+const input_pump = @import("input_pump.zig");
 
 const DevInput = dev.input.DevInput;
 const OriginMount = origin.OriginMount;
@@ -45,14 +48,16 @@ pub const panic = std.debug.FullPanic(panicHandler);
 /// allocator available freestanding, and wasm32 is single-threaded here.
 const alloc = std.heap.wasm_allocator;
 
-/// Display is a fixed 640×480 (R-P5-3), matching the frozen goldens; the same
-/// numbers are duplicated in index.html until canvasResize/DPR land.
-const width: u32 = 640;
-const height: u32 = 480;
-/// The window tree fills the whole display (rowinit lays the rowtag + white
-/// ground; Chrome owns the acme palette solids now — the phase-6/7 hand-built
-/// BACK/HIGH images are gone).
-const screen_rect = draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height));
+/// The display size now comes from the browser: the shim measures the window,
+/// sizes the canvas backing store to it, and passes it to `init(w, h)`
+/// (R-GFX-05). HISTORY: phases 5-12 hard-coded 640×480 here (R-P5-3) and
+/// duplicated the numbers in `web/index.html`; the frozen acceptance goldens are
+/// unaffected by the change because each builds its OWN 640×480 headless backend
+/// (`src/accept.zig`) rather than booting this entry point (R-P12c-3). The two
+/// clamps that guard those numbers live with the rest of the display-size policy
+/// in `screen.zig`.
+const clampDim = screen.clampDim;
+const dimOf = screen.dimOf;
 
 /// The initial window body (a few demo lines so the scene shows text + wraps).
 const demo_body =
@@ -136,15 +141,20 @@ export fn abi_version() u32 {
     return shim.abi.version;
 }
 
-/// Called once after instantiation (S-06 §2). Any boot failure becomes a panic
-/// carrying the error name — the shim sees it on the console, then the trap.
-export fn init() void {
-    boot() catch |e| @panic(@errorName(e));
+/// Called once after instantiation (S-06 §2) with the display size in device
+/// pixels — the canvas backing store the shim just sized to the browser window
+/// (ABI v5, R-GFX-05). Any boot failure becomes a panic carrying the error name —
+/// the shim sees it on the console, then the trap.
+export fn init(w: u32, h: u32) void {
+    boot(clampDim(w), clampDim(h)) catch |e| @panic(@errorName(e));
 }
 
 /// Build the App in place on the heap (pointer-capture hazards — see App's doc).
-fn boot() !void {
+fn boot(width: u32, height: u32) !void {
     const a = try alloc.create(App);
+    // The window tree fills the whole display (rowinit lays the rowtag + white
+    // ground; Chrome owns the acme palette solids).
+    const screen_rect = draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height));
 
     // ---- draw stack: canvas ← devdraw ← server ← client ← Display ----
     a.canvas = try dev.draw_canvas.CanvasBackend.init(alloc, width, height);
@@ -289,6 +299,10 @@ export fn wsPush(id: u32, kind: u32, ptr: [*]const u8, len: u32) void {
 ///   wheel:                a=notches (b/c reserved)
 ///   key:                  a=rune,  c=mods bitfield
 ///   mod_down/up:          c=Mod id
+///   resize:               a=width, b=height (device px; NOT an input event —
+///                         it rides this export because it is the same
+///                         browser→module edge, and the two completeReads below
+///                         are no-ops for it)
 export fn pushEvent(kind: u32, a_: i32, b_: i32, c: u32, t: u32) void {
     const a = app orelse return;
     decodeEvent(a, kind, a_, b_, c, t);
@@ -298,7 +312,7 @@ export fn pushEvent(kind: u32, a_: i32, b_: i32, c: u32, t: u32) void {
 
 fn decodeEvent(a: *App, kind: u32, x: i32, y: i32, c: u32, t: u32) void {
     const ek: shim.abi.EventKind = switch (kind) {
-        1...7 => @enumFromInt(kind), // range-checked (std.meta.intToEnum is gone in 0.16)
+        1...8 => @enumFromInt(kind), // range-checked (std.meta.intToEnum is gone in 0.16)
         else => return, // unknown kind: drop
     };
     switch (ek) {
@@ -318,6 +332,19 @@ fn decodeEvent(a: *App, kind: u32, x: i32, y: i32, c: u32, t: u32) void {
             };
             if (ek == .mod_down) a.devinput.pushMod(.down, which, t) else a.devinput.pushMod(.up, which, t);
         },
+        // The browser window changed size (R-GFX-05). The shim has ALREADY
+        // resized the canvas — which clears it — so the module owes a full
+        // repaint; `screen.resize` arranges one and re-tiles the tree. Fatal on
+        // failure, like acme's `error("attach to window")` (acme.c:550), and
+        // reported the way every other export path reports one: panic with the
+        // error name through the consoleLog panic handler.
+        .resize => {
+            const w = dimOf(x);
+            const h = dimOf(y);
+            if (w == a.canvas.headless.width and h == a.canvas.headless.height) return; // same size: nothing to do
+            screen.resize(&a.canvas, &a.dd, a.display, &a.tree, w, h) catch |e| @panic(@errorName(e));
+            a.editor.needs_flush = true; // present the repaint on this tick's frameEnd
+        },
     }
 }
 
@@ -333,9 +360,25 @@ export fn wake() void {}
 export fn tick(now_ms: u32) void {
     const a = app orelse return;
     _ = a.srv.poll() catch |e| @panic(@errorName(e)); // draw stack
-    drainInput(a) catch |e| @panic(@errorName(e)); // input stack → Editor
+    input_pump.drain(inputDevices(a), &a.editor) catch |e| @panic(@errorName(e)); // input stack → Editor
     pollOrigin(a, now_ms); // /mnt/origin handshake + disconnect watch
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
+}
+
+/// The borrowed view of the input stack that `input_pump.drain` works through.
+/// Every field is a pointer into the heap `App`, which never moves — the standing
+/// tickets borrow `mouse_buf`/`kbd_buf` and are re-armed in place.
+fn inputDevices(a: *App) input_pump.Devices {
+    return .{
+        .srv = &a.srv_input,
+        .cl = &a.cl_input,
+        .mouse_fid = a.mouse_fid,
+        .kbd_fid = a.kbd_fid,
+        .ticket_mouse = &a.ticket_mouse,
+        .ticket_kbd = &a.ticket_kbd,
+        .mouse_buf = &a.mouse_buf,
+        .kbd_buf = &a.kbd_buf,
+    };
 }
 
 /// Advance the origin connection and turn a state change into EXACTLY one line
@@ -357,56 +400,4 @@ fn pollOrigin(a: *App, now_ms: u32) void {
         .failed => |why| a.editor.warning("/mnt/origin: not mounted ({s})\n", .{why}),
         .lost => |why| a.editor.warning("/mnt/origin: disconnected ({s})\n", .{why}),
     }
-}
-
-/// Drain every mouse record and kbd rune the input device can produce right now,
-/// routing each through the Editor and re-arming the standing ticket. Each loop
-/// polls the input server first: a poll parks the standing read when the queue is
-/// empty (→ checkRead null → done) or serves it immediately when a record is
-/// queued (→ checkRead a byte count → handle → re-arm → loop).
-fn drainInput(a: *App) !void {
-    // Mouse: one 49-byte record per completion.
-    while (true) {
-        _ = try a.srv_input.poll();
-        const n = (try a.cl_input.checkRead(a.ticket_mouse)) orelse break;
-        if (parseMouseRec(a.mouse_buf[0..n])) |ev| try a.editor.handleMouse(ev);
-        a.ticket_mouse = try a.cl_input.beginRead(a.mouse_fid, 0, &a.mouse_buf);
-    }
-    // Kbd: a UTF-8 burst; decode whole runes and hand each to the Editor.
-    while (true) {
-        _ = try a.srv_input.poll();
-        const n = (try a.cl_input.checkRead(a.ticket_kbd)) orelse break;
-        var i: usize = 0;
-        while (i < n) {
-            const seq = std.unicode.utf8ByteSequenceLength(a.kbd_buf[i]) catch {
-                i += 1;
-                continue;
-            };
-            if (i + seq > n) break; // never split a rune (device guarantees whole runes)
-            const r = std.unicode.utf8Decode(a.kbd_buf[i .. i + seq]) catch {
-                i += seq;
-                continue;
-            };
-            try a.editor.handleKey(@intCast(r));
-            i += seq;
-        }
-        a.ticket_kbd = try a.cl_input.beginRead(a.kbd_fid, 0, &a.kbd_buf);
-    }
-}
-
-/// Parse a `/dev/mouse` record ("m" + four space-padded decimal fields) into an
-/// Editor.MouseEvent. Skips the leading 'm', then trim-parses the four ints
-/// (devmouse.c:306-309 format). Returns null on any malformation.
-fn parseMouseRec(rec: []const u8) ?core.Editor.MouseEvent {
-    if (rec.len < 1 or rec[0] != 'm') return null;
-    var it = std.mem.tokenizeScalar(u8, rec[1..], ' ');
-    const xs = it.next() orelse return null;
-    const ys = it.next() orelse return null;
-    const bs = it.next() orelse return null;
-    const ts = it.next() orelse return null;
-    const x = std.fmt.parseInt(i32, xs, 10) catch return null;
-    const y = std.fmt.parseInt(i32, ys, 10) catch return null;
-    const b = std.fmt.parseInt(u32, bs, 10) catch return null;
-    const ms = std.fmt.parseInt(u32, ts, 10) catch return null;
-    return .{ .x = x, .y = y, .buttons = @truncate(b), .msec = ms };
 }
