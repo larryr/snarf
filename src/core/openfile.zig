@@ -4,7 +4,8 @@
 //! `acme.c:NN`.
 //!
 //! R-EDIT-03 (directory windows), R-EDIT-13 (`path`, `path:line`, `path:/re/`),
-//! R-EDIT-23 (auto-placement through `makenewwindow`), R-EDIT-25 (no warp).
+//! R-EDIT-23 (auto-placement through `makenewwindow`), R-EDIT-25 (the warp is
+//! REQUESTED — as a `/dev/mouse` write — and honoured or ignored per host).
 //!
 //! THE ONE STRUCTURAL DIFFERENCE from the C: `textload` blocks there and is a
 //! job here (`Load.zig`), so `openFile` returns as soon as the window EXISTS,
@@ -45,8 +46,8 @@ pub const self_mtpt = "/mnt/snarf-self";
 pub const Expand = struct {
     name: []const u8,
     addr: ?[]const u21 = null,
-    /// `e->jump` (look.c:897): recorded, never acted on — the `moveto` warp is
-    /// permanently dropped (R-EDIT-25 / R-P13b-6).
+    /// `e->jump` (look.c:897): whether the pointer should be warped into the
+    /// window once it is loaded (R-P15-3, `warp.zig`).
     jump: bool = true,
     /// `e->q0`/`e->q1`, the expansion's range in the SOURCE text. Carried for
     /// the caller's literal-search fallback; `openFile` does not read them.
@@ -72,7 +73,7 @@ pub fn openFile(ed: *Editor, t: ?*Text, e: Expand) Text.Error!*Window {
     if (e.name.len == 0) { // look.c:822-826
         const tt = t orelse return error.IoError;
         const w = tt.w orelse return error.IoError;
-        try Load.addressAndShow(ed, w, e.addr);
+        try Load.addressAndShow(ed, w, e.addr, e.jump);
         return w;
     }
 
@@ -81,7 +82,7 @@ pub fn openFile(ed: *Editor, t: ?*Text, e: Expand) Text.Error!*Window {
     defer a.free(abs);
 
     if (errors.lookFile(row, abs)) |w| { // look.c:844-845 lookfile
-        try Load.addressAndShow(ed, w, e.addr);
+        try Load.addressAndShow(ed, w, e.addr, e.jump);
         return w;
     }
 

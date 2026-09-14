@@ -11,14 +11,18 @@
 //! file?" with `access()` mid-call, Snarf parks a `StatJob` and resolves it on a
 //! later frame, so a look that is NOT a file runs its literal search a frame or
 //! two late. Permanently dropped:
-//! the `e.jump`/`moveto` mouse warp on a hit (look.c:219, R-P8-6 lineage) and
 //! winlock/unlock (look.c:206-207/220-221, single-threaded). `winsettag` on a hit
 //! (look.c:418) is covered for free by the frameEnd tag sweep (R-P9-4).
+//!
+//! The `e.jump`/`moveto` warp on a hit (look.c:219) is NO LONGER dropped
+//! (phase 15, R-P15-3): it is issued as a `/dev/mouse` write through
+//! `warp.zig`, which the native host honours and the browser host ignores.
 const std = @import("std");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const select = @import("text/select.zig");
 const expand = @import("expand.zig");
+const warp = @import("warp.zig");
 
 /// look3 (look.c:82-229, minus the deferred arms above). `[q0,q1)` are absolute
 /// rune coords in `t`. A bare click inside `t`'s own selection captures it
@@ -35,22 +39,25 @@ const expand = @import("expand.zig");
 pub fn look(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
     var e0 = q0;
     var e1 = q1;
+    var jump = true; // look.c:735 `e->jump = TRUE`
     if (q1 == q0 and t.q1 > t.q0 and t.q0 <= q0 and q0 <= t.q1) {
         // look.c:738-743: a bare click inside the current selection ⇒ the
-        // selection itself is the needle. (The `e->jump=FALSE` tag tweak only fed
-        // the dropped `moveto` warp, so it is irrelevant here.)
+        // selection itself is the needle, and a bare click in a TAG does not
+        // warp (look.c:741-742 `if(t->what == Tag) e->jump = FALSE`) — the
+        // pointer is already where the user put it.
         e0 = t.q0;
         e1 = t.q1;
+        if (t.what == .tag) jump = false;
     }
-    if (try expand.startLook(ed, t, e0, e1, reverse)) return; // look.c:783
-    return literal(ed, t, e0, e1, reverse);
+    if (try expand.startLook(ed, t, e0, e1, reverse, jump)) return; // look.c:783
+    return literal(ed, t, e0, e1, reverse, jump);
 }
 
 /// The literal (within-window search) arm of `look3`: the alnum expansion
 /// (look.c:786-791) and `search` (look.c:200-221's else branch). Reached
 /// directly when the text is not a file name, and from `expand.stepPending`
 /// when the parked existence check says it is not.
-pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Error!void {
+pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool, jump: bool) Text.Error!void {
     var e0 = q0;
     var e1 = q1;
     const nc = t.file.buffer.len();
@@ -84,8 +91,9 @@ pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.
     defer ed.allocator.free(needle);
     for (needle, 0..) |*r, i| r.* = t.file.buffer.runeAt(e0 + i);
 
-    // look.c:218: search `ct`; the `e.jump`/`moveto` warp on a hit is dropped.
-    _ = try search(ed, ct, needle, reverse);
+    // look.c:218-219: search `ct`, and on a hit with `e.jump` warp the pointer
+    // onto the match (R-P15-3; a no-op on a host that cannot warp).
+    if (try search(ed, ct, needle, reverse) and jump) warp.toSelection(ed, ct);
 }
 
 /// `search` (look.c:313-441) as a plain `Buffer.runeAt` scan. The C's `fbuf`

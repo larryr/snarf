@@ -42,6 +42,7 @@ const expand = @import("expand.zig");
 const ast = @import("edit/ast.zig");
 const addr_eval = @import("edit/addr.zig");
 const parse = @import("edit/parse.zig");
+const warp = @import("warp.zig");
 
 const Load = @This();
 const nsjob = ninep.nsjob;
@@ -66,8 +67,10 @@ name: []u8,
 /// look.c:874-893), evaluated against the loaded body once it is in place.
 /// Owned.
 addr: ?[]u21 = null,
-/// `e->jump` (look.c:897). Recorded for completeness; the warp it drove is
-/// PERMANENTLY dropped (R-EDIT-25 / R-P13b-6).
+/// `e->jump` (look.c:897). Carried across the asynchronous load and spent at
+/// the tail (`addressAndShow`) on a `/dev/mouse` warp request — R-P15-3, the
+/// R-EDIT-25 amendment. `readfile`'s boot window passes FALSE: acme.c:285-300
+/// has no `moveto`.
 jump: bool = false,
 // (`textload`'s `setqid` argument, text.c:192/:277-284, has no Snarf analog yet —
 // no qid cache to update; reintroduce with Put/Get.)
@@ -287,7 +290,7 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
         .redo = t.file.redoSeq() != 0,
         .mod = t.file.mod,
     };
-    try addressAndShow(ed, w, self.addr);
+    try addressAndShow(ed, w, self.addr, self.jump);
 }
 
 /// look.c:874-897 on a body that is already in place: evaluate the `:addr` half
@@ -296,8 +299,10 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
 /// command target. `openfile.openFile` runs this directly on the path that
 /// REUSES an already-open window — the one path with no load to wait for.
 ///
-/// `moveto` (look.c:897) is permanently DROPPED — R-EDIT-25 / R-P13b-6.
-pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21) Text.Error!void {
+/// `moveto` (look.c:897) is issued as a `/dev/mouse` write when `jump`
+/// (R-P15-3): the native host warps the pointer into the window that just
+/// opened, the browser host ignores it (R-EDIT-25's divergence, made literal).
+pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump: bool) Text.Error!void {
     const t = &w.body;
     var r = File.Range{ .q0 = t.q0, .q1 = t.q1 }; // look.c:876 eval=FALSE default
     if (a0) |ap| {
@@ -312,6 +317,7 @@ pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21) Text.Error!void
     try t.show(r.q0, r.q1, true); // look.c:894 textshow(t, r.q0, r.q1, 1)
     try w.setTag1(); // look.c:895
     ed.seltext = t; // look.c:896
+    if (jump) warp.toSelection(ed, t); // look.c:897 moveto
     ed.needs_flush = true;
 }
 

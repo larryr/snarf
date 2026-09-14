@@ -429,8 +429,17 @@ pub const DevInput = struct {
         const self = devOf(ctx);
         return switch (nodeOf(fid.qid.path)) {
             .ctl => self.ctlWrite(data),
-            // Writes to mouse/kbd are refused (S-04 §1 overrides the kernel's
-            // cursor-warp write); the root is not writable.
+            // A write to `mouse` is Plan 9's cursor WARP (mouse(3):41-48,
+            // devmouse.c:458-476) and the core really does issue it now
+            // (`core/warp.zig`, R-P15-3). This host cannot honour it: no page
+            // may move the pointer, which is R-EDIT-25's founding divergence.
+            // So it is refused — `Rerror "permission denied"`, the kernel's own
+            // text for a device that will not take the write (no bespoke string,
+            // which would have meant growing `ninep.errors` for one host). The
+            // core swallows the failure and nothing else changes. The NATIVE
+            // host's copy of this device (`host/devdraw/dev_input.zig`) answers
+            // the same write with `Tmoveto` and the pointer moves.
+            // `kbd` is read-only, and the root is not writable.
             else => error.PermissionDenied,
         };
     }
@@ -761,7 +770,7 @@ test "devinput: kbd UTF-8 stream + specials" {
     try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
 }
 
-test "devinput: mouse write and kbd write rejected" {
+test "devinput: mouse write (the warp) and kbd write rejected" {
     const h = try Harness.create(testing.allocator);
     defer h.destroy();
     try h.connect();
@@ -772,6 +781,14 @@ test "devinput: mouse write and kbd write rejected" {
     const wm = try h.write(1, "warp");
     try testing.expect(wm.body == .rerror);
     try testing.expectEqualStrings("permission denied", wm.body.rerror.ename);
+
+    // The real thing: the 49-byte warp record `core/warp.zig` writes on every
+    // host. This one is refused, which is how the browser "ignores" a warp
+    // (R-P15-3); the native device answers it with `Tmoveto`.
+    const warp_rec = "m        100         200           0           0 ";
+    const ww = try h.write(1, warp_rec);
+    try testing.expect(ww.body == .rerror);
+    try testing.expectEqualStrings("permission denied", ww.body.rerror.ename);
 
     try h.walkOpen(2, "kbd", msg.ORDWR);
     const wk = try h.write(2, "x");
