@@ -6,7 +6,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 13b merged `fd1abe0`; remote has only `main`)*
+- **`phase14a`** (worktree `../snarf-wt/phase14a`, 2026-09-14, larry's Mac, local only) —
+  9P server framework: codec Tcreate/Tremove/Twstat (+R), NEW `ninep/park.zig` (any op may
+  park; `completeReads` alias), NEW `ninep/server_mut.zig` (create/remove/wstat, "prohibited"
+  defaults), `server.zig` moves to ≤450 lines, client sync helpers, S-01/R-03 docs. Owns
+  `src/ninep/*`, docs. Contract `agents/contracts/phase14a-server-parking-create.md`. 14b
+  (OPFS device + fsOp import, ABI v6) follows.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
