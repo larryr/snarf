@@ -37,6 +37,49 @@ pub const Warning = struct {
     }
 };
 
+/// `warning(md, fmt, …)` (util.c:260-273) with a directory context — the
+/// `errorwinforwin` lineage (util.c:140-186): the message lands in
+/// `dir/+Errors` instead of `+Errors`. No live caller yet; the served tree and
+/// the host-command wave are the C's writers (`fsysrunproc`/`run`).
+///
+/// Reached as `ed.warningIn(…)`/`ed.warning(…)`: `Editor` keeps the forwarders,
+/// phase 12e carved these four bodies out of `Editor.zig`.
+pub fn warningIn(ed: *Editor, dir: []const u8, comptime fmt: []const u8, args: anytype) void {
+    const line = std.fmt.allocPrint(ed.allocator, fmt, args) catch return;
+    defer ed.allocator.free(line);
+    const b = warnBucket(ed, dir) catch return;
+    b.text.appendSlice(ed.allocator, line) catch {};
+}
+
+/// `addwarningtext`'s bucket lookup (util.c:199-209): the bucket for `dir`,
+/// appended if this is the first message for that context.
+fn warnBucket(ed: *Editor, dir: []const u8) error{OutOfMemory}!*Warning {
+    for (ed.warnings.items) |*wn| {
+        if (std.mem.eql(u8, wn.dir, dir)) return wn; // util.c:201-205
+    }
+    const owned = try ed.allocator.dupe(u8, dir);
+    errdefer ed.allocator.free(owned);
+    try ed.warnings.append(ed.allocator, .{ .dir = owned, .text = .empty });
+    return &ed.warnings.items[ed.warnings.items.len - 1];
+}
+
+/// The pending text of the plain (`""`) warning bucket — the accessor the tests
+/// read now that `warnings` is a bucket list. Empty when nothing is pending.
+pub fn warningText(ed: *Editor) []const u8 {
+    for (ed.warnings.items) |*wn| {
+        if (wn.dir.len == 0) return wn.text.items;
+    }
+    return "";
+}
+
+/// True while any bucket still holds an unflushed message.
+pub fn warningsPending(ed: *Editor) bool {
+    for (ed.warnings.items) |*wn| {
+        if (wn.text.items.len != 0) return true;
+    }
+    return false;
+}
+
 /// The file name of the error window for directory `dir` (util.c:85-92): `""` ⇒
 /// `"+Errors"`, otherwise `dir ++ "/+Errors"`. Caller frees.
 fn errorName(a: std.mem.Allocator, dir: []const u8) error{OutOfMemory}![]u8 {
