@@ -981,20 +981,27 @@ test "server: tauth/tcreate/tremove/twstat defaults" {
     const f = try Fixture.create(testing.allocator);
     defer f.destroy();
     try f.doVersion();
-    // Build 7-byte header-only frames; decode returns Unsupported before any
-    // body parse, so the framework answers purely by type byte (R5).
-    const cases = [_]struct { code: u8, want: []const u8 }{
-        .{ .code = 102, .want = "authentication not required" }, // Tauth
-        .{ .code = 114, .want = "permission denied" }, // Tcreate
-        .{ .code = 122, .want = "permission denied" }, // Tremove
-        .{ .code = 126, .want = "permission denied" }, // Twstat
+    _ = try f.doAttach(0);
+    // Tauth: a 7-byte header-only frame; decode returns Unsupported before any
+    // body parse, so the framework answers purely by type byte (R5 remnant —
+    // auth is the last unimplemented pair, S-01 §2 / OQ-9P-3).
+    var aframe: [7]u8 = undefined;
+    std.mem.writeInt(u32, aframe[0..4], 7, .little);
+    aframe[4] = 102;
+    std.mem.writeInt(u16, aframe[5..7], 77, .little);
+    const ra = try f.transactRaw(&aframe);
+    try testing.expectEqual(@as(u16, 77), ra.tag);
+    try f.expectRerror(ra, "authentication not required");
+    // create/remove/wstat now DECODE (phase 14a lifted ruling R5); with no
+    // `Ops` slot bound the framework answers lib9p's refusal strings
+    // [lib9p/srv.c:17,20,23 Enocreate/Enoremove/Enowstat].
+    const bodies = [_]struct { body: msg.Body, want: []const u8 }{
+        .{ .body = .{ .tcreate = .{ .fid = 0, .name = "x", .perm = 0o644, .mode = msg.OWRITE } }, .want = "bad message" },
+        .{ .body = .{ .tremove = .{ .fid = 0 } }, .want = "bad message" },
+        .{ .body = .{ .twstat = .{ .fid = 0, .stat = &([_]u8{0} ** 49) } }, .want = "bad message" },
     };
-    for (cases) |c| {
-        var frame: [7]u8 = undefined;
-        std.mem.writeInt(u32, frame[0..4], 7, .little);
-        frame[4] = c.code;
-        std.mem.writeInt(u16, frame[5..7], 77, .little);
-        const r = try f.transactRaw(&frame);
+    for (bodies) |c| {
+        const r = try f.transact(.{ .tag = 77, .body = c.body });
         try testing.expectEqual(@as(u16, 77), r.tag);
         try f.expectRerror(r, c.want);
     }

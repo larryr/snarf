@@ -10,6 +10,9 @@
 const std = @import("std");
 const Qid = @import("qid.zig");
 const wire = @import("wire.zig");
+/// The create/remove/wstat halves of the codec (S-07 §2 overflow rule); see
+/// `msg_mut.zig`'s header for why they live in their own file.
+pub const mut = @import("msg_mut.zig");
 
 pub const version9p = "9P2000"; // [fcall.h:4 VERSION9P]
 pub const MAXWELEM = 16; // [fcall.h:6]
@@ -89,6 +92,14 @@ pub const Body = union(enum) {
     rclunk: void,
     tstat: struct { fid: u32 },
     rstat: struct { stat: []const u8 }, // opaque stat(5) blob (R4)
+    // The mutating transactions (phase 14a; phase-1 ruling R5 lifted). Field
+    // layouts and codec live in `msg_mut.zig` [`5/open`, `5/remove`, `5/stat`].
+    tcreate: mut.Tcreate,
+    rcreate: mut.Rcreate,
+    tremove: mut.Tremove,
+    rremove: void,
+    twstat: mut.Twstat,
+    rwstat: void,
 
     pub const Version = struct { msize: u32, version: []const u8 };
 
@@ -148,6 +159,12 @@ pub const Body = union(enum) {
             .rclunk => .rclunk,
             .tstat => .tstat,
             .rstat => .rstat,
+            .tcreate => .tcreate,
+            .rcreate => .rcreate,
+            .tremove => .tremove,
+            .rremove => .rremove,
+            .twstat => .twstat,
+            .rwstat => .rwstat,
         };
     }
 };
@@ -217,10 +234,17 @@ pub fn decode(buf: []const u8) DecodeError!Message {
             const nstat = try r.get16();
             break :blk .{ .rstat = .{ .stat = try r.getBytes(nstat) } };
         },
+        .tcreate => .{ .tcreate = try mut.getTcreate(&r) },
+        .rcreate => .{ .rcreate = try mut.getRcreate(&r) },
+        .tremove => .{ .tremove = try mut.getTremove(&r) },
+        .rremove => .rremove,
+        .twstat => .{ .twstat = try mut.getTwstat(&r) },
+        .rwstat => .rwstat,
         // terror is illegal on the wire (rule 11).
         .terror => return error.BadMessage,
-        // Valid 9P codes Snarf does not implement (rule 11).
-        .tauth, .rauth, .tcreate, .rcreate, .tremove, .rremove, .twstat, .rwstat => return error.Unsupported,
+        // The only pair Snarf still does not implement (rule 11); `5/attach`
+        // auth is OQ-9P-3, S-01 §2.
+        .tauth, .rauth => return error.Unsupported,
     };
     if (r.remaining() != 0) return error.BadMessage; // no trailing body bytes
     return .{ .tag = tag, .body = body };
@@ -261,6 +285,11 @@ fn bodySize(b: Body) usize {
         .rclunk => 0,
         .tstat => 4,
         .rstat => |x| 2 + x.stat.len,
+        .tcreate => |x| mut.sizeTcreate(x),
+        .rcreate => mut.sizeRcreate(),
+        .tremove => mut.sizeTremove(),
+        .twstat => |x| mut.sizeTwstat(x),
+        .rremove, .rwstat => 0,
     };
 }
 
@@ -333,6 +362,11 @@ pub fn encode(m: *const Message, buf: []u8) EncodeError!usize {
             try w.put16(@intCast(x.stat.len));
             try w.putBytes(x.stat);
         },
+        .tcreate => |x| try mut.putTcreate(&w, x),
+        .rcreate => |x| try mut.putRcreate(&w, x),
+        .tremove => |x| try mut.putTremove(&w, x),
+        .twstat => |x| try mut.putTwstat(&w, x),
+        .rremove, .rwstat => {},
     }
     return total;
 }
@@ -352,6 +386,8 @@ fn validate(b: Body) EncodeError!void {
         .rread => |x| if (x.data.len > std.math.maxInt(u32)) return error.BadMessage,
         .twrite => |x| if (x.data.len > std.math.maxInt(u32)) return error.BadMessage,
         .rstat => |x| if (x.stat.len > max_str) return error.BadMessage,
+        .tcreate => |x| try mut.validateTcreate(x),
+        .twstat => |x| try mut.validateTwstat(x),
         else => {},
     }
 }
@@ -379,7 +415,7 @@ fn expectBodyEqual(want: Body, got: Body) !void {
         .rattach => |a| try expectQid(a.qid, got.rattach.qid),
         .rerror => |e| try testing.expectEqualStrings(e.ename, got.rerror.ename),
         .tflush => |f| try testing.expectEqual(f.oldtag, got.tflush.oldtag),
-        .rflush, .rclunk => {},
+        .rflush, .rclunk, .rremove, .rwstat => {},
         .twalk => |t| {
             try testing.expectEqual(t.fid, got.twalk.fid);
             try testing.expectEqual(t.newfid, got.twalk.newfid);
@@ -413,6 +449,21 @@ fn expectBodyEqual(want: Body, got: Body) !void {
         .tclunk => |x| try testing.expectEqual(x.fid, got.tclunk.fid),
         .tstat => |x| try testing.expectEqual(x.fid, got.tstat.fid),
         .rstat => |x| try testing.expectEqualSlices(u8, x.stat, got.rstat.stat),
+        .tcreate => |x| {
+            try testing.expectEqual(x.fid, got.tcreate.fid);
+            try testing.expectEqualStrings(x.name, got.tcreate.name);
+            try testing.expectEqual(x.perm, got.tcreate.perm);
+            try testing.expectEqual(x.mode, got.tcreate.mode);
+        },
+        .rcreate => |x| {
+            try expectQid(x.qid, got.rcreate.qid);
+            try testing.expectEqual(x.iounit, got.rcreate.iounit);
+        },
+        .tremove => |x| try testing.expectEqual(x.fid, got.tremove.fid),
+        .twstat => |x| {
+            try testing.expectEqual(x.fid, got.twstat.fid);
+            try testing.expectEqualSlices(u8, x.stat, got.twstat.stat);
+        },
     }
 }
 
@@ -584,9 +635,17 @@ test "decode: unknown and unsupported codes" {
     }
     buf[4] = 106; // terror
     try testing.expectError(error.BadMessage, decode(&buf));
-    for ([_]u8{ 102, 114, 122, 126 }) |code| {
+    // Tauth/Rauth are the only pair still Unsupported (S-01 §2, OQ-9P-3).
+    for ([_]u8{ 102, 103 }) |code| {
         buf[4] = code;
         try testing.expectError(error.Unsupported, decode(&buf));
+    }
+    // Phase 14a: 114/122/126 (Tcreate/Tremove/Twstat) are IMPLEMENTED, so a
+    // body-less 7-byte frame is now a truncation, not an unsupported type.
+    // [phase-1 ruling R5 lifted; agents/contracts/phase14a-... §3a]
+    for ([_]u8{ 114, 122, 126 }) |code| {
+        buf[4] = code;
+        try testing.expectError(error.BadMessage, decode(&buf));
     }
 }
 
@@ -616,4 +675,27 @@ test "encode: ShortBuffer" {
     try testing.expectError(error.ShortBuffer, encode(&m, buf[0 .. need - 1]));
     try testing.expectError(error.ShortBuffer, encode(&m, buf[0..0]));
     try testing.expectError(error.ShortBuffer, encode(&m, buf[0..6]));
+}
+
+test "round-trip create/remove/wstat (phase 14a)" {
+    // Smoke only — the full table (max-length name, empty wstat, truncation)
+    // is T1 in the phase-14a contract §4.
+    const q = Qid{ .path = 0x1234, .vers = 2, .qtype = .{ .dir = false } };
+    const bodies = [_]Body{
+        .{ .tcreate = .{ .fid = 3, .name = "newfile", .perm = 0o644, .mode = OWRITE } },
+        .{ .rcreate = .{ .qid = q, .iounit = 8168 } },
+        .{ .tremove = .{ .fid = 4 } },
+        .rremove,
+        .{ .twstat = .{ .fid = 5, .stat = &([_]u8{0x5A} ** 49) } },
+        .rwstat,
+    };
+    var buf: [512]u8 = undefined;
+    for (bodies, 0..) |b, i| {
+        const m = Message{ .tag = @intCast(i), .body = b };
+        const n = try encode(&m, &buf);
+        try testing.expectEqual(encodedSize(&m), n);
+        const got = try decode(buf[0..n]);
+        try testing.expectEqual(@as(u16, @intCast(i)), got.tag);
+        try expectBodyEqual(b, got.body);
+    }
 }
