@@ -185,6 +185,7 @@ const ninep = @import("ninep");
 const draw = @import("draw");
 const boot = @import("boot.zig");
 const served_fsys = @import("served/fsys.zig");
+const warp = @import("warp.zig"); // T12 only: mounts warp.MouseSink at /dev
 const Frame = draw.Frame;
 const proto = draw.proto;
 
@@ -536,4 +537,153 @@ test "openfile: a relative name resolves against the clicked window's directory;
     try testing.expect(h.ed.pending_look == null);
     try testing.expect(errors.lookFile(h.tree.row, "/dev") != null);
     try testing.expect(errors.lookFile(h.tree.row, "/mnt/snarf-self/dev") == null);
+}
+
+// ===========================================================================
+// T12 (phase15 reviewer fix, `81d7e8c`, `Load.addressAndShow`, look.c:892
+// `if(eval == FALSE) e->jump = FALSE`): an out-of-order or unparseable `:addr`
+// still opens the file and shows it, but must NOT warp — the very thing the
+// fix added. `NsHarness` above mounts `/dev` on a read-only `FakeTree` whose
+// `write` always fails permission (nsdir.zig FakeTree.write), which would mask
+// a real regression (a broken guard could still "work" by having its write
+// silently swallowed for the wrong reason). So this harness mounts
+// `warp.MouseSink` (the real warp-write counter `warp.zig`'s own namespace
+// test and look.zig's T9 use) at `/dev` instead, over a genuine
+// pipe/server/client/namespace round trip — the same rig look.zig's T9 sets
+// up — so "no write" here means the GUARD suppressed it, not that the
+// transport had nowhere to put it.
+// ===========================================================================
+
+/// `NsHarness` with `warp.MouseSink` standing in for `/dev` (see above) instead
+/// of the read-only `FakeTree`. Otherwise identical: a booted two-column scene
+/// plus a real served `/mnt/snarf-self`, so `openFile` on a
+/// `/mnt/snarf-self/<id>/body` path runs a genuine asynchronous `Load`
+/// (`StatJob` + `ReadFileJob`) exactly as production code does.
+const MouseHarness = struct {
+    fx: Frame.TestFixture,
+    ns: ninep.mount.Namespace,
+    tree: boot.Tree,
+    ed: Editor,
+    sink: warp.MouseSink,
+    dev_pipe: *ninep.chan.Pipe,
+    dev_srv: ninep.server.Server,
+    dev_cl: ninep.Client,
+    fsys: served_fsys.Fsys,
+    pipe: *ninep.chan.Pipe,
+    srv: ninep.server.Server,
+    cl: ninep.Client,
+
+    fn init(h: *MouseHarness, opts: boot.Options) !void {
+        const a = testing.allocator;
+        h.fx = try Frame.TestFixture.init();
+        h.ns = ninep.mount.Namespace.init(a);
+        var o = opts;
+        o.ns = &h.ns;
+        h.tree = try boot.boot(a, h.fx.disp, h.fx.font, proto.Rect.make(0, 0, 640, 480), o);
+        h.ed = Editor.init(a);
+        h.tree.bind(&h.ed);
+
+        h.sink = .{};
+        h.dev_pipe = try ninep.chan.Pipe.init(a, 16384);
+        h.dev_srv = try ninep.server.Server.init(a, h.dev_pipe.serverEnd(), &warp.MouseSink.ops, &h.sink, 8192);
+        h.dev_cl = try ninep.Client.init(a, h.dev_pipe.clientEnd(), 8192);
+        h.dev_cl.pump = .{ .ctx = &h.dev_srv, .run = pumpTestServer };
+        _ = try h.dev_cl.version(8192);
+        const dev_root = try h.dev_cl.attach("larry", "");
+        try h.ns.mount("/dev", &h.dev_cl, dev_root.fid);
+
+        h.fsys = served_fsys.Fsys.init(&h.ed);
+        h.pipe = try ninep.chan.Pipe.init(a, 16384);
+        h.srv = try ninep.server.Server.init(a, h.pipe.serverEnd(), &served_fsys.Fsys.ops, &h.fsys, 8192);
+        h.cl = try ninep.Client.init(a, h.pipe.clientEnd(), 8192);
+        h.cl.pump = .{ .ctx = &h.srv, .run = pumpTestServer };
+        _ = try h.cl.version(8192);
+        const root = try h.cl.attach("larry", "");
+        try h.ns.mount("/mnt/snarf-self", &h.cl, root.fid);
+    }
+
+    fn deinit(h: *MouseHarness) void {
+        h.ed.deinit();
+        h.cl.deinit();
+        h.srv.deinit();
+        h.pipe.deinit();
+        h.dev_cl.deinit();
+        h.dev_srv.deinit();
+        h.dev_pipe.deinit();
+        h.tree.deinit();
+        h.ns.deinit();
+        h.fx.deinit();
+    }
+
+    /// `n` simulated frames: step the loads, then let both servers answer.
+    fn frames(h: *MouseHarness, n: usize) !void {
+        for (0..n) |_| {
+            try Load.stepAll(&h.ed);
+            _ = try h.srv.poll();
+            _ = try h.dev_srv.poll();
+        }
+    }
+};
+
+test "openfile: an out-of-order or invalid :addr opens the file, warns, and issues NO /dev/mouse write (T12)" {
+    const a = testing.allocator;
+    var h: MouseHarness = undefined;
+    try h.init(.{ .win_name = "scratch", .body = "" });
+    defer h.deinit();
+
+    // Ten lines, so a compound address naming line 9 actually evaluates
+    // (rather than erroring AddressOutOfRange first) and lands out of order
+    // against line 3 (`edit/addr.zig evalCommaSemi`, `a2.r.q1 < a1.r.q0`).
+    const ten_lines = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
+
+    // --- case 1: "9,3" — out of order (edit/addr.zig error.AddressesOutOfOrder,
+    // caught in `Load.addressAndShow`'s `else |e|` arm, look.c:892) ----------
+    const src1 = try h.tree.addWindow("one", ten_lines);
+    const path1 = try std.fmt.allocPrint(a, "/mnt/snarf-self/{d}/body", .{src1.id});
+    defer a.free(path1);
+    const addr_oo = [_]u21{ '9', ',', '3' };
+    const opened1 = try openFile(&h.ed, null, .{ .name = path1, .addr = &addr_oo, .jump = true });
+    try h.frames(24); // a genuinely asynchronous load: StatJob + ReadFileJob
+
+    // The window exists with the file loaded (the C leaves the window up on a
+    // suppressed jump too — only the warp is withheld, not the load).
+    try testing.expect(!opened1.isdir);
+    try testing.expect(opened1.filemenu);
+    const body1 = try bodyText(opened1);
+    defer a.free(body1);
+    try testing.expectEqualStrings(ten_lines, body1);
+    try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "addresses out of order") != null);
+    try testing.expectEqual(@as(usize, 0), h.sink.writes);
+
+    // --- case 2: "/[" — unparseable (a malformed class, edit/Regx.zig
+    // error.MalformedClass, mapped to error.BadRegexp by
+    // edit/addr.zig nextMatch, caught in the SAME `else |e|` arm) -----------
+    const src2 = try h.tree.addWindow("two", ten_lines);
+    const path2 = try std.fmt.allocPrint(a, "/mnt/snarf-self/{d}/body", .{src2.id});
+    defer a.free(path2);
+    const addr_bad = [_]u21{ '/', '[' };
+    const opened2 = try openFile(&h.ed, null, .{ .name = path2, .addr = &addr_bad, .jump = true });
+    try h.frames(24);
+
+    try testing.expect(!opened2.isdir);
+    const body2 = try bodyText(opened2);
+    defer a.free(body2);
+    try testing.expectEqualStrings(ten_lines, body2);
+    try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "bad regexp in command address") != null);
+    try testing.expectEqual(@as(usize, 0), h.sink.writes); // still none
+
+    // --- control: "1" — a valid, in-order address ⇒ exactly one warp write -
+    const src3 = try h.tree.addWindow("three", ten_lines);
+    const path3 = try std.fmt.allocPrint(a, "/mnt/snarf-self/{d}/body", .{src3.id});
+    defer a.free(path3);
+    const addr_ok = [_]u21{'1'};
+    const opened3 = try openFile(&h.ed, null, .{ .name = path3, .addr = &addr_ok, .jump = true });
+    try h.frames(24);
+
+    try testing.expect(!opened3.isdir);
+    const body3 = try bodyText(opened3);
+    defer a.free(body3);
+    try testing.expectEqualStrings(ten_lines, body3);
+    try testing.expectEqual(@as(usize, 1), h.sink.writes); // the warp DID fire
+    try testing.expectEqual(@as(u8, 'm'), h.sink.last[0]); // a real mouse record
 }
