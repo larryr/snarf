@@ -521,7 +521,7 @@ test "origin: a refused dial is one warning and an absent mount" {
     try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
 }
 
-test "origin: version+attach binds /n/origin and unions the origin bin into /bin" {
+test "origin: version+attach binds /n/origin and unions the origin bin into /bin (T14)" {
     var ns = Namespace.init(testing.allocator);
     defer ns.deinit();
     var om = OriginMount.init(testing.allocator, &ns);
@@ -545,7 +545,7 @@ test "origin: version+attach binds /n/origin and unions the origin bin into /bin
     try testing.expectEqual(ninep.mount.BindFlag.after, b.entry.first().flag);
 }
 
-test "origin: an export without bin mounts anyway and leaves /bin untouched" {
+test "origin: an export without bin mounts anyway and leaves /bin untouched (T14)" {
     var ns = Namespace.init(testing.allocator);
     defer ns.deinit();
     var om = OriginMount.init(testing.allocator, &ns);
@@ -622,7 +622,7 @@ test "origin: an Rerror to Tattach fails the mount with the server's text" {
     try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
 }
 
-test "origin: a disconnect fails outstanding tickets, kills fids, unbinds" {
+test "origin: a disconnect fails outstanding tickets, kills fids, unbinds (T14)" {
     var ns = Namespace.init(testing.allocator);
     defer ns.deinit();
     var om = OriginMount.init(testing.allocator, &ns);

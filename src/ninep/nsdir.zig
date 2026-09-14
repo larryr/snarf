@@ -596,7 +596,78 @@ pub const FakeServer = struct {
     }
 };
 
-test "nsdir: union walk takes the first member that has the name" {
+/// A tree that mounts fine (root walk/clone succeeds) but whose directory can
+/// never be OPENED — T11 needs a union member that fails partway through
+/// `unionread`'s per-member open, not one that is missing outright (sysfile.c:
+/// 340 "Error causes component of union to be skipped").
+pub const FailOpenTree = struct {
+    fn attach(_: *anyopaque, _: *server.Server, _: *server.Fid, _: []const u8) errors.OpError!Qid {
+        return .{ .path = 1, .qtype = .{ .dir = true } };
+    }
+    fn walk1(_: *anyopaque, _: *server.Server, _: *server.Fid, _: []const u8) errors.OpError!Qid {
+        return error.FileDoesNotExist;
+    }
+    fn open(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u8) errors.OpError!Qid {
+        return error.PermissionDenied;
+    }
+    fn read(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, _: []u8) server.ReadError!usize {
+        return error.IoError;
+    }
+    fn write(_: *anyopaque, _: *server.Server, _: *server.Fid, _: u64, _: []const u8) errors.OpError!usize {
+        return error.PermissionDenied;
+    }
+    fn statOp(_: *anyopaque, _: *server.Server, fid: *server.Fid) errors.OpError!Stat {
+        return .{ .qid = fid.qid, .mode = Stat.DMDIR | 0o555, .length = 0, .name = "/", .uid = "", .gid = "", .muid = "" };
+    }
+    pub const ops = server.Ops{
+        .attach = attach,
+        .walk1 = walk1,
+        .open = open,
+        .read = read,
+        .write = write,
+        .stat = statOp,
+    };
+};
+
+/// One `FailOpenTree` behind a `chan.Pipe`, ready to mount (T11).
+pub const FailServer = struct {
+    pipe: *chan.Pipe,
+    srv: *server.Server,
+    client: *Client,
+    root_fid: u32,
+    dummy: *u8,
+    allocator: std.mem.Allocator,
+
+    fn pump(ctx: *anyopaque) anyerror!void {
+        const s: *server.Server = @ptrCast(@alignCast(ctx));
+        _ = try s.poll();
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !FailServer {
+        const pipe = try chan.Pipe.init(allocator, 16384);
+        const dummy = try allocator.create(u8);
+        dummy.* = 0;
+        const srv = try allocator.create(server.Server);
+        srv.* = try server.Server.init(allocator, pipe.serverEnd(), &FailOpenTree.ops, dummy, 8192);
+        const cl = try allocator.create(Client);
+        cl.* = try Client.init(allocator, pipe.clientEnd(), 8192);
+        cl.pump = .{ .ctx = srv, .run = pump };
+        _ = try cl.version(8192);
+        const root = try cl.attach("larry", "");
+        return .{ .pipe = pipe, .srv = srv, .client = cl, .root_fid = root.fid, .dummy = dummy, .allocator = allocator };
+    }
+
+    pub fn deinit(self: *FailServer) void {
+        self.client.deinit();
+        self.allocator.destroy(self.client);
+        self.srv.deinit();
+        self.allocator.destroy(self.srv);
+        self.pipe.deinit();
+        self.allocator.destroy(self.dummy);
+    }
+};
+
+test "nsdir: union walk takes the first member that has the name (T6, T7, T8)" {
     const a = testing.allocator;
     var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
     var t2 = FakeTree{ .names = &.{ "rc", "date" }, .tag = "two\n" };
@@ -671,4 +742,180 @@ test "nsdir: synthetic mount-point directories and union reads" {
     try testing.expectEqualStrings("date", second.name);
     try testing.expectEqual(first.encodedSize() + second.encodedSize(), bn);
     try testing.expectError(error.BadOffset, db.read(bn + 1, &buf));
+}
+
+test "nsdir: the synthetic root lists exactly its mounted children (T9)" {
+    const a = testing.allocator;
+    var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s1 = try FakeServer.init(a, &t1);
+    defer s1.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/dev", s1.client, s1.root_fid);
+    try ns.mount("/n/origin", s1.client, s1.root_fid);
+    try ns.mount("/mnt/snarf-self", s1.client, s1.root_fid);
+
+    // "/" is nobody's mount point; it exists only because things mount below
+    // it (devroot.c's role, R-9P-16).
+    const h = try walk(&ns, "/");
+    try testing.expect(h == .dir);
+    close(&ns, h);
+
+    var buf: [512]u8 = undefined;
+    var dr = try DirReader.open(a, &ns, "/");
+    defer dr.close();
+    const n = try dr.read(0, &buf);
+    const dev = try Stat.decode(buf[0..n]);
+    try testing.expectEqualStrings("dev", dev.name);
+    const nn = try Stat.decode(buf[dev.encodedSize()..n]);
+    try testing.expectEqualStrings("n", nn.name);
+    const mnt = try Stat.decode(buf[dev.encodedSize() + nn.encodedSize() .. n]);
+    try testing.expectEqualStrings("mnt", mnt.name);
+    try testing.expectEqual(dev.encodedSize() + nn.encodedSize() + mnt.encodedSize(), n);
+    try testing.expectEqual(@as(usize, 0), try dr.read(n, &buf));
+
+    // "/n" itself lists exactly its one child, "origin".
+    const hn = try walk(&ns, "/n");
+    try testing.expect(hn == .dir);
+    close(&ns, hn);
+    var drn = try DirReader.open(a, &ns, "/n");
+    defer drn.close();
+    const nn2 = try drn.read(0, &buf);
+    const origin = try Stat.decode(buf[0..nn2]);
+    try testing.expectEqualStrings("origin", origin.name);
+    try testing.expectEqual(origin.encodedSize(), nn2);
+    try testing.expectEqual(@as(usize, 0), try drn.read(nn2, &buf));
+}
+
+test "nsdir: union directory reads never de-duplicate across members (T10)" {
+    const a = testing.allocator;
+    var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var t2 = FakeTree{ .names = &.{"rc"}, .tag = "two\n" }; // same name, other tree
+    var s1 = try FakeServer.init(a, &t1);
+    defer s1.deinit();
+    var s2 = try FakeServer.init(a, &t2);
+    defer s2.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.bind("/bin", s1.client, s1.root_fid, .after);
+    try ns.bind("/bin", s2.client, s2.root_fid, .after);
+
+    var dr = try DirReader.open(a, &ns, "/bin");
+    defer dr.close();
+    var buf: [512]u8 = undefined;
+    const n = try dr.read(0, &buf);
+    const first = try Stat.decode(buf[0..n]);
+    try testing.expectEqualStrings("rc", first.name);
+    const second = try Stat.decode(buf[first.encodedSize()..n]);
+    try testing.expectEqualStrings("rc", second.name); // R-P12d-2: no dedup
+    try testing.expectEqual(first.encodedSize() + second.encodedSize(), n);
+    try testing.expectEqual(@as(usize, 0), try dr.read(n, &buf));
+}
+
+test "nsdir: a union member that fails to open is skipped (T11)" {
+    const a = testing.allocator;
+    var t = FakeTree{ .names = &.{"rc"}, .tag = "ok\n" };
+    var good = try FakeServer.init(a, &t);
+    defer good.deinit();
+    var bad = try FailServer.init(a);
+    defer bad.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    // The failing member goes FIRST: if it were not skipped, its error would
+    // surface instead of the good member's entry (sysfile.c:340).
+    try ns.bind("/bin", bad.client, bad.root_fid, .after);
+    try ns.bind("/bin", good.client, good.root_fid, .after);
+
+    var dr = try DirReader.open(a, &ns, "/bin");
+    defer dr.close();
+    var buf: [512]u8 = undefined;
+    const n = try dr.read(0, &buf);
+    const st = try Stat.decode(buf[0..n]);
+    try testing.expectEqualStrings("rc", st.name);
+    try testing.expectEqual(st.encodedSize(), n);
+    try testing.expectEqual(@as(usize, 0), try dr.read(n, &buf));
+
+    // Walking through the failing member is skipped too: the good member's
+    // file is still reachable (chan.c:1030-1037 tries the union in order).
+    const h = try walk(&ns, "/bin/rc");
+    defer close(&ns, h);
+    try testing.expectEqual(good.client, h.fid.client);
+}
+
+test "nsdir: offset continuation matches a byte-identical single read (T12)" {
+    const a = testing.allocator;
+    var t1 = FakeTree{ .names = &.{ "aa", "bb", "cc", "dd" }, .tag = "x\n" };
+    var s1 = try FakeServer.init(a, &t1);
+    defer s1.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/bin", s1.client, s1.root_fid);
+
+    // One big read of the whole stream.
+    var big = try DirReader.open(a, &ns, "/bin");
+    defer big.close();
+    var big_buf: [4096]u8 = undefined;
+    const big_n = try big.read(0, &big_buf);
+
+    // The same stream, read piecemeal through a buffer that holds only one
+    // record at a time (each record here is 49 + 2-byte name = 51 bytes).
+    var small = try DirReader.open(a, &ns, "/bin");
+    defer small.close();
+    var acc = std.ArrayList(u8).empty;
+    defer acc.deinit(a);
+    var small_buf: [60]u8 = undefined;
+    var off: u64 = 0;
+    var first_len: usize = 0;
+    while (true) {
+        const n = try small.read(off, &small_buf);
+        if (n == 0) break;
+        if (off == 0) first_len = n;
+        try acc.appendSlice(a, small_buf[0..n]);
+        off += n;
+    }
+    try testing.expectEqualSlices(u8, big_buf[0..big_n], acc.items);
+
+    // Offset 0 rewinds the stream (unionrewind, sysfile.c:368-380)...
+    const rn = try small.read(0, &small_buf);
+    try testing.expectEqual(first_len, rn);
+
+    // ...and any other offset must equal what has been returned so far.
+    try testing.expectError(error.BadOffset, small.read(rn + 999, &small_buf));
+}
+
+test "nsdir: an exact mount point also lists deeper synthetic children (T13)" {
+    const a = testing.allocator;
+    var t1 = FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var s1 = try FakeServer.init(a, &t1);
+    defer s1.deinit();
+    var t2 = FakeTree{ .names = &.{"new"}, .tag = "d\n" };
+    var s2 = try FakeServer.init(a, &t2);
+    defer s2.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/dev", s1.client, s1.root_fid);
+    try ns.mount("/dev/draw", s2.client, s2.root_fid);
+
+    var dr = try DirReader.open(a, &ns, "/dev");
+    defer dr.close();
+    var buf: [512]u8 = undefined;
+    const n = try dr.read(0, &buf);
+    // Synthetic children come first, then the device's own listing.
+    const first = try Stat.decode(buf[0..n]);
+    try testing.expectEqualStrings("draw", first.name);
+    try testing.expect(first.mode & Stat.DMDIR != 0);
+    const second = try Stat.decode(buf[first.encodedSize()..n]);
+    try testing.expectEqualStrings("mouse", second.name);
+    try testing.expectEqual(first.encodedSize() + second.encodedSize(), n);
+
+    // `/dev` itself resolves to the device's own root, not a synthetic dir.
+    const h = try walk(&ns, "/dev");
+    try testing.expect(h == .fid);
+    try testing.expectEqual(s1.client, h.fid.client);
+    close(&ns, h);
 }

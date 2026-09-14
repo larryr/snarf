@@ -407,3 +407,100 @@ test "mount: list format" {
         w.buffered(),
     );
 }
+
+test "mount: bind(.after) then bind(.before) orders [before, first, after] (T1)" {
+    var c1: Client = undefined; // the original mount
+    var c2: Client = undefined; // .after
+    var c3: Client = undefined; // .before
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    try ns.mount("/bin", &c1, 1);
+    try ns.bind("/bin", &c2, 2, .after);
+    try ns.bind("/bin", &c3, 3, .before);
+
+    const r = try ns.resolve("/bin");
+    try testing.expectEqual(@as(usize, 3), r.entry.targets.items.len);
+    try testing.expectEqual(&c3, r.entry.targets.items[0].client);
+    try testing.expectEqual(&c1, r.entry.targets.items[1].client);
+    try testing.expectEqual(&c2, r.entry.targets.items[2].client);
+}
+
+test "mount: bind(.replace) on a union collapses it to one target (T2)" {
+    var c1: Client = undefined;
+    var c2: Client = undefined;
+    var c3: Client = undefined;
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    try ns.mount("/bin", &c1, 1);
+    try ns.bind("/bin", &c2, 2, .after);
+    try testing.expectEqual(@as(usize, 2), (try ns.resolve("/bin")).entry.targets.items.len);
+
+    try ns.bind("/bin", &c3, 9, .replace);
+    const r = try ns.resolve("/bin");
+    try testing.expectEqual(@as(usize, 1), r.entry.targets.items.len);
+    try testing.expectEqual(&c3, r.entry.first().client);
+    try testing.expectEqual(@as(u32, 9), r.entry.first().root_fid);
+}
+
+test "mount: unmount removes the whole entry (T3)" {
+    var c1: Client = undefined;
+    var c2: Client = undefined;
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    try ns.mount("/n/origin", &c1, 1);
+    try ns.bind("/n/origin", &c2, 2, .after);
+    try testing.expectEqual(@as(usize, 1), ns.entries.items.len);
+
+    try ns.unmount("/n/origin");
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
+    try testing.expectEqual(@as(usize, 0), ns.entries.items.len);
+
+    try testing.expectError(error.NotMounted, ns.unmount("/n/origin"));
+}
+
+test "mount: unbindTarget removes one member, and the last one removes the entry (T4)" {
+    var c1: Client = undefined;
+    var c2: Client = undefined;
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    try ns.mount("/bin", &c1, 1);
+    try ns.bind("/bin", &c2, 2, .after);
+
+    try ns.unbindTarget("/bin", &c1, 1);
+    const r = try ns.resolve("/bin");
+    try testing.expectEqual(@as(usize, 1), r.entry.targets.items.len);
+    try testing.expectEqual(&c2, r.entry.first().client);
+
+    try ns.unbindTarget("/bin", &c2, 2);
+    try testing.expectError(error.NotMounted, ns.resolve("/bin"));
+
+    // Absent prefix, and absent member of a present prefix, both NotMounted.
+    try testing.expectError(error.NotMounted, ns.unbindTarget("/bin", &c1, 1));
+    try ns.mount("/dev", &c1, 5);
+    try testing.expectError(error.NotMounted, ns.unbindTarget("/dev", &c2, 99));
+}
+
+test "mount: list renders a union in table order (T5)" {
+    var c1: Client = undefined;
+    var c2: Client = undefined;
+    var c3: Client = undefined;
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    try ns.mount("/n/origin", &c1, 1);
+    try ns.bind("/bin", &c2, 2, .after);
+    try ns.bind("/bin", &c3, 3, .before);
+
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try ns.list(&w);
+
+    try testing.expectEqualStrings(
+        "mount /n/origin\nmount /bin\nbind -a /bin\n",
+        w.buffered(),
+    );
+}
