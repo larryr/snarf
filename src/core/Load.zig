@@ -69,10 +69,8 @@ addr: ?[]u21 = null,
 /// `e->jump` (look.c:897). Recorded for completeness; the warp it drove is
 /// PERMANENTLY dropped (R-EDIT-25 / R-P13b-6).
 jump: bool = false,
-/// `textload`'s `setqid` argument (text.c:192, :277-284). Snarf keeps no
-/// dev/mtime/qidpath on `File` yet, so it is recorded and unused — FLAG for the
-/// Put/Get wave, which needs it to detect a file changed underfoot.
-setqid: bool = false,
+// (`textload`'s `setqid` argument, text.c:192/:277-284, has no Snarf analog yet —
+// no qid cache to update; reintroduce with Put/Get.)
 /// `ReadFileJob`'s sink.
 data: std.ArrayList(u8) = .empty,
 job: Job,
@@ -103,6 +101,11 @@ pub fn start(
         return;
     };
 
+    // One load per window (review nit, 13b): a `Get` or a second B3 while a
+    // load is still in flight must not leave two loads racing to install into
+    // the same body. Drop the older one (its job deinit is tombstone-safe, 13a).
+    dropLoadsFor(ed, w);
+
     const self = try a.create(Load);
     errdefer a.destroy(self);
     self.* = .{
@@ -110,7 +113,6 @@ pub fn start(
         .w = w,
         .name = try a.dupe(u8, name),
         .jump = jump,
-        .setqid = true,
         .job = undefined,
     };
     errdefer a.free(self.name);
@@ -165,6 +167,13 @@ pub fn stepAll(ed: *Editor) Text.Error!void {
 /// asynchronous loads: a window that dies mid-load drops its Load, whose job
 /// `deinit` is tombstone-safe. Reached from `Editor.dropTextRefs`.
 pub fn dropWindow(ed: *Editor, w: *Window) void {
+    dropLoadsFor(ed, w);
+    expand.dropWindow(ed, w);
+}
+
+/// Abandon every in-flight load targeting `w` (the load half of `dropWindow`;
+/// also `start`'s one-load-per-window guard).
+fn dropLoadsFor(ed: *Editor, w: *Window) void {
     var i: usize = 0;
     while (i < ed.loads.items.len) {
         const ld = ed.loads.items[i];
@@ -176,7 +185,6 @@ pub fn dropWindow(ed: *Editor, w: *Window) void {
         ld.deinit();
         ed.allocator.destroy(ld);
     }
-    expand.dropWindow(ed, w);
 }
 
 /// Editor teardown: abandon every in-flight load and the parked look.
