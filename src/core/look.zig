@@ -185,6 +185,7 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Chrome = @import("Chrome.zig");
+const ninep = @import("ninep"); // T9 only: mounts warp.MouseSink at /dev
 
 const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
 
@@ -383,4 +384,80 @@ test "look: b3 in the tag searches the body" {
     try testing.expectEqual(body, h.ed.seltext.?);
     try testing.expectEqual(tag_q0, tag.q0);
     try testing.expectEqual(tag_q1, tag.q1);
+}
+
+// --------------------------------------------------------------------------
+// T9 (phase15-native-spike.md §4): a real Look hit issues exactly one
+// `/dev/mouse` write, carrying the hit's point, through the namespace — not a
+// direct call to `warp.to`/`warp.toSelection`, but `look()` itself.
+//
+// TWO TRAPS this test must dodge (phase-15 report, "Public API for the test
+// writer"):
+//   (a) the click must NOT be treated as a file name, or `expand.startLook`
+//       parks a `StatJob` and the warp lands a frame or two later via
+//       `Load.addressAndShow` instead of synchronously here. `startLook`
+//       reaches its namespace/StatJob arm only after `ed.row orelse return
+//       false` (expand.zig) — `WinHarness` never sets `ed.row` (no boot, no
+//       Row), so `startLook` always bails there and `look()` falls straight
+//       through to the literal search arm, every time, regardless of the
+//       clicked text.
+//   (b) the Text must be windowed and LAID OUT, or `ptOfChar` answers with the
+//       frame's origin for every offset instead of the hit's real position —
+//       `WinHarness` + `w.resize` (as the b3-in-tag test above already relies
+//       on) gives a live `Frame` that `Text.show` (called from `search`'s
+//       `landHit`) actually lays text into.
+// --------------------------------------------------------------------------
+
+fn pumpMouseSink(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+test "look: a literal hit warps the pointer through a real /dev/mouse write (T9)" {
+    const a = testing.allocator;
+
+    // The /dev/mouse capture, mounted through a genuine 9P round trip (the
+    // same rig `warp.zig`'s own namespace test uses) — not a bare function
+    // call to `warp.to`, so this exercises the real `look -> search ->
+    // warp.toSelection -> namespace -> write` path end to end.
+    var sink: warp.MouseSink = .{};
+    const pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(a, pipe.serverEnd(), &warp.MouseSink.ops, &sink, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpMouseSink };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/dev", &cl, root.fid);
+
+    // A real, windowed, laid-out body (trap b). "target" is the sole
+    // occurrence, so the forward search re-finds it after one lap.
+    const h = try WinHarness.init("wibble target wibble", proto.Rect.make(0, 20, 300, 380));
+    defer h.deinit();
+    _ = try h.w.resize(proto.Rect.make(0, 20, 300, 380), false, false);
+    h.ed.ns = &ns;
+
+    const body = &h.w.body;
+    // An explicit, non-empty range (not a bare click) naming "target" at
+    // [7,13) — `ed.row == null` (trap a) means this never risks the parked
+    // StatJob path regardless of how file-name-like the text looks.
+    try look(&h.ed, body, 7, 13, false);
+
+    try testing.expectEqual(@as(usize, 7), body.q0);
+    try testing.expectEqual(@as(usize, 13), body.q1);
+    try testing.expectEqual(body, h.ed.seltext.?);
+
+    // Exactly one warp write reached the namespace, and it names the SAME
+    // point `warp.toSelection` computes from the body's now-laid-out frame
+    // (look.c:219's `moveto(mousectl, addpt(frptofchar(...), Pt(4, height-4)))`).
+    try testing.expectEqual(@as(usize, 1), sink.writes);
+    const pt = body.fr.ptOfChar(body.fr.p0);
+    const fh: i32 = body.fr.font.height;
+    var want: [warp.rec_len]u8 = undefined;
+    warp.format(pt.x + 4, pt.y + fh - 4, &want);
+    try testing.expectEqualStrings(&want, &sink.last);
 }
