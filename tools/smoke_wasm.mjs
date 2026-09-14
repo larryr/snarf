@@ -15,14 +15,24 @@
 // NOTE: with B1's real dev/draw_canvas.zig absent, a placeholder backend that
 // does NOT blit is in play; the blit/pixel assertions are expected to report
 // "pending B1 merge" until the pixel path lands.
+//
+// Phase 14b adds a THIRD instance with a real env.fsOp: an in-memory filesystem
+// speaking the ABI-v6 op-record contract, driven through the user's own route
+// (B3 on `mnt/`, then on `opfs/`, then on a file) so the whole path — fsOp out,
+// fsStage/fsPush back, 9P requests parked and retried — runs in the real wasm.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+// The shim's own OPFS record codec (phase 14b). Importing it here is half the
+// test: the smoke's in-memory backend decodes with the SAME code the browser
+// runs, so a drift between web/opfs.js and src/shim/FsRecord.zig shows up as a
+// failed op rather than as a silent mismatch in production.
+import { decodeRecord, FS_OP, FS_STATUS, FS_OP_VERSION } from "../web/opfs.js";
 
 const WASM_PATH = fileURLToPath(new URL("../zig-out/www/snarf.wasm", import.meta.url));
 const ORIGIN_BIN = fileURLToPath(new URL("../zig-out/bin/snarf-origin", import.meta.url));
-const EXPECT_ABI = 5; // R-GFX-05: 4 -> 5 (init(w,h) + EventKind.resize).
+const EXPECT_ABI = 6; // R-P14b-6: 5 -> 6 (env.fsOp + fsStage/fsPush).
 // The boot display size, passed to init(w, h). Deliberately NOT 640×480: the
 // module carries no size of its own any more (the R-P5-3 constants are gone), so
 // booting at 800×600 proves the caller's numbers are honoured. The frozen
@@ -120,7 +130,7 @@ check("exports: memory/init/wake/tick present", () =>
 check("exports: abi_version() present", () => typeof ex.abi_version === "function");
 
 const abi = typeof ex.abi_version === "function" ? ex.abi_version() : undefined;
-check(`abi_version() === ${EXPECT_ABI}`, () => abi === EXPECT_ABI);
+check(`abi_version() === ${EXPECT_ABI} (T14)`, () => abi === EXPECT_ABI);
 
 let initTrapped = false;
 const logsBeforeInit = logs.length;
@@ -281,7 +291,7 @@ try {
 check("boot namespace: 60 ticks poll the served tree without trapping (T12)", () => !nsTrapped);
 check("boot namespace: those ticks logged no panic/failure (T12)", () =>
   !logs.slice(logsBeforeNsTicks).some((m) => /panic|failure/i.test(m)));
-check("boot namespace: exports unchanged (abi_version() still 5) (T12)", () =>
+check(`boot namespace: exports unchanged (abi_version() still ${EXPECT_ABI}) (T12)`, () =>
   ex.abi_version() === EXPECT_ABI &&
   typeof ex.init === "function" &&
   typeof ex.tick === "function" &&
@@ -464,6 +474,277 @@ if (!originUp) {
 
   for (const [, sock] of sockets) { try { sock.close(); } catch {} }
   try { srv.child.kill(); } catch {}
+}
+
+
+// ---- phase 14b: /mnt/opfs against an in-memory fsOp stub -----------------
+//
+// A THIRD module instance with a real env.fsOp: a tiny in-memory filesystem
+// that speaks the op-record contract (src/shim/FsRecord.zig, mirrored in
+// web/opfs.js, whose decoder this reuses). It proves the whole ABI-v6 path
+// through the real wasm — fsOp out, fsStage/fsPush back, parked 9P ops retried
+// — and that the mount is LAZY: booting touches OPFS not at all.
+//
+// The op log is one line per request, in arrival order:
+//     "stat /"  "list /"  "read /notes.txt@0+8168"  "write /f@12+5"
+//     "create_file /f"  "create_dir /d"  "remove /f"  "truncate /f@0"
+// i.e. `<op> <path>` plus `@<arg0>+<count>` for the three that carry one.
+
+function makeFsStub() {
+  const enc = new TextEncoder();
+  // path -> { dir, data, mtime }. "/" always exists.
+  const files = new Map([["/", { dir: true, data: null, mtime: 0 }]]);
+  const ops = [];
+  const queued = [];
+  let ex = null;
+
+  const dirOf = (p) => {
+    const i = p.lastIndexOf("/");
+    return i <= 0 ? "/" : p.slice(0, i);
+  };
+  const baseOf = (p) => p.slice(p.lastIndexOf("/") + 1);
+
+  function statPayload(node) {
+    const out = new Uint8Array(17);
+    const dv = new DataView(out.buffer);
+    dv.setUint8(0, node.dir ? 1 : 0);
+    dv.setBigUint64(1, BigInt(node.dir ? 0 : node.data.length), true);
+    dv.setBigUint64(9, BigInt(node.mtime || 0), true);
+    return out;
+  }
+
+  function listPayload(path) {
+    const kids = [];
+    for (const [p, n] of files) {
+      if (p !== "/" && dirOf(p) === path) {
+        kids.push({ b: enc.encode(baseOf(p)), dir: n.dir });
+      }
+    }
+    let total = 0;
+    for (const k of kids) total += 3 + k.b.length;
+    const out = new Uint8Array(total);
+    const dv = new DataView(out.buffer);
+    let o = 0;
+    for (const k of kids) {
+      dv.setUint8(o, k.dir ? 1 : 0);
+      dv.setUint16(o + 1, k.b.length, true);
+      out.set(k.b, o + 3);
+      o += 3 + k.b.length;
+    }
+    return out;
+  }
+
+  function perform(rec) {
+    const node = files.get(rec.path);
+    switch (rec.op) {
+      case FS_OP.stat:
+        return node
+          ? { status: FS_STATUS.ok, payload: statPayload(node) }
+          : { status: FS_STATUS.not_found, payload: new Uint8Array(0) };
+      case FS_OP.list:
+        if (!node) return { status: FS_STATUS.not_found, payload: new Uint8Array(0) };
+        if (!node.dir) return { status: FS_STATUS.not_dir, payload: new Uint8Array(0) };
+        return { status: FS_STATUS.ok, payload: listPayload(rec.path) };
+      case FS_OP.read: {
+        if (!node) return { status: FS_STATUS.not_found, payload: new Uint8Array(0) };
+        if (node.dir) return { status: FS_STATUS.is_dir, payload: new Uint8Array(0) };
+        const off = Number(rec.arg0);
+        return {
+          status: FS_STATUS.ok,
+          payload: node.data.subarray(Math.min(off, node.data.length), Math.min(off + rec.arg1, node.data.length)),
+        };
+      }
+      case FS_OP.write: {
+        if (!node || node.dir) return { status: FS_STATUS.io, payload: new Uint8Array(0) };
+        const off = Number(rec.arg0);
+        const end = Math.max(node.data.length, off + rec.payload.length);
+        const grown = new Uint8Array(end);
+        grown.set(node.data);
+        grown.set(rec.payload, off);
+        node.data = grown;
+        const out = new Uint8Array(4);
+        new DataView(out.buffer).setUint32(0, rec.payload.length, true);
+        return { status: FS_STATUS.ok, payload: out };
+      }
+      case FS_OP.create_file:
+      case FS_OP.create_dir:
+        if (files.has(rec.path)) return { status: FS_STATUS.exists, payload: new Uint8Array(0) };
+        files.set(rec.path, {
+          dir: rec.op === FS_OP.create_dir,
+          data: rec.op === FS_OP.create_dir ? null : new Uint8Array(0),
+          mtime: 0,
+        });
+        return { status: FS_STATUS.ok, payload: new Uint8Array(0) };
+      case FS_OP.remove:
+        if (!node) return { status: FS_STATUS.not_found, payload: new Uint8Array(0) };
+        for (const p of files.keys()) {
+          if (p !== rec.path && dirOf(p) === rec.path) {
+            return { status: FS_STATUS.not_empty, payload: new Uint8Array(0) };
+          }
+        }
+        files.delete(rec.path);
+        return { status: FS_STATUS.ok, payload: new Uint8Array(0) };
+      case FS_OP.truncate: {
+        if (!node || node.dir) return { status: FS_STATUS.io, payload: new Uint8Array(0) };
+        const n = Number(rec.arg0);
+        const grown = new Uint8Array(n);
+        grown.set(node.data.subarray(0, Math.min(n, node.data.length)));
+        node.data = grown;
+        return { status: FS_STATUS.ok, payload: new Uint8Array(0) };
+      }
+      default:
+        return { status: FS_STATUS.io, payload: new Uint8Array(0) };
+    }
+  }
+
+  function label(rec) {
+    const name = Object.keys(FS_OP).find((k) => FS_OP[k] === rec.op) || `op${rec.op}`;
+    if (rec.op === FS_OP.read) return `${name} ${rec.path}@${rec.arg0}+${rec.arg1}`;
+    if (rec.op === FS_OP.write) return `${name} ${rec.path}@${rec.arg0}+${rec.payload.length}`;
+    if (rec.op === FS_OP.truncate) return `${name} ${rec.path}@${rec.arg0}`;
+    return `${name} ${rec.path}`;
+  }
+
+  return {
+    files,
+    ops,
+    bind(exports) { ex = exports; },
+    // env.fsOp: decode, log, and QUEUE the answer — never complete inside the
+    // call (the module's no-re-entrancy rule, contract §3a).
+    fsOp(ptr, len, ticket) {
+      const bytes = new Uint8Array(ex.memory.buffer, ptr, len).slice();
+      const rec = decodeRecord(bytes);
+      if (!rec) {
+        queued.push({ ticket, status: FS_STATUS.io, payload: new Uint8Array(0) });
+        return;
+      }
+      ops.push(label(rec));
+      const { status, payload } = perform(rec);
+      queued.push({ ticket, status, payload });
+    },
+    // Deliver every queued completion. fsPush retries parked requests, which
+    // may issue NEW fsOps, so loop until the queue settles.
+    drain() {
+      for (let guard = 0; guard < 64 && queued.length > 0; guard++) {
+        const batch = queued.splice(0, queued.length);
+        for (const c of batch) {
+          const ptr = ex.fsStage(c.payload.length);
+          if (!ptr) throw new Error("fsStage refused " + c.payload.length);
+          if (c.payload.length > 0) {
+            new Uint8Array(ex.memory.buffer, ptr, c.payload.length).set(c.payload);
+          }
+          ex.fsPush(c.ticket, c.status, ptr, c.payload.length);
+        }
+      }
+    },
+    seedFile(path, text) {
+      this.files.set(path, { dir: false, data: new TextEncoder().encode(text), mtime: 1_700_000_000_000 });
+    },
+    seedDir(path) {
+      this.files.set(path, { dir: true, data: null, mtime: 0 });
+    },
+  };
+}
+
+check(`opfs: web/opfs.js mirror is FS_OP_VERSION ${FS_OP_VERSION} with 8 ops / 9 statuses (T1)`, () =>
+  FS_OP_VERSION === 1 &&
+  Object.keys(FS_OP).length === 8 &&
+  Object.keys(FS_STATUS).length === 9 &&
+  FS_OP.stat === 1 && FS_OP.truncate === 8 &&
+  FS_STATUS.ok === 0 && FS_STATUS.io === 8);
+
+{
+  const stub = makeFsStub();
+  // Pre-seed the store: one file and one directory, so the first listing has
+  // something to draw and the file has something to read.
+  stub.seedFile("/notes.txt", "opfs round trip\n");
+  stub.seedDir("/sub");
+
+  const inst3 = await WebAssembly.instantiate(module, buildImports(module, {
+    fsOp: (ptr, len, ticket) => stub.fsOp(ptr, len, ticket),
+  }));
+  const ex3 = inst3.exports;
+  stub.bind(ex3);
+  memory = ex3.memory; // decode()/pixelAt() now read instance 3.
+
+  check("opfs: module exports fsStage/fsPush", () =>
+    typeof ex3.fsStage === "function" && typeof ex3.fsPush === "function");
+
+  ex3.init(FB_W, FB_H);
+  let t3 = 100;
+  // One "frame": deliver whatever the stub owes, then tick. fsPush retries the
+  // parked 9P request, which may issue the NEXT fsOp, so drain loops.
+  const step = (n) => {
+    for (let i = 0; i < n; i++) {
+      stub.drain();
+      ex3.tick((t3 += 16));
+    }
+    stub.drain();
+  };
+  step(20);
+  check("opfs: boot issues no fsOp — the mount is lazy (T13)", () => stub.ops.length === 0);
+
+  // B3 (DOM button 2) on `mnt/` in the boot `/` listing, then on `opfs/` in the
+  // window that opens, then on `notes.txt` in the window THAT opens: the user's
+  // own route into the tree. Coordinates come from the 13b layout at 800x600 —
+  // right column body x0 = 496, first body line y 59..77, 9 px font, directory
+  // maxtab 27 — and from the same arithmetic applied to each new window, which
+  // `rowadd`/`makenewwindow` stack down the right column at y 79, 118, 160.
+  const B3 = 2;
+  function look(x, y) {
+    ex3.pushEvent(3 /* pointer_move */, x, y, 0, (t3 += 16));
+    step(1);
+    ex3.pushEvent(1 /* pointer_down */, x, y, B3, (t3 += 16));
+    step(1);
+    ex3.pushEvent(2 /* pointer_up */, x, y, B3, (t3 += 16));
+    step(40);
+  }
+  function inkIn(b, x0, x1, y0, y1) {
+    if (!b) return -1;
+    let n = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const p = pixelAt(b.ptr, b.fbW, x, y);
+        if (p.r === 0 && p.g === 0 && p.b === 0) n++;
+      }
+    }
+    return n;
+  }
+
+  look(560, 66); // `mnt/` in the `/` listing: a namespace directory
+  check("opfs: B3 on `mnt/` opens a window with NO fsOp (namespace synthesis)", () =>
+    stub.ops.length === 0);
+
+  look(500, 106); // `opfs/` in the `/mnt/` listing: into the device at last
+  check("opfs: B3 on `opfs/` makes the device list its root (T13)", () =>
+    stub.ops.includes("list /"));
+  check("opfs: the /mnt/opfs/ window drew its listing", () =>
+    inkIn(blits[blits.length - 1], 494, 660, 137, 155) > 0);
+
+  look(520, 146); // `notes.txt` in the `/mnt/opfs/` listing: a FILE this time
+  check("opfs: B3 on `notes.txt` reads the file through the device (T13)", () =>
+    stub.ops.some((o) => o.startsWith("read /notes.txt@0+")));
+  check("opfs: the file's text reached a window", () =>
+    inkIn(blits[blits.length - 1], 494, 799, 176, 196) > 0);
+
+  // A change made behind the editor's back shows up on the next Get, which is
+  // how acme has always worked (a directory window does not auto-refresh).
+  // "Get" sits at rune 21 of the tag "/mnt/opfs/ Del Snarf Get | Look ", so
+  // x = 496 + 21*9 = 685; B2 is DOM button 1.
+  stub.seedFile("/fresh.md", "new\n");
+  const beforeGet = stub.ops.length;
+  ex3.pushEvent(3, 695, 127, 0, (t3 += 16));
+  step(1);
+  ex3.pushEvent(1, 695, 127, 1, (t3 += 16));
+  step(1);
+  ex3.pushEvent(2, 695, 127, 1, (t3 += 16));
+  step(40);
+  check("opfs: Get re-lists the directory and sees the new file (T13)", () =>
+    stub.ops.slice(beforeGet).includes("list /"));
+
+  check("opfs: the whole drive logged no panic/failure", () =>
+    !logs.some((m) => /panic|failure/i.test(m)));
+  console.log(`opfs ops: ${stub.ops.length} (${stub.ops.join(", ")})`);
 }
 
 // ---- report --------------------------------------------------------------

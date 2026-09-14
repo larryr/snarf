@@ -1,6 +1,6 @@
 # R-03 — Namespace & 9P Requirements
 
-Status: **Draft v4**
+Status: **Draft v6**
 
 Everything outside the editor core's memory is a file served over 9P. This document states
 which namespaces must exist and what they must let a client do. Protocol details:
@@ -52,6 +52,14 @@ which namespaces must exist and what they must let a client do. Protocol details
 
 ## 5. Revision log
 
+- **v6** (2026-09-14, phase 14b) — **R-9P-09's OPFS half is DELIVERED**: `/mnt/opfs` is
+  an in-module 9P server over the Origin Private File System, mounted unconditionally at
+  boot, fully writable, no prompts (S-02 §4 as built; S-06 §4 for the ABI-v6 `fsOp`
+  record and the `fsStage`/`fsPush` completion pair). It is the first CREATABLE tree in
+  the namespace and the first that answers nothing synchronously — every operation rides
+  R-9P-13's parking, which is why 14a had to generalise it first. **R-9P-09's `/mnt/host`
+  half remains unbuilt**, as does R-9P-08's `/dev/storage`. No ID renumbered; no new ID
+  needed.
 - **v5** (2026-09-14, phase 14a) — **R-9P-01's mandatory subset is now complete minus
   auth.** `Tcreate`/`Tremove`/`Twstat` were "Unsupported" from phase 1 (contract ruling
   R5) and are implemented framework-wide; `Tauth`/`Rauth` is the only pair left, still

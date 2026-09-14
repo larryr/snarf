@@ -6,14 +6,20 @@
 // as devices land; phase 5 wired the pixel path (env.blit) + diagnostics
 // (env.consoleLog); phase 6 adds input capture; phase 12 adds the `ws` trio that
 // carries 9P to the origin (R-P12-2); phase 12c makes the display follow the
-// window (R-GFX-05).
+// window (R-GFX-05); phase 14b wires env.fsOp to the Origin Private File System
+// (./opfs.js — same-origin, no library) and the fsStage/fsPush completion pair.
+
+// The OPFS backend lives in its own module: the op-record codec plus the
+// File System API calls (FS_OP / FS_STATUS / FS_OP_VERSION mirror
+// src/shim/FsRecord.zig there, the way WS_KIND mirrors abi.zig here).
+import { createOpfsBackend } from "./opfs.js";
 
 // ABI generation this shim mirrors; must equal src/shim/abi.zig `version` and
-// the module's exported abi_version() (checked below). 4→5 this phase
-// (R-GFX-05): init() grew its (w, h) display size, and EventKind.resize = 8
-// carries every later window resize. Drift becomes a build error once the
-// generated checksum lands (OQ-BLD-2).
-const ABI_VERSION = 5;
+// the module's exported abi_version() (checked below). 5→6 this phase
+// (R-P14b-6): the env.fsOp import and the fsStage/fsPush export pair joined the
+// surface, so a v5 shim has no way to serve /mnt/opfs at all. Drift becomes a
+// build error once the generated checksum lands (OQ-BLD-2).
+const ABI_VERSION = 6;
 
 // EventKind, a MECHANICAL mirror of src/shim/abi.zig `EventKind` (R-P6-10). All
 // input POLICY stays in Zig (ADR-0004); this shim only transliterates and tags.
@@ -86,6 +92,12 @@ const sockets = new Map();
 
 // Shared empty payload for records that carry none (the open record).
 const EMPTY_BYTES = new Uint8Array(0);
+
+// Installed at boot from the module's fsStage/fsPush exports; stays null when
+// the module predates them, which leaves env.fsOp inert — /mnt/opfs is then
+// mounted but never answers (the module parks, which is the honest state: there
+// is no way to complete a ticket without the staging pair).
+let fsBackend = null;
 
 // Installed at boot from the module's wsStage/wsPush exports; stays null when
 // the module predates them, which disables the ws imports entirely (the origin
@@ -204,6 +216,19 @@ const imports = {
       const sock = sockets.get(id);
       if (!sock || sock.readyState !== WebSocket.OPEN) return;
       sock.send(new Uint8Array(memory.buffer, ptr, len).slice());
+    },
+
+    // Perform one Origin Private File System operation (R-P14b-6). The record
+    // is COPIED out of wasm memory before it is queued: the backend answers
+    // from a microtask, by which time linear memory may have grown and the
+    // view detached (R-P5-1). Returns immediately; the module has already
+    // parked the 9P request that is waiting for this ticket.
+    fsOp(ptr, len, ticket) {
+      if (!fsBackend) {
+        warn("opfs: module has no fsStage/fsPush exports — /mnt/opfs disabled");
+        return;
+      }
+      fsBackend.submit(new Uint8Array(memory.buffer, ptr, len).slice(), ticket);
     },
 
     // Close connection `id`. Idempotent; unknown ids are a no-op. The handlers
@@ -371,6 +396,8 @@ async function boot() {
     pushEvent,
     wsStage,
     wsPush,
+    fsStage,
+    fsPush,
   } = instance.exports;
 
   memory = mem;
@@ -394,6 +421,29 @@ async function boot() {
     };
   } else {
     warn("ws: module exports no wsStage/wsPush — no origin mount this boot");
+  }
+
+  // Same staging dance for the OPFS completion stream, deliberately a SECOND
+  // export pair so the two record streams cannot interleave (R-P14b-6).
+  if (typeof fsStage === "function" && typeof fsPush === "function") {
+    fsBackend = createOpfsBackend({
+      complete: (ticket, status, bytes) => {
+        const ptr = fsStage(bytes.length);
+        if (!ptr) {
+          // Dropping a completion parks its 9P request forever, so say so.
+          warn("opfs: staging buffer unavailable, dropped a completion");
+          return;
+        }
+        if (bytes.length > 0) {
+          new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+        }
+        fsPush(ticket, status, ptr, bytes.length);
+      },
+      warn,
+    });
+    if (!fsBackend.available) warn("opfs: navigator.storage.getDirectory() missing");
+  } else {
+    warn("opfs: module exports no fsStage/fsPush — /mnt/opfs will not answer");
   }
 
   // Verify the ABI contract BEFORE handing control to the module (R-P5-4).

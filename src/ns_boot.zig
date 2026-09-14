@@ -18,6 +18,7 @@
 //!     /dev            → the input device ("input" root: mouse kbd ctl)
 //!     /dev/draw       → the draw device (devdraw's root IS the draw directory)
 //!     /mnt/snarf-self → the served editor tree (core/served/fsys.zig)
+//!     /mnt/opfs       → the browser's Origin Private File System (dev/opfs.zig)
 //!
 //! `/` and `/mnt` are not mounted by anyone; they are SYNTHESIZED from the
 //! prefixes above (devroot.c's role, R-9P-16, `ninep.nsdir`). `/n/origin` and
@@ -25,10 +26,11 @@
 //! `ListDirJob("/")` reads `dev/ mnt/` with the origin down and
 //! `bin/ dev/ mnt/ n/` with it up.
 //!
-//! Imports: `core` + `ninep` (this is boot glue, not core — it sees the
+//! Imports: `core` + `dev` + `ninep` (this is boot glue, not core — it sees the
 //! entry point's device stacks).
 const std = @import("std");
 const core = @import("core");
+const dev = @import("dev");
 const ninep = @import("ninep");
 
 /// The in-process `/mnt/snarf-self` server and its client — the third 9P stack
@@ -108,6 +110,62 @@ pub fn mountDevices(
     try ns.mount("/dev/draw", draw_cl, draw_root);
     try ns.mount("/dev", input_cl, input_root);
 }
+
+/// Where the OPFS device mounts (R-9P-09, S-02 §4). Mounted UNCONDITIONALLY
+/// (R-P14b-2): a browser without `navigator.storage.getDirectory` still has the
+/// mount point, and its absence surfaces as `i/o error` on first use plus one
+/// console line. A mount that exists and errors is simpler to reason about — and
+/// to report — than a mount point that silently is not there.
+pub const opfs_mount_point = "/mnt/opfs";
+
+/// The in-process `/mnt/opfs` server and its client — the FOURTH 9P stack in
+/// the module, assembled exactly like `SelfTree` above. The `DevOpfs` itself
+/// lives in the entry point's `App` (the server captures it), so this struct
+/// holds only the pipe/server/client triple.
+///
+/// WARNING, once this is in the table: reach `/mnt/opfs` ONLY through
+/// `ninep.nsjob`'s asynchronous jobs — never through `nsdir.walk`/`DirReader`
+/// nor a synchronous `Client.read`/`stat`/`clunk`. EVERY operation on this tree
+/// may park until the browser answers (14a), and a synchronous `rpc` pumps
+/// until ITS reply arrives, which for a parked op is never. The `attach` below
+/// is the one exception, and only because `DevOpfs.attach` is the one op that
+/// answers without asking the browser.
+pub const OpfsTree = struct {
+    pipe: *ninep.chan.Pipe = undefined,
+    srv: ninep.server.Server = undefined,
+    cl: ninep.Client = undefined,
+    root_fid: u32 = 0,
+
+    /// Serve `device` and mount it at `/mnt/opfs`.
+    pub fn start(
+        self: *OpfsTree,
+        a: std.mem.Allocator,
+        device: *dev.opfs.DevOpfs,
+        ns: *ninep.mount.Namespace,
+    ) !void {
+        self.pipe = try ninep.chan.Pipe.init(a, 16384);
+        self.srv = try ninep.server.Server.init(
+            a,
+            self.pipe.serverEnd(),
+            &dev.opfs.DevOpfs.ops,
+            device,
+            8192,
+        );
+        self.cl = try ninep.Client.init(a, self.pipe.clientEnd(), 8192);
+        self.cl.pump = .{ .ctx = &self.srv, .run = pumpServer };
+        _ = try self.cl.version(8192);
+        const root = try self.cl.attach("larry", "");
+        self.root_fid = root.fid;
+        try ns.mount(opfs_mount_point, &self.cl, root.fid);
+    }
+
+    /// Drive the OPFS server one poll, from the entry point's `tick`. Requests
+    /// that need the browser park here and are answered by `retryParked` from
+    /// inside `fsPush` (see `opfs_glue.zig`), not by this poll.
+    pub fn poll(self: *OpfsTree) !void {
+        _ = try self.srv.poll();
+    }
+};
 
 /// Drive an in-process 9P server one poll at a time; wired as a client's pump
 /// so its blocking setup RPCs (version/attach) advance the server.

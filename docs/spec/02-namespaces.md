@@ -87,7 +87,7 @@ table — so the file lives at **`/mnt/snarf-self/ns`**, in the tree that is alr
 editor's own interface (§6). It renders one line per union member, exactly as
 `Namespace.list` does.
 
-**As built (phase 13a).** The rows above are the intended table; the ones the browser
+**As built (phase 14b).** The rows above are the intended table; the ones the browser
 actually mounts at boot today are:
 
 | Prefix | Mounted by | Notes |
@@ -95,13 +95,19 @@ actually mounts at boot today are:
 | `/dev` | `ns_boot.mountDevices` | the input device — root directory `mouse kbd ctl` (S-04) |
 | `/dev/draw` | `ns_boot.mountDevices` | the draw device; a *separate server*, so `/dev`'s listing gains a synthesized `draw` child (§1.2) |
 | `/mnt/snarf-self` | `ns_boot.SelfTree.start` | served in-process from boot (§6) |
+| `/mnt/opfs` | `ns_boot.OpfsTree.start` | the OPFS device, mounted UNCONDITIONALLY (§4); every op parks, so jobs only |
 | `/n/origin`, `/bin` | `origin/OriginMount` | only if the origin attaches (§5) |
 
 `/` and `/mnt` are mounted by nobody: they are synthesized from those prefixes (§1.2).
 So a listing of `/` reads `dev/ mnt/` with the origin down and `bin/ dev/ mnt/ n/` with
-it up. Not yet mounted: `/dev/snarf`, `/dev/dom`, the browser feature files,
-`/mnt/host` and `/mnt/opfs`. (`/mnt/snarf-self/ns` itself is SERVED as of phase 13b.)
+it up, and a listing of `/mnt` reads `opfs/ snarf-self/`. Not yet mounted: `/dev/snarf`,
+`/dev/dom`, the browser feature files and `/mnt/host`. (`/mnt/snarf-self/ns` itself is
+SERVED as of phase 13b; `/mnt/opfs` as of phase 14b.)
 
+> Revision log: 2026-09-14 (phase 14b) — `/mnt/opfs` is BUILT and is the FOURTH
+> in-process 9P stack (§4 for the tree as built). It changes no existing listing:
+> `/` still reads `dev/ mnt/` with the origin down, because `opfs/` sits under `mnt/`.
+>
 > Revision log: 2026-09-14 (phase 13b) — `/mnt/snarf-self/ns` is BUILT (§6): the served
 > root's dirtab grew an `ns` row rendering `Namespace.list`, which was possible only in
 > a wave allowed to move served listings. A window's `ctl` line now reports the real
@@ -172,6 +178,49 @@ the escape hatch that keeps tree-walking cheap.
 - Browsers without the API (R-9P-09 fallback): `/mnt/host/ctl` accepts `import` (file picker
   → read-only snapshot files) and `export <path>` (download). 
 - `/mnt/opfs`: the Origin-Private File System, always available, fully writable, no prompts.
+
+> Revision log: 2026-09-14 (phase 14b) — **`/mnt/opfs` AS BUILT** (`src/dev/opfs.zig`,
+> contract `agents/contracts/phase14b-opfs.md`). Mounted UNCONDITIONALLY at boot, so
+> `/mnt/` lists `opfs/` from the first frame; a browser with no
+> `navigator.storage.getDirectory` answers every request `Rerror "i/o error"` and logs
+> `/mnt/opfs: unavailable` once (ruling R-P14b-2 — a mount that errors is simpler to
+> report than a mount point that is silently absent). The mount is LAZY: boot issues no
+> browser call at all.
+>
+> - **Files and directories only**, read/write, OTRUNC, create (files and dirs, DMDIR
+>   honoured), remove (empty directories only — 9P has no recursive remove, and the shim
+>   never passes `{recursive}` to `removeEntry`). Names: UTF-8, no `/`, never `.`/`..`;
+>   a partial multi-element walk gives a short Rwalk, as everywhere else.
+> - **No rename** (R-P14b-4): `FileSystemHandle.move()` is Chromium-only, so `Twstat`
+>   supports **length only** (a truncate) and every other change — name, mode, times,
+>   owner — is refused `"wstat prohibited"`. An all-"don't touch" wstat is the
+>   conventional no-op and succeeds. Rename is create + copy + remove, by the client.
+> - **qid caveat**: OPFS exposes no inode, so `qid.path` is the FNV-1a 64 hash of the
+>   file's absolute path and `qid.vers` is `File.lastModified` truncated to seconds.
+>   Qids are therefore stable per NAME, not per identity — remove a file and create
+>   another with the same name and the qid is unchanged. Modes are fixed at `0644` /
+>   `0755|DMDIR` (OPFS stores none); `uid`/`gid`/`muid` are `opfs`; directories report
+>   length 0 and mtime 0. A `create` perm is masked per `5/open` and travels to the shim,
+>   but nothing stores it.
+> - **Directory reads** are offset-addressed stat streams (`read(5)`), built ONCE per
+>   open fid from a single `list` call. Entries in a listing carry length 0 and mtime 0 —
+>   the `list` reply has only the name and the kind, and a stat per entry would turn one
+>   round trip into N; walk to the entry and stat it for the real numbers.
+> - **Every operation may park.** Each one that needs the browser sends one op record and
+>   returns 14a's `park.WouldBlock`; the completion is cached by ticket and the framework
+>   re-dispatches the whole T-frame (S-06 §4 for the record format). Consequence, the
+>   same one `/dev` carries and stronger: reach `/mnt/opfs` through `ninep.nsjob`'s
+>   asynchronous jobs ONLY — a synchronous `Client` RPC would pump for a reply that
+>   cannot come until a later frame.
+> - **Error mapping**: `not found` → `"file does not exist"`, `exists` →
+>   `"file already exists"`, `not a directory` → `"not a directory"`, `is a directory` →
+>   `"file is a directory"` (the kernel's `Eisdir`), `permission` →
+>   `"permission denied"`, `quota` → `"no space on device"`, `not empty` →
+>   `"directory not empty"`, `io` → `"i/o error"`.
+> - **Deferred**: sync access handles (`createSyncAccessHandle` is worker-only — they
+>   arrive free with the Worker+SAB move); rename via `move()` where available;
+>   exporting `/mnt/opfs` over 9P to other machines (needs `Tauth`, OQ-9P-3); `/mnt/host`
+>   and `/dev/storage`, which remain unbuilt.
 
 ## 5. `/n/origin` — origin 9P export (R-9P-10) — Host: **both** (WebSocket transport is the browser's)
 
