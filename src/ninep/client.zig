@@ -155,6 +155,15 @@ pub fn freeFid(self: *Client, fid: u32) void {
     self.free_fids.append(self.allocator, fid) catch {};
 }
 
+/// Record the Rattach/Rwalk qid a hand-driven handshake learned out of band —
+/// see `origin/handshake.zig`, which drives version+attach at the frame level
+/// and then hands the session to this client. Overwrites any existing entry.
+/// Best-effort, like every other write to this cache: `walk` falls back to a
+/// zero qid when the fid is unknown.
+pub fn seedQid(self: *Client, fid: u32, qid: Qid) void {
+    self.fids.put(self.allocator, fid, qid) catch {};
+}
+
 /// Next tag, wrapping 0..0xFFFE and skipping NOTAG (0xFFFF). [S-01 §4]
 fn allocTag(self: *Client) u16 {
     const t = self.next_tag;
