@@ -21,6 +21,15 @@ pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
+/// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
+/// (text.c:121-275), phase 13b, R-EDIT-03.
+pub const dirwin = @import("dirwin.zig");
+/// One in-flight window load — the asynchronous `textload` (text.c:192-317).
+pub const Load = @import("Load.zig");
+/// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
+pub const openfile = @import("openfile.zig");
+/// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).
+pub const expand = @import("expand.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");

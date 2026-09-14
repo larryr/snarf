@@ -49,6 +49,17 @@ pub const Options = struct {
     /// (S-02 §1, phase 13a). Carried on the `Tree` and installed on the
     /// `Editor` by `Tree.bind`; null for every harness that never names a path.
     ns: ?*ninep.mount.Namespace = null,
+    /// acme's NO-ARGUMENT startup (acme.c:242-260): `ncol = 2` and NO initial
+    /// window — the C then calls `readfile(row.col[row.ncol-1], wdir)`, putting
+    /// the working-directory window in the RIGHTMOST column and leaving the left
+    /// one empty. The port cannot do that here (the load needs an `Editor` and a
+    /// mounted namespace, neither of which exists yet at `boot` time), so this
+    /// option builds the two columns and the CALLER — `main_wasm`, once
+    /// `ns_boot` has mounted everything — calls `openfile.readFile`.
+    ///
+    /// `win_name`/`body` are ignored when it is set. R-P13b-4: the default
+    /// (false) path is the acceptance scenes' and stays byte-for-byte as it was.
+    dir_boot: bool = false,
 };
 
 /// The assembled window tree. Owns the `Chrome` and the heap `Row` (which owns
@@ -213,6 +224,12 @@ pub fn boot(
     const c = (try row.add(-1)) orelse return error.ColumnTooNarrow;
 
     var tree = Tree{ .allocator = a, .chrome = chrome, .row = row, .ns = opts.ns };
+    if (opts.dir_boot) {
+        // acme.c:249-257 `for(i=0; i<ncol; i++) rowadd(&row, nil, -1)` with
+        // ncol == 2; the window itself is the caller's (see `Options.dir_boot`).
+        _ = (try row.add(-1)) orelse return error.ColumnTooNarrow;
+        return tree;
+    }
     _ = try tree.addWinTo(c, opts.win_name, opts.body);
     return tree;
 }

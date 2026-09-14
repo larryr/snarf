@@ -102,3 +102,17 @@ rather than staying silent (R-EDIT-25).
   (R-EDIT-22), placement heuristics (R-EDIT-23), single-click expansion (R-EDIT-24), and
   the recorded no-warp divergence (R-EDIT-25). Noted the in-memory-buffer divergence on
   R-EDIT-10. Implementation gaps found in the same pass are in `agents/HANDOFF.md`.
+- **v5** (2026-09-14, phase 13b) — no requirement IDs added, changed or renumbered; one
+  BROWSER-HOST note recorded against **R-EDIT-07** (and it applies equally to R-EDIT-03
+  and R-EDIT-13): ACME decides whether B3'd text is a file name with a synchronous
+  `access()` inside `look3` (`acme/look.c:706`). Snarf cannot — the answer comes from a
+  9P walk whose reply may arrive only on a later browser tick (R-9P-13) and the main
+  thread must not block — so the existence check is ASYNCHRONOUS (ruling R-P13b-2, spec
+  S-05 §6): the look parks on a `StatJob`, at most one at a time, and resolves a frame
+  or two later either into an opened window or into the literal search. The same
+  inversion applies to loading a window's contents at all (`textload` → `src/core/Load.zig`,
+  S-05 §2), so a directory window's listing likewise appears a frame or two after the
+  window does. Two further rulings recorded without ID changes: `wdir` is `/`
+  (R-P13b-3 — the port has no process working directory, so an unrooted name that the
+  window's own directory does not resolve hangs off the namespace root), and `Get`
+  serves DIRECTORY windows only until the Put/Get wave (R-P13b-5).

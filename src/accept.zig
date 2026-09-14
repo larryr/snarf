@@ -1170,3 +1170,123 @@ test "phase-12c: resize scene — grow then shrink keeps the tiling and the text
         'Z',
     ) != null);
 }
+
+test "phase-13b: acme boot — two columns, the root directory window rightmost (T13)" {
+    const core = @import("core");
+    const alloc = testing.allocator;
+
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    // The session mount table: a fake /dev + a REAL served /mnt/snarf-self,
+    // the phase-13a boot shape main_wasm.zig assembles.
+    var ns = ninep.mount.Namespace.init(alloc);
+    defer ns.deinit();
+
+    // acme's no-argument startup (acme.c:242-260): TWO empty columns, no
+    // window yet — `dir_boot` builds exactly that (contract §3f).
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .dir_boot = true,
+        .ns = &ns,
+    });
+    defer tree.deinit();
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    tree.bind(&ed);
+    ed.but2col = tree.chrome.but2col;
+    ed.but3col = tree.chrome.but3col;
+
+    var dev_tree = ninep.nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var devsrv = try ninep.nsdir.FakeServer.init(alloc, &dev_tree);
+    defer devsrv.deinit();
+    try ns.mount("/dev", devsrv.client, devsrv.root_fid);
+
+    var fsys = core.served.fsys.Fsys.init(&ed);
+    const spipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer spipe.deinit();
+    var ssrv = try ninep.server.Server.init(alloc, spipe.serverEnd(), &core.served.fsys.Fsys.ops, &fsys, 8192);
+    defer ssrv.deinit();
+    var scl = try ninep.Client.init(alloc, spipe.clientEnd(), 8192);
+    defer scl.deinit();
+    scl.pump = .{ .ctx = &ssrv, .run = pumpServer };
+    _ = try scl.version(8192);
+    const sroot = try scl.attach("larry", "");
+    try ns.mount("/mnt/snarf-self", &scl, sroot.fid);
+
+    // acme.c:258-259 `readfile(row.col[ncol-1], wdir)`: the `/` window lands
+    // in the RIGHTMOST column; the left one stays empty (R-P13b-3).
+    const cols = tree.row.col.items;
+    try testing.expectEqual(@as(usize, 2), cols.len);
+    try testing.expectEqual(@as(usize, 0), cols[0].w.items.len);
+    const w = try core.openfile.readFile(&ed, cols[1], "/");
+
+    // Let the boot listing load: `Editor.loads` is stepped one 9P state per
+    // `frameEnd` (13b, §3b); BOTH mounted servers are polled every tick, the
+    // same "pump every server or wedge" rule 13a's Pumps enforces.
+    var i: usize = 0;
+    while (i < 16) : (i += 1) {
+        try ed.frameEnd(d);
+        _ = try ssrv.poll();
+        _ = try devsrv.srv.poll();
+    }
+
+    // --- spot-checks (R-P2-7), BEFORE freezing ------------------------------
+    try testing.expectEqual(@as(usize, 1), cols[1].w.items.len);
+    try testing.expectEqual(w, cols[1].w.items[0]);
+    try testing.expect(w.isdir);
+    try testing.expect(!w.filemenu);
+    try testing.expectEqualStrings("/", w.body.file.name.items);
+    try testing.expectEqual(@as(i32, 27), w.body.fr.maxtab); // TABDIR-narrowed (text.c:148)
+    // The right column's body Dx at a 640px screen: 640*2/5 - 16 = 240
+    // (rowadd's 3/5-old/2/5-new split, then the scrollbar+gap carve).
+    try testing.expectEqual(@as(i32, 240), w.body.fr.r.max.x - w.body.fr.r.min.x);
+
+    var bbuf: [64]u8 = undefined;
+    try testing.expectEqualStrings("dev/\tmnt/\n", w.body.file.buffer.read(0, w.body.file.buffer.len(), &bbuf));
+
+    var tbuf: [128]u8 = undefined;
+    try testing.expectEqualStrings("/ Del Snarf Get | Look ", w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tbuf));
+
+    // Row-tag pale blue at the top-left corner (Chrome's standing pin).
+    try testing.expectEqual(@as(u32, 0xEAFFFFFF), hb.pixelAt(30, 2));
+
+    // The right column's body drew SOME ink — proves the dir load reached the
+    // real draw pipeline (blit), not just the Text/File model underneath it.
+    var any_ink = false;
+    var y: u32 = @intCast(w.body.fr.r.min.y);
+    const y_max: u32 = @intCast(w.body.fr.r.max.y);
+    const x_min: u32 = @intCast(w.body.fr.r.min.x);
+    const x_max: u32 = @intCast(w.body.fr.r.max.x);
+    while (y < y_max and !any_ink) : (y += 1) {
+        var x: u32 = x_min;
+        while (x < x_max) : (x += 1) {
+            if (hb.pixelAt(x, y) == 0x000000FF) {
+                any_ink = true;
+                break;
+            }
+        }
+    }
+    try testing.expect(any_ink);
+
+    // FROZEN-ACCEPT-13B: acme's no-argument boot — two columns, the left
+    // empty, the `/` directory window in the right one listing `dev/ mnt/`
+    // (columnated, maxtab 27), tag "/ Del Snarf Get | Look ". Frozen
+    // 2026-09-14 from a spot-check-verified render (R-P2-7); re-freeze ONLY
+    // with orchestrator sign-off.
+    try testing.expectEqual(@as(u64, 0x35f686fc5162d2cf), hb.hash());
+}

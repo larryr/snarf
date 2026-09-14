@@ -1,4 +1,7 @@
-# Phase 13 contract — /mnt/opfs: browser-local filesystem mount ("OPFS wave")
+# Phase 14 contract — /mnt/opfs: browser-local filesystem mount ("OPFS wave")
+
+> Renumbered 13 → 14 in phase 13b: phase 13 became the namespace pair 13a (async 9P
+> jobs) + 13b (directory windows). Content otherwise unchanged; sequence it after 13b.
 
 Scope: a browser-local filesystem in the namespace (R-9P-09 OPFS half, S-02 "/mnt/opfs",
 S-06 §4 `host: fsOp` import): an in-module 9P device server backed by the Origin Private
