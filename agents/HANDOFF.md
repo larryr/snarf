@@ -6,20 +6,24 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase13a`** (worktree `../snarf-wt/phase13a`, 2026-09-14, larry's Mac, local only) —
-  async 9P tickets (NEW `ninep/tickets.zig`, `client.zig` shrinks), namespace jobs (NEW
-  `ninep/nsjob.zig`), `Editor.ns` handle, real boot namespace in `main_wasm` (`/dev`,
-  `/dev/draw`, `/mnt/snarf-self` served at runtime — retires R-P10-E). Owns those files +
-  `core/boot.zig`, `served/fsys.zig` (optional `ns` file), S-01/S-02/R-03 docs. Contract
-  `agents/contracts/phase13a-async-namespace.md`. 13b (directory windows UI) follows.
+- *(none as of 2026-09-14 — phase 13a merged; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b, 12c, 12d, 12e are MERGED to `main`; `main` is green.**
-  575/575 tests, node smoke 26/26, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1610 KiB
-  ReleaseSafe (user decision 2026-09-14: KEEP ReleaseSafe default; ReleaseSmall measured at
-  194 KiB — revisit when a remote deploy makes size matter).
+- **Phases 1–12, 12b–12e, 13a are MERGED to `main`; `main` is green.**
+  592/592 tests (≈3 s), node smoke 29/29, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
+  ≈ 1747 KiB ReleaseSafe (+137 KiB in 13a: the served tree is now linked in; user decision
+  2026-09-14: KEEP ReleaseSafe default; ReleaseSmall was 194 KiB before 13a — re-measure).
+- **Phase 13a MERGED (2026-09-14)** — see agents/reports/phase13a-async-namespace.md:
+  generic async 9P tickets with TOMBSTONES (`ninep/tickets.zig`; `client.zig` 585 lines),
+  namespace jobs (`ninep/nsjob.zig` Walk + `ninep/nsio.zig` Stat/ReadFile/ListDir, `runSync`
+  + `Pumps` — pump EVERY reachable server or a union wedges), `Editor.ns` handle, and a REAL
+  boot namespace (`src/ns_boot.zig`: `/dev`, `/dev/draw`, `/mnt/snarf-self` served at runtime
+  — R-P10-E RETIRED; `/dev` + `/dev/draw` reachable via jobs ONLY). GAPS CLOSED: "no async
+  ticket for walk/open/clunk" and "Editor has no namespace handle". `/mnt/snarf-self/ns`
+  deferred to 13b (SEAM(ns) in fsys.zig). Review caught a real bug (sync cancel/clunk
+  poisoning later tickets on the un-pumped origin client) → fixed + regression T8b.
 - **Phase 12e MERGED (2026-09-14, structure-only)** — see agents/reports/phase12e-structure.md:
   `Editor.zig` 824→383 pre-test lines via NEW `core/Gesture.zig` (mousethread state+arms),
   `core/textselect.zig` (sweep/chord loop), `core/snarf.zig`; warning buckets in
@@ -68,9 +72,7 @@ authorization for this file only). Prune freely — git keeps history.
   `e69d451`, `cd0139f`). GAPS handed forward (in the as-built contract): ninep.Client
   has NO async ticket for walk/open/clunk (Get/Put + origin file reads BLOCKED on it);
   Namespace lacks `unmount(prefix)`; ed.warnings still invisible in the UI.
-  MANUAL STEP for Larry: restart `zig build serve`, reload browser, watch the server
-  stdout access log show the mount handshake; kill/restart server, middle-click
-  `Reconnect`.
+  (phase-12 gaps — async ticket, `unmount` — are CLOSED as of 12d/13a.)
   Snarf is a working browser editor: typing/selection/undo, scroll, snarf+chords, window
   and column management with live tags, B2 exec (10 builtins), B3 look, the Edit language
   (structural regexps), the `/mnt/snarf-self` served tree, and `snarf-origin`
