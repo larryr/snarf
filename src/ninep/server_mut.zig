@@ -44,6 +44,41 @@ pub fn handleAttach(srv: *Server, tag: u16, a: anytype) Error!Outcome {
     return srv.replied(srv.reply(.{ .tag = tag, .body = .{ .rattach = .{ .qid = q } } }));
 }
 
+/// Tell the server about a TENTATIVE newfid that will never be installed.
+///
+/// `5/walk` says of a failed or partial walk that "the newfid is not created",
+/// and on the WIRE nothing changes: no reply, no fid in the table. But the
+/// SERVER may already hold per-fid state filed under that number — `DevOpfs`
+/// keys its in-flight browser round trips on `fid.fid`, so a walk that parked
+/// on one component and then failed (or was flushed) leaves slots behind.
+/// lib9p tells its server for exactly this reason: `rwalk` does
+/// `closefid(removefid(pool, newfid))`, and `closefid` runs the pool's
+/// `destroy` hook — which is our `Ops.clunk`.
+///
+/// ONLY when `fid != newfid`: the `same` case increfs the live fid instead, so
+/// `closefid` merely decrefs and destroys nothing (and our source fid is still
+/// installed under that very number). Callers must check.
+/// [lib9p/srv.c:334-343 rwalk; :318-323 swalk; lib9p/fid.c:64 closefid]
+pub fn discardNewfid(srv: *Server, work: *Fid) void {
+    if (srv.ops.clunk) |c| c(srv.ctx, srv, work);
+}
+
+/// The same discard for a PARKED Twalk that is dropped without ever reaching
+/// `handleWalk` again — Tflush of its tag, or Tclunk of its source fid. The
+/// tentative newfid exists only inside the parked frame, so it is
+/// reconstructed from it: unopened (a tentative fid never is, and every
+/// existing `Ops.clunk` keys its real work off `omode`) and with no owned
+/// `uname` to free. [lib9p/srv.c:338 rwalk, reached from the flush path :245]
+pub fn discardParkedWalk(srv: *Server, frame: []const u8) void {
+    const m = msg.decode(frame) catch return;
+    if (m.body != .twalk) return;
+    const t = m.body.twalk;
+    if (t.fid == t.newfid) return; // clone in place: nothing tentative
+    if (srv.fids.contains(t.newfid)) return; // that number belongs to someone else now
+    var ghost = Fid{ .fid = t.newfid, .qid = .{ .path = 0 }, .uname = &.{} };
+    discardNewfid(srv, &ghost);
+}
+
 /// [srv.c:305 swalk + :133 walkandclone + :339 rwalk]
 pub fn handleWalk(srv: *Server, tag: u16, t: msg.Body.Twalk) Error!Outcome {
     const src = srv.fids.get(t.fid) orelse return srv.replied(srv.replyError(tag, error.UnknownFid));
@@ -54,7 +89,9 @@ pub fn handleWalk(srv: *Server, tag: u16, t: msg.Body.Twalk) Error!Outcome {
 
     // Tentative newfid: a private copy that walk1 mutates in place. It is
     // only installed on success; on any failure it is discarded (== C's
-    // "removefid" of the tentative newfid, srv.c:341).
+    // "removefid" of the tentative newfid, srv.c:341) and the server is told
+    // via `discardNewfid` (srv.c:338 `closefid`) so per-fid state filed under
+    // the number during the walk does not leak.
     var work = Fid{
         .fid = t.newfid,
         .qid = src.qid,
@@ -66,6 +103,7 @@ pub fn handleWalk(srv: *Server, tag: u16, t: msg.Body.Twalk) Error!Outcome {
         if (srv.ops.clone) |cl| {
             var srccopy = src;
             cl(srv.ctx, srv, &srccopy, &work) catch |e| {
+                discardNewfid(srv, &work); // !same by construction
                 srv.allocator.free(work.uname);
                 return srv.replied(srv.replyError(tag, e));
             };
@@ -77,9 +115,13 @@ pub fn handleWalk(srv: *Server, tag: u16, t: msg.Body.Twalk) Error!Outcome {
     var first_err: OpError = error.FileDoesNotExist;
     while (i < t.nwname) : (i += 1) {
         const q = srv.ops.walk1(srv.ctx, srv, &work, t.wname[i]) catch |e| switch (e) {
-            // Blocked: discard the tentative newfid and park the WHOLE Twalk.
+            // Blocked: drop the tentative newfid and park the WHOLE Twalk.
             // Re-running from component 0 is safe precisely because nothing was
             // installed — the same "leave no trace" rule a parking `read` obeys.
+            // NOT a `discardNewfid`: the walk is not over, and the state the
+            // server filed under `t.newfid` is exactly what the retry reuses.
+            // The permanent discard for a parked walk that never comes back
+            // lives in `park.flushTag`/`park.sweepFid`.
             error.WouldBlock, error.WouldBlockRead => {
                 srv.allocator.free(work.uname);
                 return .blocked;
@@ -95,7 +137,9 @@ pub fn handleWalk(srv: *Server, tag: u16, t: msg.Body.Twalk) Error!Outcome {
     const nwqid = i;
 
     if (nwqid < t.nwname) {
-        // Walk did not complete: discard the tentative newfid.
+        // Walk did not complete: discard the tentative newfid, telling the
+        // server first (srv.c:338 `closefid(removefid(...))`, `fid != newfid`).
+        if (!same) discardNewfid(srv, &work);
         srv.allocator.free(work.uname);
         if (nwqid == 0) return srv.replied(srv.replyError(tag, first_err)); // first name failed
         return srv.replied(srv.replyWalk(tag, qids[0..nwqid])); // partial: no error, no newfid

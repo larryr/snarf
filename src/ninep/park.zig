@@ -38,6 +38,7 @@ const std = @import("std");
 const msg = @import("msg.zig");
 const errors = @import("errors.zig");
 const server = @import("server.zig");
+const server_mut = @import("server_mut.zig");
 
 const Server = server.Server;
 
@@ -226,6 +227,7 @@ fn matchesPath(srv: *Server, frame: []const u8, path: ?u64) bool {
 /// `srv.c` implements with its deferred `or->flush[]` list (:862, :751).
 pub fn flushTag(srv: *Server, oldtag: u16) server.Error!bool {
     const i = srv.parked.indexOfTag(oldtag) orelse return false;
+    server_mut.discardParkedWalk(srv, srv.parked.items.items[i].frame);
     srv.parked.removeAt(srv.allocator, i);
     try srv.replyError(oldtag, error.Interrupted);
     return true;
@@ -238,6 +240,7 @@ pub fn sweepFid(srv: *Server, fid: u32) server.Error!void {
     while (i < srv.parked.count()) {
         const e = srv.parked.items.items[i];
         if (fidOfFrame(e.frame) == fid) {
+            server_mut.discardParkedWalk(srv, e.frame);
             srv.parked.removeAt(srv.allocator, i); // shift left; do not advance i
             try srv.replyError(e.tag, error.Interrupted);
         } else i += 1;
@@ -315,6 +318,10 @@ const AllOps = struct {
     /// While `block_stat` is set, this many additional calls succeed anyway
     /// (each one consumes one), before reverting to WouldBlock. T8 only.
     stat_budget: usize = 0,
+    /// Every fid number the framework has handed to `Ops.clunk`, in order —
+    /// including the tentative-newfid discard (`server_mut.discardNewfid`).
+    clunked: [8]u32 = .{0} ** 8,
+    n_clunked: usize = 0,
 
     fn qidOf(path: u64) Qid {
         return .{ .path = path, .qtype = .{ .dir = path == 1 } };
@@ -372,12 +379,21 @@ const AllOps = struct {
         if (self.block_wstat) return error.WouldBlock;
     }
 
+    fn clunk(ctx: *anyopaque, _: *Server, fid: *Fid) void {
+        const self: *AllOps = @ptrCast(@alignCast(ctx));
+        if (self.n_clunked < self.clunked.len) {
+            self.clunked[self.n_clunked] = fid.fid;
+            self.n_clunked += 1;
+        }
+    }
+
     const ops = Ops{
         .attach = attach,
         .walk1 = walk1,
         .open = open,
         .read = read,
         .write = write,
+        .clunk = clunk,
         .stat = stat,
         .create = create,
         .remove = remove,
@@ -679,4 +695,45 @@ test "park: a parked request whose fid vanishes without a Tclunk sweep gets the 
     const fresh = try h.transact(.{ .tag = 42, .body = .{ .tstat = .{ .fid = 0 } } });
     try testing.expect(fresh.body == .rerror);
     try testing.expectEqualStrings("unknown fid", fresh.body.rerror.ename);
+}
+
+test "park: a discarded tentative newfid is announced to the server (16b item 1)" {
+    // A never-installed newfid is invisible on the WIRE ("the newfid is not
+    // created", `5/walk`) but the server may already hold per-fid state for
+    // that number. lib9p closes it — `rwalk` does
+    // `closefid(removefid(pool, newfid))`, which runs the pool's `destroy`
+    // hook — and so do we, on the failure path and on the flush of a parked
+    // walk alike. [lib9p/srv.c:334-343 rwalk; lib9p/fid.c:64 closefid]
+    const h = try AllOpsHarness.create(testing.allocator);
+    defer h.destroy();
+    try h.setup();
+
+    // (a) Failed walk on a fresh newfid: clunked, exactly once.
+    const bad = try h.transact(.{ .tag = 50, .body = .{ .twalk = msg.Body.Twalk.init(0, 5, &.{"nope"}) } });
+    try testing.expect(bad.body == .rerror);
+    try testing.expectEqual(@as(usize, 1), h.fake.n_clunked);
+    try testing.expectEqual(@as(u32, 5), h.fake.clunked[0]);
+
+    // (b) Clone in place (fid == newfid) must NOT be clunked: the live fid
+    //     keeps that number (srv.c:320-323 increfs instead).
+    h.fake.n_clunked = 0;
+    const same = try h.transact(.{ .tag = 51, .body = .{ .twalk = msg.Body.Twalk.init(0, 0, &.{"nope"}) } });
+    try testing.expect(same.body == .rerror);
+    try testing.expectEqual(@as(usize, 0), h.fake.n_clunked);
+
+    // (c) A PARKED walk that is flushed: the framework never re-enters
+    //     `handleWalk`, so the discard happens in `flushTag`.
+    h.fake.block_walk = true;
+    try h.feed(.{ .tag = 52, .body = .{ .twalk = msg.Body.Twalk.init(0, 6, &.{"f"}) } });
+    try testing.expect((try h.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), h.srv.parkedCount());
+    try testing.expectEqual(@as(usize, 0), h.fake.n_clunked); // not yet: it may still come back
+
+    try h.feed(.{ .tag = 53, .body = .{ .tflush = .{ .oldtag = 52 } } });
+    const interrupted = (try h.popMsg()).?;
+    try testing.expect(interrupted.body == .rerror);
+    try testing.expectEqualStrings("interrupted", interrupted.body.rerror.ename);
+    try testing.expect((try h.popMsg()).?.body == .rflush);
+    try testing.expectEqual(@as(usize, 1), h.fake.n_clunked);
+    try testing.expectEqual(@as(u32, 6), h.fake.clunked[0]);
 }

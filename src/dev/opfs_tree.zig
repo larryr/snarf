@@ -14,8 +14,10 @@
 //! A consequence we exploit everywhere: because the qid IS the path's hash, a
 //! fid needs no per-fid heap node at all (the `tools/origin/tree.zig` pattern).
 //! `PathTable` interns every path the device has ever named, and `fid.qid.path`
-//! is the key back to it. Tentative walk fids — which the framework discards
-//! without a clunk when a walk parks or fails — therefore leak nothing.
+//! is the key back to it, so a tentative walk fid owns no path memory. It does
+//! own SLOTS (`opfs_slots.zig` keys on `fid.fid`), which is why the framework
+//! announces a discarded tentative newfid through `Ops.clunk` since phase 16b
+//! [lib9p/srv.c:338 rwalk → fid.c:64 closefid].
 //!
 //! Imports: std + `ninep` + `shim` (S-07 §6 — the `dev` layer's whole budget).
 const std = @import("std");
