@@ -234,6 +234,28 @@ try {
 }
 check("tick(16)/tick(32)/wake() no trap", () => !pumpTrapped);
 
+// Phase 13a (contract §3d): the boot namespace now mounts /dev, /dev/draw and a
+// LIVE in-process /mnt/snarf-self server that `tick` polls every frame. A long
+// run of ticks must still trap nothing, log no panic, and leave the ABI surface
+// exactly where it was (no export change this wave, R-P13a-5).
+let nsTrapped = false;
+const logsBeforeNsTicks = logs.length;
+try {
+  for (let i = 0; i < 60; i++) ex.tick(48 + i * 16);
+} catch (e) {
+  nsTrapped = true;
+  console.error("boot-namespace tick trapped:", e);
+}
+check("boot namespace: 60 ticks poll the served tree without trapping", () => !nsTrapped);
+check("boot namespace: those ticks logged no panic/failure", () =>
+  !logs.slice(logsBeforeNsTicks).some((m) => /panic|failure/i.test(m)));
+check("boot namespace: exports unchanged (abi_version() still 5)", () =>
+  ex.abi_version() === EXPECT_ABI &&
+  typeof ex.init === "function" &&
+  typeof ex.tick === "function" &&
+  typeof ex.wake === "function" &&
+  typeof ex.pushEvent === "function");
+
 // Phase 12, R-P12-5: with the ws imports stubbed the dial never completes;
 // crossing the 10 s dial deadline must warn-and-carry-on, never trap.
 let timeoutTrapped = false;
