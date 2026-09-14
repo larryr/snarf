@@ -97,9 +97,11 @@ err_len: usize = 0,
 // --- the spawned peer, when there is one ---------------------------------
 child: ?std.process.Child = null,
 io: ?std.Io = null,
-/// The pipe ends. `-1` when the peer is scripted rather than executed.
+/// The read end of the pipe, as a raw fd: the loop waits on it with `poll(2)`.
+/// `-1` when the peer is scripted rather than executed.
 rfd: std.posix.fd_t = -1,
-wfd: std.posix.fd_t = -1,
+/// The write end, kept as an `Io.File` so writes go through the std API.
+wfile: ?std.Io.File = null,
 
 pub fn init(gpa: std.mem.Allocator) Conn {
     return .{ .gpa = gpa };
@@ -182,7 +184,7 @@ pub fn spawn(self: *Conn, io: std.Io, env: *const std.process.Environ.Map, opts:
     self.child = child;
     self.io = io;
     self.rfd = child.stdout.?.handle;
-    self.wfd = child.stdin.?.handle;
+    self.wfile = child.stdin.?;
     self.sink = .{ .ctx = self, .writeAll = fdWrite };
 
     // drawclient.c:295-303 `_displayinit`, then `_displaylabel`: devdraw sets
@@ -196,8 +198,8 @@ pub fn spawn(self: *Conn, io: std.Io, env: *const std.process.Environ.Map, opts:
 
 fn fdWrite(ctx: *anyopaque, bytes: []const u8) anyerror!void {
     const self: *Conn = @ptrCast(@alignCast(ctx));
-    var off: usize = 0;
-    while (off < bytes.len) off += try std.posix.write(self.wfd, bytes[off..]);
+    const f = self.wfile orelse return error.Closed;
+    try f.writeStreamingAll(self.io.?, bytes);
 }
 
 /// Wait up to `timeout_ms` for the peer to say something, then read whatever
