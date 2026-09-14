@@ -6,19 +6,22 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase12d`** (worktree `../snarf-wt/phase12d`, 2026-09-14, larry's Mac, local only) —
-  union directories + synthetic root + `/n/origin` rename. Owns `src/ninep/mount.zig`, NEW
-  `src/ninep/nsdir.zig` (+ maybe `nspath.zig`), `src/origin/OriginMount.zig`,
-  `src/main_wasm.zig`, `src/core/exec/cmd_origin.zig`, `tools/smoke_wasm.mjs`, `README.md`,
-  `docs/spec/02-namespaces.md`, `docs/requirements/{01,03}*.md`, diagrams. Contract
-  `agents/contracts/phase12d-unions.md`.
+- *(none as of 2026-09-14 — phase 12d merged `6d13dda`; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b, 12c are MERGED to `main`; `main` is green.**
-  557/557 tests, node smoke 25/25, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1591 KiB
-  (watch — +48 KiB in phase 12, +27 KiB in 12b, +10 KiB in 12c).
+- **Phases 1–12, 12b, 12c, 12d are MERGED to `main`; `main` is green.**
+  573/573 tests, node smoke 26/26, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm ≈ 1605 KiB
+  (watch — +48 KiB in phase 12, +27 in 12b, +10 in 12c, +14 in 12d).
+- **Phase 12d MERGED (`6d13dda`, 2026-09-14)** — see agents/reports/phase12d-unions.md:
+  union mount table (`bind .before/.after/.replace`, `unmount`, `unbindTarget` — the phase-12
+  GAP is CLOSED), NEW `ninep/nsdir.zig` (`walk` first-success over members, `DirReader`
+  = unionread with synthetic root-device dirs for `/`, `/n`, `/mnt`), **`/mnt/origin` →
+  `/n/origin`** everywhere (agents/ history excepted), origin `bin/` bound `-a` into `/bin`
+  during a new `binding` handshake step; S-02 Host column; R-03 v3 (R-9P-16 new, OQ-9P-1
+  RESOLVED). Debt: `OriginMount.zig` 419 pre-test lines (over cap; seam = handshake vs
+  lifecycle); `Client.seedQid` wanted; T11 read-error arm untested.
 - **Phase 12c MERGED (`e351203`, 2026-09-14)** — see agents/reports/phase12c-canvas-resize.md:
   the canvas fills the browser window at boot (`init(w,h)`) and follows resizes
   (`EventKind.resize=8` → backend resize → `refresh` exposure → `Display.getWindow` →
@@ -86,8 +89,9 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: unions + `/n/origin` rename (user decision 2026-09-14, see above), THEN directory
-  windows (user-queued 2026-09-14)** — R-EDIT-03 + paper
+- **NEXT: directory windows (user-queued 2026-09-14)** — also needs an `Editor`→namespace
+  handle so `core` can reach `ninep.nsdir` without importing `origin`/`dev` (the same gap
+  that blocked `/dev/ns` in 12d) — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:
