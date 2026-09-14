@@ -461,6 +461,56 @@ pub fn stat(self: *Client, fid: u32) Error!stat_mod {
     }
 }
 
+/// What `create` reports back: the new file's qid and the server's iounit
+/// (0 = no guarantee). [`5/open` Rcreate]
+pub const CreateResult = msg.mut.Rcreate;
+
+/// Create `name` in the directory `fid` and open the RESULT as `fid` (`5/open`):
+/// on success this client's cached qid for `fid` becomes the new file's. `perm`
+/// carries DMDIR for a directory; the server masks it against the parent.
+pub fn create(self: *Client, fid: u32, name: []const u8, perm: u32, mode: u8) Error!CreateResult {
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .tcreate = .{ .fid = fid, .name = name, .perm = perm, .mode = mode },
+    } });
+    switch (reply.body) {
+        .rcreate => |c| {
+            self.seedQid(fid, c.qid); // the fid now names the new file
+            return c;
+        },
+        else => return error.ProtocolError,
+    }
+}
+
+/// Remove the file `fid` names. `5/remove`: the server clunks the fid even when
+/// the remove fails, so the number is recycled either way — exactly like
+/// `clunk`.
+pub fn remove(self: *Client, fid: u32) Error!void {
+    defer self.freeFid(fid);
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .tremove = .{ .fid = fid },
+    } });
+    switch (reply.body) {
+        .rremove => return,
+        else => return error.ProtocolError,
+    }
+}
+
+/// Change `fid`'s directory entry. Fields `st` leaves at their "don't touch"
+/// values (`~0`, empty strings) are not altered (`5/stat`); build one with
+/// `stat_mod.dontTouch()`. The blob is encoded into a local scratch buffer, so
+/// nothing aliases `wbuf`.
+pub fn wstat(self: *Client, fid: u32, st: stat_mod) Error!void {
+    var blob: [1024]u8 = undefined;
+    const n = st.encode(&blob) catch return error.MessageTooBig;
+    const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
+        .twstat = .{ .fid = fid, .stat = blob[0..n] },
+    } });
+    switch (reply.body) {
+        .rwstat => return,
+        else => return error.ProtocolError,
+    }
+}
+
 /// Ask the server to abandon the pending request tagged `oldtag`. In v1 the
 /// server is synchronous so this always returns promptly. [`5/flush`]
 pub fn flushTag(self: *Client, oldtag: u16) Error!void {
@@ -951,4 +1001,42 @@ test "client: flushed ticket surfaces error.Interrupted via checkRead" {
     try st.pushReply(.{ .tag = 0, .body = .{ .rerror = .{ .ename = "interrupted" } } });
     try testing.expectError(error.Interrupted, client.checkRead(ticket));
     try testing.expect(!client.pending.contains(0)); // consumed
+}
+
+test "client: create/remove/wstat sync helpers (phase 14a)" {
+    // Smoke only — T4 in the phase-14a contract §4 pins the pumped-pipe and
+    // ticket paths.
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+    try doVersion(&client, &st);
+
+    const newq = Qid{ .path = 77, .vers = 1 };
+    try st.pushReply(.{ .tag = 0, .body = .{ .rcreate = .{ .qid = newq, .iounit = 8168 } } });
+    const res = try client.create(5, "made", 0o644, msg.OWRITE);
+    try testing.expectEqual(@as(u64, 77), res.qid.path);
+    try testing.expectEqual(@as(u32, 8168), res.iounit);
+    const tc = (try st.sentMsg(1)).body.tcreate;
+    try testing.expectEqual(@as(u32, 5), tc.fid);
+    try testing.expectEqualStrings("made", tc.name);
+    try testing.expectEqual(@as(u32, 0o644), tc.perm);
+    try testing.expectEqual(@as(u8, msg.OWRITE), tc.mode);
+    // The fid now names the new file (`5/open`), so the client's cache agrees.
+    try testing.expectEqual(@as(u64, 77), client.fids.get(5).?.path);
+
+    var want = stat_mod.dontTouch();
+    want.name = "renamed";
+    try st.pushReply(.{ .tag = 1, .body = .rwstat });
+    try client.wstat(5, want);
+    const tw = (try st.sentMsg(2)).body.twstat;
+    try testing.expectEqual(@as(u32, 5), tw.fid);
+    try testing.expectEqualStrings("renamed", (try stat_mod.decode(tw.stat)).name);
+
+    try st.pushReply(.{ .tag = 2, .body = .rremove });
+    try client.remove(5);
+    try testing.expectEqual(@as(u32, 5), (try st.sentMsg(3)).body.tremove.fid);
+    // `5/remove` clunks the fid even on error, so the number was recycled.
+    try testing.expectEqual(@as(?Qid, null), client.fids.get(5));
+    try testing.expectEqual(@as(u32, 5), client.allocFid());
 }

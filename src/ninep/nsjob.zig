@@ -35,6 +35,13 @@
 //!
 //! Imports: std + sibling ninep files (S-07 §6). Nothing here touches `core`,
 //! `dev` or `shim`.
+//! SEAM (phase 14a): there is deliberately NO CreateJob/RemoveJob/WriteJob
+//! here. `ninep.server` and `ninep.Client` gained create/remove/wstat in phase
+//! 14a, and the ticket path carries them for free (`tickets.begin` takes any
+//! T-message), but the namespace-level jobs that Put/Dump need belong to the
+//! Put/Get wave, which owns the "which mount, which mode, truncate-or-create"
+//! policy. Build them there, on `tickets.begin`, exactly as `nsio.zig` does.
+//!
 const std = @import("std");
 const Client = @import("client.zig").Client;
 const mount = @import("mount.zig");

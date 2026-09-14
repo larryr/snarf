@@ -672,7 +672,7 @@ test "server: tauth/tcreate/tremove/twstat defaults" {
     try f.expectRerror(rc, server_mut.create_prohibited);
 
     var blob: [64]u8 = undefined;
-    const nst = try (stat{ .qid = .{ .path = ~@as(u64, 0), .vers = 0xFFFF_FFFF, .qtype = @bitCast(@as(u8, 0xFF)) }, .ktype = 0xFFFF, .kdev = 0xFFFF_FFFF, .mode = 0xFFFF_FFFF, .atime = 0xFFFF_FFFF, .mtime = 0xFFFF_FFFF, .length = ~@as(u64, 0), .name = "", .uid = "", .gid = "", .muid = "" }).encode(&blob);
+    const nst = try stat.dontTouch().encode(&blob);
     const rw = try f.transact(.{ .tag = 77, .body = .{ .twstat = .{ .fid = 0, .stat = blob[0..nst] } } });
     try f.expectRerror(rw, server_mut.wstat_prohibited);
 

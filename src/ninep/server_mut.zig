@@ -316,19 +316,8 @@ const MutOps = struct {
 
 /// A stat blob with every field "don't touch" except `name` (`5/stat`).
 fn renameBlob(buf: []u8, name: []const u8) ![]u8 {
-    const st = stat{
-        .ktype = 0xFFFF,
-        .kdev = 0xFFFF_FFFF,
-        .qid = .{ .path = ~@as(u64, 0), .vers = 0xFFFF_FFFF, .qtype = @bitCast(@as(u8, 0xFF)) },
-        .mode = 0xFFFF_FFFF,
-        .atime = 0xFFFF_FFFF,
-        .mtime = 0xFFFF_FFFF,
-        .length = ~@as(u64, 0),
-        .name = name,
-        .uid = "",
-        .gid = "",
-        .muid = "",
-    };
+    var st = stat.dontTouch();
+    st.name = name;
     return buf[0..try st.encode(buf)];
 }
 

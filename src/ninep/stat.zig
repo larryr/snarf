@@ -30,6 +30,26 @@ uid: []const u8 = "snarf",
 gid: []const u8 = "snarf",
 muid: []const u8 = "snarf",
 
+/// A stat blob whose every field is the `5/stat` "don't touch" value — `~0`
+/// for the integers, empty strings for the text. Twstat starts from this and
+/// sets only what it means to change; a wstat of the whole thing is the
+/// conventional no-op/sync. [`5/stat`; lib9p/srv.c:644 swstat checks these]
+pub fn dontTouch() Stat {
+    return .{
+        .ktype = 0xFFFF,
+        .kdev = 0xFFFF_FFFF,
+        .qid = .{ .path = ~@as(u64, 0), .vers = 0xFFFF_FFFF, .qtype = @bitCast(@as(u8, 0xFF)) },
+        .mode = 0xFFFF_FFFF,
+        .atime = 0xFFFF_FFFF,
+        .mtime = 0xFFFF_FFFF,
+        .length = ~@as(u64, 0),
+        .name = "",
+        .uid = "",
+        .gid = "",
+        .muid = "",
+    };
+}
+
 /// Total bytes this Stat occupies on the wire, including the leading size[2].
 pub fn encodedSize(self: *const Stat) usize {
     return STATFIXLEN + self.name.len + self.uid.len + self.gid.len + self.muid.len;
