@@ -169,6 +169,30 @@ authorization for this file only). Prune freely — git keeps history.
   `apt-get install -y plantuml` (1.2020.2) for `-checkonly` (no salt tree-tables — use
   `@startmindmap`).
 
+## Design notes pending a requirements revision (keep until folded into R-05/S-04)
+
+- **Touch-profile warp semantics (user discussion 2026-09-14).** On a touch screen there is
+  no pointer between touches, so point-to-type (R-EDIT-22) cannot apply; the touch profile
+  uses acme's `-b` variant — the LAST TOUCHED text keeps focus. Once focus is a software
+  value Snarf owns, the paper's warps (R-EDIT-25) map onto moving it and are HONORABLE on
+  touch: new window ⇒ focus + dot move into it (keyboard types there); B3 hit ⇒ dot moves
+  to the hit, highlighted + scrolled; deleting a pop-up ⇒ focus returns to the text it came
+  from (remember it explicitly); layout-box "click again without moving" does NOT translate
+  — dragging the box is the touch gesture. Record as a third host/profile case when the
+  touch profile is built: desktop browser = no warp; native = real warp; touch = focus/dot
+  follow the action.
+- **Tablets with hardware keyboards + trackpads/mice** behave like a desktop browser, not
+  like touch: iPadOS (trackpad/Magic Keyboard) and Android (mouse) synthesize a real
+  pointer — `pointermove` with `pointerType == "mouse"`, hover works, so point-to-type works
+  and warping is impossible exactly as on the desktop. The SAME device can switch between
+  finger (`pointerType == "touch"`) and pointer mid-session, so profile selection (R-IN-08)
+  must be per-event, not per-boot, and the focus model must be hybrid: hover focus while a
+  pointer is present, last-touch focus for touches. iPadOS also emulates a "middle button"
+  and secondary click on trackpads via gestures/settings — unverified which buttons reach
+  the page. **OQ-IN-4 (new): per-event profile switching + hybrid focus; verify iPadOS/Android
+  button mapping with a real device before the touch wave.** Fold into R-05 v3 / S-04 when
+  the touch profile is scheduled.
+
 ## Learnings / dead ends (keep)
 
 - **Gate pattern (OPS LESSON 2026-07-20)**: `zig build test | grep …` returns the LAST
