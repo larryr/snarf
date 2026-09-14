@@ -6,20 +6,20 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase14a`** (worktree `../snarf-wt/phase14a`, 2026-09-14, larry's Mac, local only) —
-  9P server framework: codec Tcreate/Tremove/Twstat (+R), NEW `ninep/park.zig` (any op may
-  park; `completeReads` alias), NEW `ninep/server_mut.zig` (create/remove/wstat, "prohibited"
-  defaults), `server.zig` moves to ≤450 lines, client sync helpers, S-01/R-03 docs. Owns
-  `src/ninep/*`, docs. Contract `agents/contracts/phase14a-server-parking-create.md`. 14b
-  (OPFS device + fsOp import, ABI v6) follows.
+- *(none as of 2026-09-14 — phase 14a merged `afff8ac`; remote has only `main`)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b–12e, 13a, 13b are MERGED to `main`; `main` is green.**
-  620/620 tests (≈3.5 s), node smoke 30/30, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
-  ≈ 2037 KiB ReleaseSafe / 253 KiB ReleaseSmall (+297/+43 KiB in 13b — real code ×7 by
-  safety checks; user keeps ReleaseSafe; debt-pass item).
+- **Phases 1–12, 12b–12e, 13a, 13b, 14a are MERGED to `main`; `main` is green.**
+  639/639 tests (≈3.6 s), node smoke 30/30, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
+  ≈ 2089 KiB ReleaseSafe (user keeps ReleaseSafe; size is a debt-pass item).
+- **Phase 14a MERGED (`afff8ac`, 2026-09-14)** — see agents/reports/phase14a-server-parking-create.md:
+  ANY `Ops` fn may return `park.WouldBlock` (NEW `ninep/park.zig`, raw-frame FIFO, bound 64,
+  `retryParked`; `completeReads(path)` alias kept — `dev/input`/`fsys`/`origin` unchanged);
+  Tcreate/Tremove/Twstat codec (`msg_mut.zig`) + handlers (`server_mut.zig`, lib9p default
+  strings); `Client.create/remove/wstat`; `server.zig` 780→450 (harness → `testsrv.zig`,
+  test-only). **Phase-1 R5 LIFTED.** Debt: `client.zig` 637, `msg.zig` 476 pre-test.
 - **Phase 13b MERGED (`fd1abe0`, 2026-09-14) — DIRECTORY WINDOWS** — see
   agents/reports/phase13b-directory-windows.md and REVIEW-NOTES: acme boot (2 columns, `/`
   rightmost, scratch demo gone), `dirwin` (dircmp/columnate/TABDIR), `Load` (async textload),
@@ -125,10 +125,10 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: phase 14 OPFS** (`agents/contracts/phase14-opfs.md`, DRAFT; ABI → **v6**, not v5 as
-  the draft says) as 14a (server framework: generalized parked ops + create/remove, lifts
-  phase-1 R5) then 14b (`dev/opfs.zig` + `fsOp` import + boot mount + smoke stub). Then the
-  ADR-0005 native-host spike, then the debt pass. — R-EDIT-03 + paper
+- **NEXT: phase 14b OPFS device** (`dev/opfs.zig` over 14a's parked ops, `fsOp` import +
+  `fsStage`/`fsPush` exports, **ABI v6**, `/mnt/opfs` mounted at boot, smoke stub; the
+  2026-09-02 draft `agents/contracts/phase14-opfs.md` is superseded by
+  `phase14b-opfs.md` when it lands). Then the ADR-0005 native-host spike, then the debt pass. — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:

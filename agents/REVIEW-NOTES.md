@@ -11,6 +11,22 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 14a — 9P server framework: parking for every op, create/remove/wstat (merged `afff8ac`, 2026-09-14)
+
+**For you:** nothing visible; this is the server half of OPFS. Reload is safe.
+
+**What changed:** any 9P operation a device serves can now say "ask me again later" and the
+server parks the raw request and retries it in order (the phase-6 read-only parking,
+generalized; bound 64). Tcreate/Tremove/Twstat are decoded and handled with lib9p's
+"prohibited" defaults, so every existing tree is byte-identical. `server.zig` went from 780
+to 450 lines by moving parking, fid-lifecycle handlers, and the test harness out.
+
+**Decisions made for you:** Tflush keeps the phase-6 `interrupted` + `Rflush` pair. Three
+existing test bodies were edited because the contract made their old expectations
+impossible (codes now implemented; a struct the design abolished) — names kept, reviewed.
+
+**Debt:** `client.zig` 637 and `msg.zig` 476 pre-test lines (both pre-existing).
+
 ## Phase 13b — directory windows (merged `fd1abe0`, 2026-09-14)
 
 **For you — try it:** `make run`. Boot is now acme's: two columns, the right one a directory
