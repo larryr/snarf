@@ -132,6 +132,19 @@ pub fn init(
         .scrollr = scrollr,
         .lastsr = zerorect,
     };
+    // textredraw's tab width (text.c:53-60). libframe's `frinit` leaves
+    // `maxtab = 8*stringwidth("0")`; acme OVERRIDES it on every `textredraw`
+    // with `maxt*stringwidth(f, "0")`, and for everything but a directory body
+    // `maxt` is `maxtab` — 4 at the default (acme.c:145-146), `t->tabstop`
+    // having been set to `maxtab` two lines earlier (text.c:36). So 4×9 = 36 px
+    // at the 9×18 font, not libframe's 72. A DIRECTORY body narrows it further
+    // to `min(TABDIR, maxtab)*mint` = 27, which `dirwin.columnate` writes
+    // (text.c:148) — this Text does not know it is a directory yet.
+    //
+    // Once is enough: our `textRedraw` relayouts through `Frame.setRects`,
+    // which leaves `maxtab` alone (only `Frame.init` sets it), so the override
+    // survives every later resize.
+    t.fr.maxtab = maxtab * font.stringWidth("0");
     try t.fr.initTick(); // F-5: tick images built here, not in Frame.init
     try t.backfill(); // textredraw tail (text.c:48-51): back-fill to the scrollbar
     return t;
@@ -142,6 +155,13 @@ pub fn init(
 pub fn deinit(self: *Text) void {
     self.fr.clear(true);
 }
+
+/// acme's `maxtab` (dat.c:16 "size of a tab, in units of the '0' character"),
+/// at its default: `acme.c:142-146` reads `$tabstop`/`-t` and falls back to 4.
+/// Snarf has neither the flag nor a `ctl` tabstop write, so 4 it is — and
+/// `Text.tabstop` (text.c:36) would be this value too, which is why `textinit`
+/// lands on it for every non-directory body.
+pub const maxtab: i32 = 4;
 
 /// `textredraw`'s back-fill (text.c:48-51): paint BACK over the frame plus the
 /// scrollbar+gap strip to its left, so the whole Text rect starts clean.

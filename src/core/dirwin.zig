@@ -33,7 +33,7 @@ pub const TABDIR: i32 = 3;
 /// `$tabstop`/`-t` value. Snarf has no `-t` flag and no `ctl` tabstop write yet,
 /// so the default is the only value; when either lands it overrides THIS
 /// constant (dat.c:16 is a global, dat.h:514).
-pub const default_maxtab: i32 = 4;
+pub const default_maxtab: i32 = Text.maxtab;
 
 /// One directory entry ready to lay out — the C's `Dirlist` (dat.h:288-292)
 /// minus the byte copy: `name` is the entry name with a trailing '/' already
@@ -81,12 +81,9 @@ fn lessThan(_: void, a: Entry, b: Entry) bool {
 /// it (only `Frame.init` does), so writing it here survives every later
 /// redraw — no `maxtab_override` seam is needed.
 ///
-/// SNARF DIVERGENCE (pre-existing, NOT introduced here): a NON-directory Text
-/// keeps libframe's `frinit` default `8*stringwidth("0")` = 72, because
-/// `Text.init` never ports acme's `textinit` override `t->fr.maxtab =
-/// maxtab*stringwidth(f,"0")` = 36 (text.c:53-60). Changing that moves frozen
-/// acceptance pixels (the tab scene) and the served `ctl` line, so it is left
-/// alone and FLAGged for the tabstop wave.
+/// A NON-directory Text gets `maxtab*stringwidth("0")` = 36 from `Text.init`
+/// (text.c:53-60, ported in phase 16c — it used to keep libframe's `frinit`
+/// default of 72). This narrowing to 27 is on top of that, exactly as in the C.
 pub fn columnate(t: *Text, entries: []const Entry) Text.Error!void {
     const a = t.fr.allocator;
     const mint: i32 = t.fr.font.stringWidth("0"); // text.c:146
@@ -363,14 +360,12 @@ test "dirwin: columnate golden — 7 names into a 640px body at the 9x18 font (T
 }
 
 test "dirwin: columnate sets the dir body's maxtab to 27; a normal Text stays at 72 (T3)" {
-    // SNARF DIVERGENCE (dirwin.zig doc comment above `columnate`, pre-existing,
-    // NOT introduced by this wave): `Text.init` never ports acme's `textinit`
-    // maxtab override (text.c:53-60, would be 36 at this font); a non-directory
-    // Text keeps libframe's `frinit` default `8*stringWidth("0")` = 72
-    // (frinit.c:7-26, pinned by `served: ctl line exact` in fsys.zig). Moving
-    // that default would shift FROZEN-ACCEPT-3's pixels, so it stays as is —
-    // this test pins BOTH sides of the divergence so a future fix has to touch
-    // this file on purpose.
+    // NAME NOTE: the divergence this test was written to pin is CLOSED — phase
+    // 16c ported acme's `textinit` maxtab override (text.c:53-60), so a normal
+    // Text is 36 (`maxtab*stringWidth("0")` = 4x9), not libframe's `frinit`
+    // default of 72. The 16b/16c rule is that no test NAME disappears, so the
+    // name still says 72; the expectations below are the live truth and the
+    // test still pins BOTH sides — a normal body vs. a columnated directory.
     const a = testing.allocator;
     var fx = try Frame.TestFixture.init();
     defer fx.deinit();
@@ -380,14 +375,14 @@ test "dirwin: columnate sets the dir body's maxtab to 27; a normal Text stays at
     defer file1.deinit();
     var normal = try Text.init(&file1, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
     defer normal.deinit();
-    try testing.expectEqual(@as(i32, 72), normal.fr.maxtab); // 8*9, libframe frinit default
+    try testing.expectEqual(@as(i32, 36), normal.fr.maxtab); // 4*9, textinit (16c)
 
     // A directory body: columnate narrows it to 27 (3*9, TABDIR).
     var file2 = File.init(a, Buffer.initEmpty(a));
     defer file2.deinit();
     var dir = try Text.init(&file2, a, proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white, &fx.disp.white });
     defer dir.deinit();
-    try testing.expectEqual(@as(i32, 72), dir.fr.maxtab); // unset before columnate runs
+    try testing.expectEqual(@as(i32, 36), dir.fr.maxtab); // still the normal 36 before columnate runs
 
     const e = try asciiEntry(a, &dir, "aaa");
     defer a.free(e.name);

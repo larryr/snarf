@@ -203,11 +203,14 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     try testing.expectEqual(@as(usize, 33), text.fr.nchars);
     try testing.expectEqual(@as(usize, 4), text.fr.nlines);
     try testing.expect(!text.fr.lastlinefull);
-    try testing.expectEqual(@as(i32, 92), text.fr.ptOfChar(30).x);
+    // 16c: the tab stop is 20+36 = 56 — textinit's `maxtab*stringwidth("0")`
+    // (4x9, text.c:53-60) — not libframe's frinit default of 20+72 = 92.
+    try testing.expectEqual(@as(i32, 56), text.fr.ptOfChar(30).x);
     try testing.expectEqual(@as(u32, 1), hb.flush_count);
 
     // Pixel spot-checks. Line boxes: L1 y[20,38) "hello, acme"; L2 y[38,56)
-    // " wraps"; L3 y[56,74) "second line"; L4 y[74,92) tab gap then "tab"@x92.
+    // " wraps"; L3 y[56,74) "second line"; L4 y[74,92) tab gap then "tab"@x56
+    // (x92 before phase 16c, when the frame still had libframe's 72px tabs).
     const white: u32 = 0xFFFFFFFF;
     try testing.expectEqual(white, hb.pixelAt(20, 19)); // above
     try testing.expectEqual(white, hb.pixelAt(20, 92)); // below L4
@@ -241,15 +244,38 @@ test "phase-4: wrapped buffer text through a frame onto a headless display" {
     try testing.expect(cellAllWhite(&hb, 20, 29, 38)); // L2 leading space
     try testing.expect(cellHasBlack(&hb, 29, 38)); // L2 'w' — wrap landed
     try testing.expect(cellHasBlack(&hb, 20, 56)); // L3 's' — y = min+2*18
-    try testing.expect(cellAllWhite(&hb, 20, 92, 74)); // L4 tab gap
-    try testing.expect(cellHasBlack(&hb, 92, 74)); // L4 't' at the tab stop
-    try testing.expect(cellHasBlack(&hb, 110, 74)); // L4 'b'
+    try testing.expect(cellAllWhite(&hb, 20, 56, 74)); // L4 tab gap
+    try testing.expect(cellHasBlack(&hb, 56, 74)); // L4 't' at the tab stop
+    try testing.expect(cellHasBlack(&hb, 74, 74)); // L4 'b'
+    // ...and the line now ENDS there, where it used to run to the frame edge.
+    // x[82,85) is the caret tick: with 72px tabs `ptOfChar(33).x` was 119, the
+    // frame's right edge, so the tick did not fit and was not drawn (`ticked`
+    // false); at 36 it lands at 83 and is.
+    try testing.expectEqual(@as(i32, 83), text.fr.ptOfChar(33).x);
+    try testing.expect(text.fr.ticked);
+    try testing.expect(cellAllWhite(&hb, 85, 119, 74));
 
     // FROZEN-ACCEPT-3: 640x480 XRGB32, white ground, the 33-rune wrap/nl/tab
     // scene in black misc-fixed 9x18 through Buffer->File->Text->Frame->Font->
     // 9P->devdraw, RGBA8888 row-major, Wyhash seed 0. Frozen 2026-07-19 from a
     // spot-check-verified render; re-freeze ONLY with orchestrator sign-off.
-    try testing.expectEqual(@as(u64, 0x7f16941423defd73), hb.hash());
+    //
+    // RE-FROZEN 2026-09-14, phase 16c — the ONE sanctioned re-freeze of the
+    // debt pass. 0x7f16941423defd73 -> 0x9171d75adca5e8eb, because `Text.init`
+    // now ports textinit's `fr.maxtab = maxtab*stringwidth(f,"0")` = 4x9 = 36
+    // (text.c:53-60); the frame had kept libframe's frinit default of 8x9 = 72.
+    //
+    // R-P2-7 SPOT-CHECK. Rendering this exact scene with `maxtab` forced back
+    // to 72 reproduces 0x7f16941423defd73 byte for byte. The two framebuffers
+    // differ in 160 pixels, all inside x[57,117] y[74,91] — LINE 4 ALONE.
+    // Per-column ink on line 4, x20..119:
+    //   72:  ....(73)....#######..#######..#######..     t@93 a@102 b@111
+    //   36:  ....(37)....#######..#######..##########... t@57 a@66 b@75 +tick
+    // i.e. "tab" moved one tab stop left (36 px), and the caret tick — which
+    // at 72 sat at x119, the frame's right edge, and so was never drawn —
+    // now fits at x[82,85). Lines 1-3 and every pixel outside that box are
+    // identical. Nothing but the tab stop moved.
+    try testing.expectEqual(@as(u64, 0x9171d75adca5e8eb), hb.hash());
 }
 
 test "phase-5: canvas backend reproduces the frozen phase-2 scene and blits it" {
