@@ -28,9 +28,11 @@ const shim = @import("shim");
 const screen = @import("screen.zig");
 const input_pump = @import("input_pump.zig");
 const origin_glue = @import("origin_glue.zig");
+const opfs_glue = @import("opfs_glue.zig");
 const ns_boot = @import("ns_boot.zig");
 
 const DevInput = dev.input.DevInput;
+const DevOpfs = dev.opfs.DevOpfs;
 const OriginMount = origin.OriginMount;
 
 /// Root-only host log import (R-P5-6): declared HERE, never in abi.zig, so the
@@ -134,6 +136,17 @@ const App = struct {
     /// Grown on demand, never shrunk — one buffer, reused for every frame, and
     /// only ever live between a `wsStage` call and the `wsPush` that follows it.
     ws_stage: []u8,
+    // --- /mnt/opfs (phase 14b) ---
+    /// The OPFS device (R-9P-09). Lives here because `opfs_tree.srv` captures
+    /// it and the standing `fsOp` tickets are keyed against it, so like
+    /// everything else in this struct it never moves.
+    dev_opfs: DevOpfs,
+    /// Its pipe/server/client triple, mounted at `/mnt/opfs` by `ns_boot`.
+    opfs_tree: ns_boot.OpfsTree,
+    /// The `fsStage` staging buffer — the `ws_stage` story, for the OTHER
+    /// record stream. Deliberately a SECOND buffer: the two completion paths
+    /// must never be able to interleave into one another's bytes.
+    fs_stage: []u8,
 };
 
 /// The ONE sanctioned module-level var: the boot context (see App's doc above).
@@ -240,6 +253,17 @@ fn boot(width: u32, height: u32) !void {
     try ns_boot.mountDevices(&a.ns, &a.cl, root.fid, &a.cl_input, iroot.fid);
     try a.self_tree.start(alloc, &a.editor, &a.ns);
 
+    // ---- /mnt/opfs (R-9P-09, R-P14b-2) ----
+    // Mounted UNCONDITIONALLY, before anything can ask for it: the device
+    // itself asks the browser nothing until a 9P op arrives (boot issues no
+    // `fsOp` at all), and a browser with no OPFS answers every ticket with
+    // `i/o error` plus one console line rather than leaving a hole in the
+    // namespace. `/mnt/` therefore lists `opfs/` from the first frame.
+    a.dev_opfs = DevOpfs.init(alloc, dev.opfs.shimRequester());
+    a.dev_opfs.log = .{ .write = opfsLog };
+    a.fs_stage = &.{};
+    try a.opfs_tree.start(alloc, &a.dev_opfs, &a.ns);
+
     // ---- the boot directory window (acme.c:258-259, R-EDIT-03) ----
     // `readfile(row.col[row.ncol-1], wdir)`: the working directory — `/` here
     // (R-P13b-3) — in the RIGHTMOST column, the left one left empty. Boot does
@@ -272,6 +296,39 @@ fn boot(width: u32, height: u32) !void {
 
     try a.display.flush();
     app = a;
+}
+
+/// The OPFS device's one-line diagnostic channel (R-P5-6: only the root may
+/// name `consoleLog`). Used exactly once per session, for `/mnt/opfs:
+/// unavailable`.
+fn opfsLog(_: ?*anyopaque, line: []const u8) void {
+    consoleLog(line.ptr, line.len);
+}
+
+/// Stage one `fsOp` completion payload (ABI v6) — trampoline over
+/// `opfs_glue.stage`. 0 before `init`: nothing can be staged yet.
+export fn fsStage(len: u32) u32 {
+    const a = app orelse return 0;
+    return opfs_glue.stage(opfsDevices(a), len);
+}
+
+/// Deliver one `fsOp` completion (ABI v6) — trampoline over `opfs_glue.push`,
+/// which caches the answer and then retries whatever it unblocked. Dropped
+/// before `init`. A transport failure traps the way every other export path
+/// does: panic with the error name through the consoleLog handler.
+export fn fsPush(ticket: u32, status: u32, ptr: [*]const u8, len: u32) void {
+    const a = app orelse return;
+    opfs_glue.push(opfsDevices(a), ticket, status, ptr, len) catch |e| @panic(@errorName(e));
+}
+
+/// The borrowed view of the OPFS stack `opfs_glue` works through.
+fn opfsDevices(a: *App) opfs_glue.Devices {
+    return .{
+        .allocator = alloc,
+        .dev = &a.dev_opfs,
+        .srv = &a.opfs_tree.srv,
+        .stage = &a.fs_stage,
+    };
 }
 
 /// `Editor.OriginHook.redial` (R-P12-7) — trampoline over `origin_glue.redial`.
@@ -378,6 +435,7 @@ export fn tick(now_ms: u32) void {
     const a = app orelse return;
     _ = a.srv.poll() catch |e| @panic(@errorName(e)); // draw stack
     a.self_tree.poll() catch |e| @panic(@errorName(e)); // /mnt/snarf-self stack
+    a.opfs_tree.poll() catch |e| @panic(@errorName(e)); // /mnt/opfs stack (parks; fsPush retries)
     input_pump.drain(inputDevices(a), &a.editor) catch |e| @panic(@errorName(e)); // input stack → Editor
     origin_glue.poll(originDevices(a), now_ms); // /n/origin handshake + disconnect watch
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
