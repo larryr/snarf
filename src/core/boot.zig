@@ -224,6 +224,16 @@ pub fn boot(
 const testing = std.testing;
 const Frame = draw.Frame;
 const proto = draw.proto;
+// Test-only: the served-tree-over-a-real-9P-stack pattern `ns_boot.SelfTree`
+// uses at real boot (src/ns_boot.zig). `ns_boot` imports `core`, so `core`'s
+// own tests cannot import it back (R-OV-03/S-07 §6) — reproduced inline here
+// instead, for T10.
+const served_fsys = @import("served/fsys.zig");
+
+fn pumpTestServer(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
 
 /// A Text's whole content as decoded UTF-8 (caller frees).
 fn tagText(t: *Text) ![]u8 {
@@ -352,6 +362,62 @@ test "boot: the ns option reaches the editor through Tree.bind" {
     tree.bind(&ed);
     try testing.expectEqual(&ns, ed.ns.?);
     try testing.expectEqual(tree.row, ed.row.?);
+}
+
+test "boot: the served tree + a fake /dev list under '/' via ListDirJob (T10)" {
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+
+    var tree = try boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "scratch",
+        .body = "",
+        .ns = &ns,
+    });
+    defer tree.deinit();
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    // A fake /dev (the nsdir fixture the whole ninep test suite shares),
+    // mounted FIRST so it sorts before the served tree below (mount-table
+    // order is listing order, R-9P-16).
+    var dev_tree = ninep.nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var dev = try ninep.nsdir.FakeServer.init(a, &dev_tree);
+    defer dev.deinit();
+    try ns.mount("/dev", dev.client, dev.root_fid);
+
+    // Serve /mnt/snarf-self over a real 9P stack — the same shape as
+    // `ns_boot.SelfTree.start`.
+    var fsys = served_fsys.Fsys.init(&ed);
+    var pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(a, pipe.serverEnd(), &served_fsys.Fsys.ops, &fsys, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpTestServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    try ns.mount("/mnt/snarf-self", &cl, root.fid);
+
+    // `/` is nobody's exact mount: it is synthesized because "dev" and "mnt"
+    // hang from it (devroot.c's role, R-9P-16) — exactly what a 13b boot
+    // window would show.
+    var pumps = ninep.nsjob.Pumps{ .srvs = &.{ &srv, dev.srv } };
+    var j = try ninep.nsjob.ListDirJob.init(a, &ns, "/");
+    defer j.deinit();
+    try ninep.nsjob.runSync(&j, pumps.pump());
+
+    try testing.expectEqual(@as(usize, 2), j.entries.items.len);
+    try testing.expectEqualStrings("dev", j.entries.items[0].name);
+    try testing.expectEqualStrings("mnt", j.entries.items[1].name);
+    try testing.expect(j.entries.items[0].mode & ninep.stat.DMDIR != 0);
+    try testing.expect(j.entries.items[1].mode & ninep.stat.DMDIR != 0);
 }
 
 // ===========================================================================

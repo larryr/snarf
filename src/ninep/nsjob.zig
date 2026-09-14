@@ -340,7 +340,7 @@ pub const Pumps = struct {
     }
 };
 
-test "nsjob: WalkJob lands on the same member as nsdir.walk" {
+test "nsjob: WalkJob lands on the same member as nsdir.walk (T5)" {
     const a = testing.allocator;
     var t1 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
     var t2 = nsdir.FakeTree{ .names = &.{ "rc", "date" }, .tag = "two\n" };
@@ -372,4 +372,93 @@ test "nsjob: WalkJob lands on the same member as nsdir.walk" {
     var jm = try WalkJob.init(&ns, "/dev/mouse");
     defer jm.deinit();
     try testing.expectError(error.NotMounted, runSync(&jm, null));
+}
+
+test "nsjob: WalkJob union first-wins and every-member-fails is NotFound (T5)" {
+    const a = testing.allocator;
+    var t1 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var t2 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "two\n" };
+    var s1 = try nsdir.FakeServer.init(a, &t1);
+    defer s1.deinit();
+    var s2 = try nsdir.FakeServer.init(a, &t2);
+    defer s2.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.bind("/bin", s1.client, s1.root_fid, .after);
+    try ns.bind("/bin", s2.client, s2.root_fid, .after);
+    var pumps = Pumps{ .srvs = &.{ s1.srv, s2.srv } };
+
+    // Both members have "rc": the first wins (chan.c:1030-1037) — the same
+    // verdict `nsdir.walk` reaches (nsdir.zig's own union test).
+    var j = try WalkJob.init(&ns, "/bin/rc");
+    defer j.deinit();
+    try runSync(&j, pumps.pump());
+    try testing.expectEqual(s1.client, j.result.fid.client);
+    nsdir.close(&ns, j.result);
+
+    // Neither member has "nope": every union member fails ⇒ NotFound.
+    var jn = try WalkJob.init(&ns, "/bin/nope");
+    defer jn.deinit();
+    try testing.expectError(error.NotFound, runSync(&jn, pumps.pump()));
+}
+
+test "nsjob: WalkJob un-pumped stepping stays pending with no frames; deinit mid-walk sends Tflush then Tclunk (T8)" {
+    const a = testing.allocator;
+
+    // --- part 1: no frames ⇒ step() stays pending, no re-send; one queued
+    // frame advances the job by exactly one state (pending -> done). ---
+    var t = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s = try nsdir.FakeServer.init(a, &t);
+    defer s.deinit();
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/x", s.client, s.root_fid);
+
+    var j = try WalkJob.init(&ns, "/x/rc");
+    defer j.deinit();
+    try testing.expectEqual(Status.pending, try j.step()); // sends the (only) Twalk
+    try testing.expectEqual(Status.pending, try j.step()); // no reply yet: still pending
+    try testing.expectEqual(Status.pending, try j.step()); // repeat: no re-send, still pending
+    _ = try s.srv.poll(); // the server answers the one outstanding Twalk
+    try testing.expectEqual(Status.done, try j.step()); // that one frame completes the walk
+    nsdir.close(&ns, j.result);
+
+    // --- part 2: deinit mid-walk cancels the ticket and clunks the tentative
+    // fid — read the raw frames back off the wire to prove Tflush then
+    // Tclunk, in that order, with no help from the pump. ---
+    var t2 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s2 = try nsdir.FakeServer.init(a, &t2);
+    defer s2.deinit();
+    var ns2 = Namespace.init(a);
+    defer ns2.deinit();
+    try ns2.mount("/x", s2.client, s2.root_fid);
+
+    var j2 = try WalkJob.init(&ns2, "/x/rc");
+    try testing.expectEqual(Status.pending, try j2.step()); // Twalk sent; server not polled
+    const newfid = j2.newfid;
+    // Disable the pump so deinit's cleanup RPCs cannot auto-drive the server:
+    // the Tflush/Tclunk frames land on the wire and are read back RAW below,
+    // proving the order without any implicit pumping (R-P13a-3 discipline
+    // extended to cleanup).
+    s2.client.pump = null;
+    j2.deinit();
+
+    // The wire, client→server, now holds THREE frames in send order: the
+    // original Twalk (from `step`, never polled/answered), then deinit's
+    // Tflush, then its Tclunk — read them back raw to pin that exact order.
+    var buf0: [512]u8 = undefined;
+    const f0 = try s2.pipe.serverEnd().readMsg(&buf0);
+    try testing.expectEqual(msg.Kind.twalk, (try msg.decode(f0)).body.kind());
+
+    var buf1: [512]u8 = undefined;
+    const f1 = try s2.pipe.serverEnd().readMsg(&buf1);
+    const m1 = try msg.decode(f1);
+    try testing.expectEqual(msg.Kind.tflush, m1.body.kind());
+
+    var buf2: [512]u8 = undefined;
+    const f2 = try s2.pipe.serverEnd().readMsg(&buf2);
+    const m2 = try msg.decode(f2);
+    try testing.expectEqual(msg.Kind.tclunk, m2.body.kind());
+    try testing.expectEqual(newfid, m2.body.tclunk.fid);
 }

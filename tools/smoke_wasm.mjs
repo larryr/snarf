@@ -246,10 +246,10 @@ try {
   nsTrapped = true;
   console.error("boot-namespace tick trapped:", e);
 }
-check("boot namespace: 60 ticks poll the served tree without trapping", () => !nsTrapped);
-check("boot namespace: those ticks logged no panic/failure", () =>
+check("boot namespace: 60 ticks poll the served tree without trapping (T12)", () => !nsTrapped);
+check("boot namespace: those ticks logged no panic/failure (T12)", () =>
   !logs.slice(logsBeforeNsTicks).some((m) => /panic|failure/i.test(m)));
-check("boot namespace: exports unchanged (abi_version() still 5)", () =>
+check("boot namespace: exports unchanged (abi_version() still 5) (T12)", () =>
   ex.abi_version() === EXPECT_ABI &&
   typeof ex.init === "function" &&
   typeof ex.tick === "function" &&

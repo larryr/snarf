@@ -437,7 +437,7 @@ const Pumps = nsjob.Pumps;
 const runSync = nsjob.runSync;
 const max_file_bytes = nsjob.max_file_bytes;
 
-test "nsio: ListDirJob yields DirReader's names in DirReader's order" {
+test "nsio: ListDirJob yields DirReader's names in DirReader's order (T6)" {
     const a = testing.allocator;
     var t1 = nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
     var s1 = try nsdir.FakeServer.init(a, &t1);
@@ -468,7 +468,7 @@ test "nsio: ListDirJob yields DirReader's names in DirReader's order" {
     try testing.expectEqualStrings("mouse", j.entries.items[1].name);
 }
 
-test "nsio: StatJob and ReadFileJob reach a file through the namespace" {
+test "nsio: StatJob and ReadFileJob reach a file through the namespace (T9)" {
     const a = testing.allocator;
     var t1 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
     var s1 = try nsdir.FakeServer.init(a, &t1);
@@ -494,4 +494,130 @@ test "nsio: StatJob and ReadFileJob reach a file through the namespace" {
     var nf = try StatJob.init(&ns, "/bin/nope");
     defer nf.deinit();
     try testing.expectError(error.NotFound, runSync(&nf, pumps.pump()));
+}
+
+test "nsio: ListDirJob matches DirReader at '/', '/n' and a union at '/bin' (T6)" {
+    const a = testing.allocator;
+    var t1 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s1 = try nsdir.FakeServer.init(a, &t1);
+    defer s1.deinit();
+    var t2 = nsdir.FakeTree{ .names = &.{"date"}, .tag = "two\n" };
+    var s2 = try nsdir.FakeServer.init(a, &t2);
+    defer s2.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/n/origin", s1.client, s1.root_fid);
+    try ns.mount("/dev", s1.client, s1.root_fid);
+    try ns.bind("/bin", s1.client, s1.root_fid, .after);
+    try ns.bind("/bin", s2.client, s2.root_fid, .after);
+    var pumps = Pumps{ .srvs = &.{ s1.srv, s2.srv } };
+
+    const paths = [_][]const u8{ "/", "/n", "/bin" };
+    for (paths) |path| {
+        var dr = try nsdir.DirReader.open(a, &ns, path);
+        defer dr.close();
+        var want_buf: [1024]u8 = undefined;
+        const want = want_buf[0..try dr.read(0, &want_buf)];
+
+        var j = try ListDirJob.init(a, &ns, path);
+        defer j.deinit();
+        try runSync(&j, pumps.pump());
+        try testing.expectEqualSlices(u8, want, j.data.items);
+    }
+}
+
+test "nsio: ListDirJob skips a union member that fails to open or read (T6)" {
+    const a = testing.allocator;
+    var good = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "ok\n" };
+    var s_good = try nsdir.FakeServer.init(a, &good);
+    defer s_good.deinit();
+    var s_bad_open = try nsdir.FailServer.init(a);
+    defer s_bad_open.deinit();
+    var s_bad_read = try nsdir.FailReadServer.init(a);
+    defer s_bad_read.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    // The failing members go FIRST: if they were not skipped, their error
+    // would surface instead of the good member's entry (sysfile.c:340).
+    try ns.bind("/bin", s_bad_open.client, s_bad_open.root_fid, .after);
+    try ns.bind("/bin", s_bad_read.client, s_bad_read.root_fid, .after);
+    try ns.bind("/bin", s_good.client, s_good.root_fid, .after);
+    var pumps = Pumps{ .srvs = &.{ s_bad_open.srv, s_bad_read.srv, s_good.srv } };
+
+    var dr = try nsdir.DirReader.open(a, &ns, "/bin");
+    defer dr.close();
+    var want_buf: [512]u8 = undefined;
+    const want = want_buf[0..try dr.read(0, &want_buf)];
+
+    var j = try ListDirJob.init(a, &ns, "/bin");
+    defer j.deinit();
+    try runSync(&j, pumps.pump());
+    try testing.expectEqualSlices(u8, want, j.data.items);
+    try testing.expectEqual(@as(usize, 1), j.entries.items.len);
+    try testing.expectEqualStrings("rc", j.entries.items[0].name);
+}
+
+test "nsio: ReadFileJob reads a multi-chunk file byte-exactly; max_bytes stops early with TooBig (T7)" {
+    const a = testing.allocator;
+    // A body far larger than one Tread's payload (msize 8192, minus header
+    // slack): forces several Tread round-trips, pinning the offset advance
+    // across `step()` calls (contract §T7). `FakeTree.tag` is served
+    // verbatim as the file body, so no fixture beyond a long string is
+    // needed — no implementation code changes.
+    const big = try a.alloc(u8, 20_000);
+    defer a.free(big);
+    for (big, 0..) |*b, i| b.* = @intCast('a' + (i % 26));
+
+    var t = nsdir.FakeTree{ .names = &.{"rc"}, .tag = big };
+    var s = try nsdir.FakeServer.init(a, &t);
+    defer s.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/bin", s.client, s.root_fid);
+    var pumps = Pumps{ .srvs = &.{s.srv} };
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(a);
+    var rj = try ReadFileJob.init(a, &ns, "/bin/rc/ctl", &out, max_file_bytes);
+    defer rj.deinit();
+    try runSync(&rj, pumps.pump());
+    try testing.expectEqualSlices(u8, big, out.items);
+    try testing.expectEqual(big.len, rj.bytesRead());
+
+    // A cap smaller than the file stops early with error.TooBig; `deinit`
+    // still clunks the open fid (no hang, no trap).
+    var out2 = std.ArrayList(u8).empty;
+    defer out2.deinit(a);
+    var rj2 = try ReadFileJob.init(a, &ns, "/bin/rc/ctl", &out2, 100);
+    defer rj2.deinit();
+    try testing.expectError(error.TooBig, runSync(&rj2, pumps.pump()));
+}
+
+test "nsio: StatJob reports DMDIR for a real directory and a synthetic one (T9)" {
+    const a = testing.allocator;
+    var t1 = nsdir.FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var s1 = try nsdir.FakeServer.init(a, &t1);
+    defer s1.deinit();
+
+    var ns = Namespace.init(a);
+    defer ns.deinit();
+    try ns.mount("/bin", s1.client, s1.root_fid);
+    var pumps = Pumps{ .srvs = &.{s1.srv} };
+
+    // A real server-side directory ("/bin/rc", FakeTree's per-name dir).
+    var sj = try StatJob.init(&ns, "/bin/rc");
+    defer sj.deinit();
+    try runSync(&sj, pumps.pump());
+    try testing.expect(sj.result.mode & Stat.DMDIR != 0);
+
+    // A purely synthetic mount-point directory ("/", nobody's exact mount —
+    // it exists only because "/bin" hangs from it): no server op at all, so
+    // a nil pump is fine.
+    var sd = try StatJob.init(&ns, "/");
+    defer sd.deinit();
+    try runSync(&sd, null);
+    try testing.expect(sd.result.mode & Stat.DMDIR != 0);
 }

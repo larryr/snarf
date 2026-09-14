@@ -276,3 +276,176 @@ test "tickets: a generic Twalk ticket round-trips over a pumped fake server" {
     try testing.expectError(error.ProtocolError, check(s.client, t));
     try s.client.clunk(newfid);
 }
+
+// ==========================================================================
+// Named battery T1-T3 (test writer's, phase13a contract §4). A scripted
+// transport — copied from `client.zig`'s own test section, same ~60-line
+// recipe (S-07 §6: no dependency on chan.zig/server.zig, so tickets.zig can
+// pin `begin`/`check`/`cancel`'s reply-ordering and pump-discipline contracts
+// with byte-exact control over what "arrives" and when).
+// ==========================================================================
+const Stat = @import("stat.zig");
+
+/// A scripted transport: records every frame the client SENDS (so a test can
+/// decode and assert on it) and hands back pre-loaded reply frames in order.
+/// A read past the end of the script returns WouldBlock.
+const ScriptedTransport = struct {
+    allocator: std.mem.Allocator,
+    sent: std.ArrayListUnmanaged([]u8) = .empty,
+    replies: std.ArrayListUnmanaged([]u8) = .empty,
+    reply_idx: usize = 0,
+
+    fn init(allocator: std.mem.Allocator) ScriptedTransport {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *ScriptedTransport) void {
+        for (self.sent.items) |f| self.allocator.free(f);
+        for (self.replies.items) |f| self.allocator.free(f);
+        self.sent.deinit(self.allocator);
+        self.replies.deinit(self.allocator);
+    }
+
+    /// Encode `m` and queue it as the next reply the client will read.
+    fn pushReply(self: *ScriptedTransport, m: Message) !void {
+        var tmp: [4096]u8 = undefined;
+        const n = try msg.encode(&m, &tmp);
+        const copy = try self.allocator.dupe(u8, tmp[0..n]);
+        try self.replies.append(self.allocator, copy);
+    }
+
+    /// The i-th frame the client sent, decoded.
+    fn sentMsg(self: *ScriptedTransport, i: usize) !Message {
+        return msg.decode(self.sent.items[i]);
+    }
+
+    fn writeMsg(ctx: *anyopaque, frame: []const u8) transport.Error!void {
+        const self: *ScriptedTransport = @ptrCast(@alignCast(ctx));
+        const copy = self.allocator.dupe(u8, frame) catch return error.Closed;
+        self.sent.append(self.allocator, copy) catch {
+            self.allocator.free(copy);
+            return error.Closed;
+        };
+    }
+
+    fn readMsg(ctx: *anyopaque, buf: []u8) transport.Error![]u8 {
+        const self: *ScriptedTransport = @ptrCast(@alignCast(ctx));
+        if (self.reply_idx >= self.replies.items.len) return error.WouldBlock;
+        const r = self.replies.items[self.reply_idx];
+        if (buf.len < r.len) return error.FrameTooBig;
+        @memcpy(buf[0..r.len], r);
+        self.reply_idx += 1;
+        return buf[0..r.len];
+    }
+
+    fn close(ctx: *anyopaque) void {
+        _ = ctx;
+    }
+
+    const vtable: transport.Transport.VTable = .{
+        .writeMsg = writeMsg,
+        .readMsg = readMsg,
+        .close = close,
+    };
+
+    fn endpoint(self: *ScriptedTransport) transport.Transport {
+        return .{ .ctx = self, .vtable = &vtable };
+    }
+};
+
+test "tickets: two tickets resolve independently in reverse-arrival order; a third tag is ProtocolError (T1)" {
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    var buf1: [512]u8 = undefined;
+    var buf2: [512]u8 = undefined;
+    const t1 = try begin(&client, .{ .tag = 0, .body = .{
+        .twalk = msg.Body.Twalk.init(0, 1, &.{"a"}),
+    } }, &buf1); // tag 0
+    const t2 = try begin(&client, .{ .tag = 0, .body = .{
+        .tstat = .{ .fid = 5 },
+    } }, &buf2); // tag 1
+
+    // Replies arrive in REVERSE order: t2's Rstat is queued (and thus read)
+    // before t1's Rwalk.
+    var stat_bytes: [128]u8 = undefined;
+    const sn = try (Stat{ .qid = .{ .path = 9 }, .mode = 0, .length = 0, .name = "f" }).encode(&stat_bytes);
+    try st.pushReply(.{ .tag = 1, .body = .{ .rstat = .{ .stat = stat_bytes[0..sn] } } });
+    try st.pushReply(.{ .tag = 0, .body = .{
+        .rwalk = msg.Body.Rwalk.init(&.{.{ .path = 10, .qtype = .{ .dir = true } }}),
+    } });
+
+    // Checking t2 first drains BOTH queued frames (check drains everything
+    // ready, regardless of which ticket is asked about) and reports its own.
+    const r2 = (try check(&client, t2)).?;
+    try testing.expectEqual(msg.Kind.rstat, r2.body.kind());
+    try testing.expectEqualStrings("f", (try Stat.decode(r2.body.rstat.stat)).name);
+
+    // t1's reply was already dispatched into its own slot by that drain.
+    const r1 = (try check(&client, t1)).?;
+    try testing.expectEqual(msg.Kind.rwalk, r1.body.kind());
+    try testing.expectEqual(@as(u16, 1), r1.body.rwalk.nwqid);
+
+    // A tag matching no outstanding ticket is a protocol violation.
+    try testing.expectError(error.ProtocolError, check(&client, .{ .tag = 99 }));
+}
+
+test "tickets: check never pumps when the transport has no frames ready (T2)" {
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    var pumps: usize = 0;
+    client.pump = .{ .ctx = &pumps, .run = struct {
+        fn run(ctx: *anyopaque) anyerror!void {
+            const n: *usize = @ptrCast(@alignCast(ctx));
+            n.* += 1;
+        }
+    }.run };
+
+    var buf: [512]u8 = undefined;
+    const t = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 0 } } }, &buf);
+
+    // No reply queued: check must report `null` without ever invoking the pump
+    // (R-P13a-3) — try it more than once to rule out a first-call fluke.
+    try testing.expectEqual(@as(?Message, null), try check(&client, t));
+    try testing.expectEqual(@as(?Message, null), try check(&client, t));
+    try testing.expectEqual(@as(usize, 0), pumps);
+}
+
+test "tickets: an Rerror maps to the ticket's error; cancel Tflushes and frees the slot (T3)" {
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+
+    // An Rerror reply surfaces as the ticket's mapped, typed error and
+    // consumes the slot.
+    var buf1: [512]u8 = undefined;
+    const t1 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 0 } } }, &buf1); // tag 0
+    try st.pushReply(.{ .tag = 0, .body = .{ .rerror = .{ .ename = "file does not exist" } } });
+    try testing.expectError(error.FileDoesNotExist, check(&client, t1));
+    try testing.expect(!client.pending.contains(t1.tag));
+
+    // cancel: Tflush the ticket and free the slot. A reply that races ahead
+    // for the OLD tag is absorbed by cancel's own dispatch loop, not
+    // resurrected — the ticket is consumed either way and a later check on it
+    // is a ProtocolError (unknown tag), matching `cancelRead`'s contract.
+    var buf2: [512]u8 = undefined;
+    const t2 = try begin(&client, .{ .tag = 0, .body = .{ .tstat = .{ .fid = 1 } } }, &buf2); // tag 1
+    try st.pushReply(.{ .tag = 1, .body = .{ .rerror = .{ .ename = "interrupted" } } }); // races ahead
+    try st.pushReply(.{ .tag = 2, .body = .rflush }); // the flush's own tag
+    try cancel(&client, t2);
+    try testing.expect(!client.pending.contains(t2.tag));
+
+    // The Tflush we sent carried oldtag == t2's tag (sent[0]=Tstat(0),
+    // [1]=Tstat(1), [2]=Tflush(2)).
+    const flush_sent = try st.sentMsg(2);
+    try testing.expectEqual(msg.Kind.tflush, flush_sent.body.kind());
+    try testing.expectEqual(t2.tag, flush_sent.body.tflush.oldtag);
+
+    try testing.expectError(error.ProtocolError, check(&client, t2));
+}
