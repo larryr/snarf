@@ -6,10 +6,12 @@
 //! the no-clone/no-warp `colinit` (cols.c:26-50), `coladd` (cols.c:52-158) and
 //! `colresize` (cols.c:235-272) plus `colwhich` (cols.c:558-580). The mouse-warp
 //! arms (`savemouse`/`moveto`, cols.c:150-154) are dropped (R-P8-7 — a browser
-//! can't move the pointer), and the `colgrow` "grow the landing window first"
-//! loop (cols.c:81-87) is deferred with the rest of colgrow/colsort/colclose/
-//! coldragwin (later phases): the buggered fallback still fires when the clamped
-//! landing position can't fit.
+//! can't move the pointer). `colgrow` arrived in phase 16b and lives in
+//! `core/colgrow.zig` (the `but == 1` arm only); `coladd`'s own "grow the
+//! landing window first" loop (cols.c:81-87) is still deferred, because it
+//! changes `coladd`'s geometry and the accept goldens pin it — the buggered
+//! fallback still fires when the clamped landing position can't fit.
+//! `colsort`/`coldragwin` remain later phases.
 //!
 //! Windows are individually HEAP-allocated (`allocator.create`) and stored as
 //! pointers so their addresses stay stable — a `Text`'s `SelectState` aliases
@@ -287,6 +289,12 @@ pub fn resize(c: *Column, r: Rect) Error!void {
     }
     c.r = r; // cols.c:271
 }
+
+/// `colgrow` (cols.c:333-472), the `but == 1` arm — grow `w` at its neighbours'
+/// expense. The body lives in `core/colgrow.zig` (size seam, S-07 §2); this
+/// decl alias keeps `c.grow(w)` resolving as a method. See that file for what
+/// the other `but` arms are and why they are still out.
+pub const grow = @import("colgrow.zig").grow;
 
 /// `colwhich` (cols.c:558-580): the `Text` at `p` — the column tag, a window's
 /// tag (its collapsed `tagtop` or full tag rect), or its body — or `null` when
@@ -567,4 +575,39 @@ test "column: clean strikes all dirty windows in one pass" {
 
     // The second call passes: both dirty flags already cleared.
     try testing.expect(c.clean(&ed));
+}
+
+test "column: grow gives a starved window lines from its neighbours (16b item 11)" {
+    // `colgrow(c, w, 1)` (cols.c:333-472, the but==1 arm). The column stays
+    // tiled: every window inside c.r, in order, with a Border band between.
+    const h = try ColHarness.init(proto.Rect.make(0, 0, 200, 400));
+    defer h.deinit();
+    const c = h.col;
+
+    const a = try h.addWin(40, 20);
+    const b = try h.addWin(40, 0);
+    const d = try h.addWin(40, 0); // three windows, d carved out of b
+    try testing.expectEqual(@as(usize, 3), c.w.items.len);
+
+    // Squeeze d down to nothing, then grow it back.
+    const before = d.body.fr.maxlines;
+    try c.grow(d);
+    try testing.expect(d.body.fr.maxlines >= before);
+    try testing.expect(d.body.fr.maxlines >= 1);
+
+    // Still tiled, still in order, still inside the column.
+    try testing.expect(c.w.items[0] == a and c.w.items[1] == b and c.w.items[2] == d);
+    try testing.expect(c.w.items[0].r.min.y >= c.tag.fr.r.max.y);
+    for (c.w.items[0 .. c.w.items.len - 1], c.w.items[1..]) |up, down| {
+        try testing.expect(up.r.max.y <= down.r.min.y); // no overlap
+        try testing.expect(down.r.min.y - up.r.max.y <= Chrome.border);
+    }
+    try testing.expect(c.w.items[c.w.items.len - 1].r.max.y <= c.r.max.y);
+    try testing.expect(c.safe);
+
+    // A window from another column is refused rather than mislaid (cols.c:341).
+    const h2 = try ColHarness.init(proto.Rect.make(200, 0, 400, 400));
+    defer h2.deinit();
+    const other = try h2.addWin(40, 20);
+    try testing.expectError(error.IoError, c.grow(other));
 }
