@@ -500,7 +500,9 @@ pub fn remove(self: *Client, fid: u32) Error!void {
 /// `stat_mod.dontTouch()`. The blob is encoded into a local scratch buffer, so
 /// nothing aliases `wbuf`.
 pub fn wstat(self: *Client, fid: u32, st: stat_mod) Error!void {
-    var blob: [1024]u8 = undefined;
+    // A legal maximum stat is 2 + 39 + 4*(2+255) = 1069 bytes (stat(5)); 1024 would
+    // reject a 255-byte name with MessageTooBig (review nit, 14a).
+    var blob: [1100]u8 = undefined;
     const n = st.encode(&blob) catch return error.MessageTooBig;
     const reply = try self.rpc(.{ .tag = self.allocTag(), .body = .{
         .twstat = .{ .fid = fid, .stat = blob[0..n] },

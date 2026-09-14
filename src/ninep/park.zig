@@ -164,6 +164,10 @@ pub fn retryParkedPath(srv: *Server, path: u64) server.Error!usize {
     return retryFiltered(srv, path);
 }
 
+/// NOTE (review nit, 14a): a nested retry (an `Ops.write` that calls
+/// `completeReads` while this loop is mid-pass) may remove an entry at an
+/// index below the outer `i`; the outer pass then skips one entry, which is
+/// simply retried on the next pass — never dispatched twice, never lost.
 fn retryFiltered(srv: *Server, path: ?u64) server.Error!usize {
     var replies: usize = 0;
     var i: usize = 0;

@@ -34,7 +34,7 @@ chunked by the client as usual.
 The framework decodes and dispatches all of the above. create/remove/wstat are
 *mandatory for the framework, optional per server*: a server that leaves the `create`,
 `remove` or `wstat` slot unbound answers lib9p's refusal strings — `"create prohibited"`,
-`"remove prohibited"`, `"wstat prohibited"` (`lib9p/srv.c:17,20,23`) — so a read-only
+`"remove prohibited"`, `"wstat prohibited"` (`lib9p/srv.c:18,20,24`) — so a read-only
 tree needs no code at all. Which trees bind them: `/mnt/host`, `/mnt/opfs`,
 `/dev/storage`, `/n/origin` (server permitting); `/dev/dom` deliberately does NOT
 (element creation is a `ctl` verb, so it keeps answering `"create prohibited"`).
@@ -190,7 +190,7 @@ pump on its own.
 
 The framework itself also emits, verbatim from lib9p and the Plan 9 kernel:
 `"create prohibited"`, `"remove prohibited"`, `"wstat prohibited"`
-(`lib9p/srv.c:17,20,23` — an unbound `Ops` slot), `"9P protocol botch"` (create on an
+(`lib9p/srv.c:18,20,24` — an unbound `Ops` slot), `"9P protocol botch"` (create on an
 already-open fid), `"create in non-directory"`, `"bad directory in wstat"`,
 `"wstat -- attempt to change {type,dev,qid,muid,DMDIR bit}"`, `"file name syntax"`
 (`9/port/error.h:15`) and `"too many parked requests"` (§4, Snarf-specific). These are

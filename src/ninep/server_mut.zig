@@ -164,16 +164,16 @@ pub fn dropFid(srv: *Server, fid: u32) void {
 // `Client.lastErrorString`). [lib9p/srv.c:10-27]
 // ===========================================================================
 
-/// [lib9p/srv.c:17]
+/// [lib9p/srv.c:18 Enocreate]
 pub const create_prohibited = "create prohibited";
-/// [lib9p/srv.c:20]
+/// [lib9p/srv.c:20 Enoremove]
 pub const remove_prohibited = "remove prohibited";
-/// [lib9p/srv.c:23]
+/// [lib9p/srv.c:24 Enowstat]
 pub const wstat_prohibited = "wstat prohibited";
 /// The fid is already the product of a successful open or create (`5/open`).
-/// [lib9p/srv.c:12 Ebotch, :390 screate]
+/// [lib9p/srv.c:13 Ebotch, :390 screate]
 pub const protocol_botch = "9P protocol botch";
-/// [lib9p/srv.c:13 Ecreatenondir, :392 screate]
+/// [lib9p/srv.c:14 Ecreatenondir, :392 screate]
 pub const create_nondir = "create in non-directory";
 /// [lib9p/srv.c:27 Ebaddir, :657 swstat]
 pub const bad_wstat_dir = "bad directory in wstat";
