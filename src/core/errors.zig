@@ -118,6 +118,13 @@ fn trimSlash(s: []const u8) []const u8 {
 /// (util.c:145-150) additionally treats `"."` as no directory; that collapse is
 /// the caller's job, as in the C.
 ///
+/// NO TRAILING `/`. The C slices `b[0..slash+1]`, which keeps the separator,
+/// and then hands the result to `cleanrname` — which takes it off again for
+/// every name but the root. This function returns the CLEANED form directly:
+/// `"/a/b/c.zig"` ⇒ `"/a/b"`, `"/x/"` ⇒ `"/x"`, `"/c.zig"` ⇒ `"/"`,
+/// `"c.zig"` ⇒ `""`. A caller joining a name onto it therefore supplies the
+/// separator itself (`expand.absolute` does: `"{s}/{s}"`).
+///
 /// Returns a SUBSLICE of `w.body.file.name` — no allocation, nothing to free.
 ///
 /// TWO documented divergences:
@@ -126,10 +133,11 @@ fn trimSlash(s: []const u8) []const u8 {
 ///      equal to that field, so the two agree except in the window between a user
 ///      hand-editing the tag name and the next `winsettag` — v1 has no rename
 ///      path at all, so the difference is unobservable.
-///   2. `cleanrname`/`cleanname` (look.c:454-465) is NOT ported: only its one
-///      effect on this input is reproduced — the trailing `/` of `b[0..slash+1]`
-///      is dropped unless the result is the root `"/"`. `.`/`..` collapsing is
-///      DEFERRED (no host paths reach here yet); FLAG for the namespace phase.
+///   2. `cleanrname`/`cleanname` (look.c:454-465) is not CALLED here: only its
+///      one effect on this input is reproduced, the trailing-`/` strip above.
+///      Full `.`/`..` collapsing arrived with `openfile.cleanName` in phase 13b
+///      — the "FLAG for the namespace phase" this comment used to carry is
+///      retired, and every name that reaches a window has been through it.
 pub fn dirName(w: *Window) []const u8 {
     const name = w.body.file.name.items;
     const slash = std.mem.lastIndexOfScalar(u8, name, '/') orelse return ""; // look.c:554-559
@@ -276,6 +284,9 @@ test "errors: dirName splits the directory from the window name (T17)" {
     try testing.expectEqualStrings("", dirName(w));
     try w.body.file.setName("/x/");
     try testing.expectEqualStrings("/x", dirName(w));
+    // The root is the one name that keeps its slash (16b item 7).
+    try w.body.file.setName("/c.zig");
+    try testing.expectEqualStrings("/", dirName(w));
 }
 
 test "errors: flushWarnings mints +Errors in the rightmost column and appends (T18)" {
