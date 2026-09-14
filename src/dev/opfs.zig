@@ -43,6 +43,7 @@ const ninep = @import("ninep");
 const shim = @import("shim");
 const tree = @import("opfs_tree.zig");
 const slots = @import("opfs_slots.zig");
+const opfs_io = @import("opfs_io.zig");
 
 const Server = ninep.server.Server;
 const Fid = ninep.server.Fid;
@@ -145,7 +146,7 @@ pub const DevOpfs = struct {
     /// Ask for `rec`, or collect the answer to an identical earlier ask.
     /// `key` disambiguates slots on one fid: the byte offset for read/write,
     /// the target path's qid hash for everything else (R-P14b-3).
-    fn request(self: *Self, fid: u32, rec: FsRecord, key: u64) OpBlockError!Completion {
+    pub fn request(self: *Self, fid: u32, rec: FsRecord, key: u64) OpBlockError!Completion {
         if (self.pending.take(fid, rec.op, key)) |c| return c;
         if (self.pending.find(fid, rec.op, key) != null) return error.WouldBlock; // asked, no answer yet
         const n = rec.encodedSize();
@@ -169,7 +170,7 @@ pub const DevOpfs = struct {
         return e == error.WouldBlock or e == error.WouldBlockRead;
     }
 
-    fn pathOf(self: *Self, qid: Qid) OpError![]const u8 {
+    pub fn pathOf(self: *Self, qid: Qid) OpError![]const u8 {
         return self.paths.get(qid.path) orelse error.FileDoesNotExist;
     }
 
@@ -262,49 +263,14 @@ pub const DevOpfs = struct {
         return self.finish(self.read(fid, offset, buf));
     }
 
-    fn read(self: *Self, fid: *Fid, offset: u64, buf: []u8) ReadError!usize {
-        const path = try self.pathOf(fid.qid);
-        if (fid.qid.qtype.dir) {
-            if (self.listings.get(fid.fid) == null) {
-                const c = try self.request(fid.fid, .{ .op = .list, .path = path }, fid.qid.path);
-                if (c.status != .ok) return tree.statusError(c.status);
-                const s = try tree.buildListing(self.allocator, path, c.payload, &self.path_buf);
-                self.listings.put(self.allocator, fid.fid, s) catch {
-                    self.allocator.free(s);
-                    return error.IoError;
-                };
-            }
-            return tree.readListing(self.listings.get(fid.fid).?, offset, buf);
-        }
-        if (buf.len == 0) return 0;
-        const c = try self.request(fid.fid, .{
-            .op = .read,
-            .path = path,
-            .arg0 = offset,
-            .arg1 = @intCast(buf.len),
-        }, offset);
-        if (c.status != .ok) return tree.statusError(c.status);
-        const n = @min(buf.len, c.payload.len);
-        @memcpy(buf[0..n], c.payload[0..n]);
-        return n;
-    }
+    /// `read`/`write` bodies live in `opfs_io.zig` since phase 16a; decl
+    /// aliases, so `self.read(...)` resolves exactly as before.
+    const read = opfs_io.read;
+    const write = opfs_io.write;
 
     fn writeOp(ctx: *anyopaque, _: *Server, fid: *Fid, offset: u64, data: []const u8) OpBlockError!usize {
         const self = devOf(ctx);
         return self.finish(self.write(fid, offset, data));
-    }
-
-    fn write(self: *Self, fid: *Fid, offset: u64, data: []const u8) OpBlockError!usize {
-        if (fid.qid.qtype.dir) return error.FileIsDirectory;
-        const path = try self.pathOf(fid.qid);
-        const c = try self.request(fid.fid, .{
-            .op = .write,
-            .path = path,
-            .arg0 = offset,
-            .payload = data,
-        }, offset);
-        if (c.status != .ok) return tree.statusError(c.status);
-        return @min(data.len, FsRecord.decodeWriteCount(c.payload));
     }
 
     fn createOp(ctx: *anyopaque, _: *Server, fid: *Fid, name: []const u8, perm: u32, _: u8) OpBlockError!CreateResult {
@@ -399,43 +365,17 @@ pub const DevOpfs = struct {
 // ===========================================================================
 // Tests — SMOKE ONLY. The named battery (T2-T11: scripted out-of-order
 // completion over a real Pipe + Client, chunked reads, OTRUNC, create/remove,
-// every status string) is the test author's, per contract §4.
+// every status string) is the test author's, per contract §4. Their shared
+// harness (`Script`, `Wire`, `drive`) lives in `opfs_testsrv.zig` since
+// phase 16a.
 // ===========================================================================
 const testing = std.testing;
-
-/// The scripted backend the tests plug in for the browser: it RECORDS every
-/// record it is handed and answers nothing until a test says so, which is what
-/// makes park/complete ordering observable.
-const Script = struct {
-    alloc: std.mem.Allocator,
-    dev: *DevOpfs = undefined,
-    log: std.ArrayList([]u8) = .empty,
-    tickets: std.ArrayList(u32) = .empty,
-
-    fn requester(self: *Script) Requester {
-        return .{ .ctx = self, .issue = issue };
-    }
-
-    fn issue(ctx: ?*anyopaque, ticket: u32, record: []const u8) void {
-        const self: *Script = @ptrCast(@alignCast(ctx.?));
-        self.log.append(self.alloc, self.alloc.dupe(u8, record) catch return) catch return;
-        self.tickets.append(self.alloc, ticket) catch return;
-    }
-
-    fn deinit(self: *Script) void {
-        for (self.log.items) |r| self.alloc.free(r);
-        self.log.deinit(self.alloc);
-        self.tickets.deinit(self.alloc);
-    }
-
-    fn last(self: *Script) FsRecord {
-        return FsRecord.decode(self.log.items[self.log.items.len - 1]) catch unreachable;
-    }
-
-    fn answer(self: *Script, i: usize, status: FsRecord.Status, payload: []const u8) void {
-        self.dev.complete(self.tickets.items[i], status, payload);
-    }
-};
+const testsrv = @import("opfs_testsrv.zig");
+const Script = testsrv.Script;
+const Answer = testsrv.Answer;
+const Wire = testsrv.Wire;
+const drive = testsrv.drive;
+const chan = ninep.chan;
 
 test "devopfs: a walk parks once per component and reuses its answers on retry" {
     const a = testing.allocator;
@@ -533,102 +473,6 @@ test "devopfs: a clunked fid's late completion is dropped" {
     try testing.expectEqual(@as(usize, 0), dev.inflight());
     sc.answer(0, .ok, ""); // nobody is waiting: dropped, not stored
     try testing.expectEqual(@as(usize, 0), dev.inflight());
-}
-
-// ===========================================================================
-// Named battery T2-T11 (phase-14b contract §4), the test-writer's own — over
-// a REAL chan.Pipe + Server, driven by hand (no `ninep.Client`/`tickets`: a
-// blocking `Client.rpc` against this tree pumps forever the moment an op
-// parks, since nothing but an explicit `retryParked` ever answers it). The
-// harness below is `dev/input.zig`'s Harness pattern (send once, `recv`
-// reports `null` on a parked op instead of blocking), generalised with a
-// `drive` helper that answers outstanding `fsOp` tickets — via the `Script`
-// requester above — until a reply appears or the test's answer list runs out.
-// ===========================================================================
-
-/// One scripted answer for the NEXT outstanding `fsOp` ticket that `drive`
-/// hands to `Script.answer`, in the order a chain of round trips needs them
-/// (e.g. OTRUNC's `stat` then `truncate`).
-const Answer = struct { status: FsRecord.Status, payload: []const u8 = &.{} };
-
-const chan = ninep.chan;
-
-/// Heap-pinned raw-pipe harness (no `Client`): `send` writes one T-frame and
-/// runs exactly one `Server.step`; `recv` reports `null` on a parked op
-/// (`WouldBlock`) rather than spinning. Plugs in whatever `Requester` the test
-/// wants — the scripted `Script` for most tests, an auto-answering one for T10.
-const Wire = struct {
-    alloc: std.mem.Allocator,
-    pipe: *chan.Pipe,
-    dev: DevOpfs,
-    srv: Server,
-    rbuf: [16384]u8 = undefined,
-    tag: u16 = 0,
-
-    fn create(alloc: std.mem.Allocator, req: Requester) !*Wire {
-        const self = try alloc.create(Wire);
-        errdefer alloc.destroy(self);
-        self.* = .{
-            .alloc = alloc,
-            .pipe = try chan.Pipe.init(alloc, 65536),
-            .dev = DevOpfs.init(alloc, req),
-            .srv = undefined,
-        };
-        self.srv = try Server.init(alloc, self.pipe.serverEnd(), &DevOpfs.ops, &self.dev, 8192);
-        return self;
-    }
-
-    fn destroy(self: *Wire) void {
-        self.srv.deinit();
-        self.dev.deinit();
-        self.pipe.deinit();
-        self.alloc.destroy(self);
-    }
-
-    fn nextTag(self: *Wire) u16 {
-        self.tag += 1;
-        return self.tag;
-    }
-
-    fn send(self: *Wire, m: msg.Message) !void {
-        var enc: [8192]u8 = undefined;
-        const n = try msg.encode(&m, &enc);
-        try self.pipe.clientEnd().writeMsg(enc[0..n]);
-        _ = try self.srv.step();
-    }
-
-    /// One decoded reply, or `null` when the op parked and nothing came back.
-    fn recv(self: *Wire) !?msg.Message {
-        const frame = self.pipe.clientEnd().readMsg(&self.rbuf) catch |e| switch (e) {
-            error.WouldBlock => return null,
-            else => return e,
-        };
-        return try msg.decode(frame);
-    }
-
-    /// Tversion + Tattach; asserts the mount's one unparking op (R-P14b-2).
-    fn connect(self: *Wire) !void {
-        try self.send(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
-        try testing.expect((try self.recv()).?.body == .rversion);
-        try self.send(.{ .tag = self.nextTag(), .body = .{ .tattach = .{ .fid = 0, .afid = msg.NOFID, .uname = "larry", .aname = "" } } });
-        try testing.expect((try self.recv()).?.body == .rattach);
-    }
-};
-
-/// Send `m` on `h`; while no reply is ready, hand the newest outstanding
-/// `fsOp` ticket the next entry of `answers` and re-dispatch. `error.NoReply`
-/// if `answers` runs out first — the op needed more round trips than expected.
-fn drive(h: *Wire, sc: *Script, m: msg.Message, answers: []const Answer) !msg.Message {
-    try h.send(m);
-    var i: usize = 0;
-    while (true) {
-        if (try h.recv()) |r| return r;
-        if (i >= answers.len) return error.NoReply;
-        const t = sc.tickets.items.len - 1;
-        sc.answer(t, answers[i].status, answers[i].payload);
-        i += 1;
-        _ = try h.srv.retryParked();
-    }
 }
 
 test "devopfs wire T2: a walk over the pipe parks on one stat and completes on the answer" {

@@ -14,6 +14,9 @@ pub const input = @import("input.zig");
 pub const opfs = @import("opfs.zig");
 pub const opfs_tree = @import("opfs_tree.zig");
 pub const opfs_slots = @import("opfs_slots.zig");
+/// The device's read/write op bodies (S-07 size seam, phase 16a); `DevOpfs`
+/// aliases them, so nothing calls through this name.
+pub const opfs_io = @import("opfs_io.zig");
 
 test {
     std.testing.refAllDecls(@This());
