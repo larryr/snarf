@@ -49,6 +49,16 @@ maxlines: usize = 0,
 /// 9d lands, the `frameEnd` tag sweep. Distinct from `file.mod` (which survives a
 /// clean strike so the mod dot stays).
 dirty: bool = false,
+/// `w->isdir` (dat.h:236): this window's body is a DIRECTORY listing
+/// (text.c:218). Set by `dirwin.applyListing`; read by `setTag1` (the ` Get`
+/// word, wind.c:520-523), `clean` (a directory never two-strikes, wind.c:667),
+/// `ctlPrint` (wind.c:695) and `cmd_get` (R-P13b-5).
+isdir: bool = false,
+/// `w->dlp`/`w->ndl` (dat.h:237-238): the SORTED entry names of the listing
+/// currently displayed, each already carrying its trailing '/' for a
+/// subdirectory. Owned by this Window (`chrome.allocator`); released by
+/// `deinit` and by `dirwin.freeDirNames` (`windirfree`, wind.c:646-660).
+dirnames: std.ArrayList([]const u21) = .empty,
 /// `w->filemenu` (dat.h:241; set TRUE by `wininit`, wind.c:81). Gates the
 /// Undo/Redo/Put words of the tag menu (wind.c:505-519). Only `+Errors` windows
 /// clear it in v1 (util.c:99) — acme also clears it for a window whose body is
@@ -111,6 +121,8 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     try w.drawButton(); // wind.c:77-80
     w.filemenu = true; // wind.c:81 (the field is default-true; set it explicitly
     // because `Column.add` inits a raw heap Window and `init` assigns every field)
+    w.isdir = false; // same reason: a raw heap Window has no defaults applied
+    w.dirnames = .empty;
     w.maxlines = w.body.fr.maxlines; // wind.c:82
 }
 
@@ -119,6 +131,9 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
 /// registry); otherwise it is caller-owned.
 pub fn deinit(w: *Window) void {
     const owned_body: ?*File = if (w.owns_body) w.body.file else null;
+    // `windirfree` (wind.c:646-660) — the directory listing's entry names.
+    for (w.dirnames.items) |n| w.chrome.allocator.free(n);
+    w.dirnames.deinit(w.chrome.allocator);
     w.body.deinit();
     w.tag.deinit();
     w.tag_file.deinit();
@@ -341,9 +356,13 @@ pub fn setTag1(w: *Window) Error!void {
     if (w.filemenu) {
         if (w.body.file.undoSeq() != 0) try appendAsciiRunes(&new, a, " Undo"); // wind.c:506-508
         if (w.body.file.redoSeq() != 0) try appendAsciiRunes(&new, a, " Redo"); // wind.c:510-512
-        // Put (wind.c:514-518) FLAG-deferred: no putseq. Get (wind.c:520-522) is
-        // outside the filemenu arm in the C but equally deferred (no isdir).
+        // Put (wind.c:514-518) FLAG-deferred: no putseq. Its `!w->isdir` guard
+        // is therefore moot — a directory window would not get a Put word even
+        // if putseq existed (R-P13b: "keeps Put out for isdir").
     }
+    // wind.c:520-523: `Get` sits OUTSIDE the filemenu arm, so a directory
+    // window — which has `filemenu == FALSE` (text.c:219) — still shows it.
+    if (w.isdir) try appendAsciiRunes(&new, a, " Get"); // wind.c:521-522
     try appendAsciiRunes(&new, a, " |"); // wind.c:524
     // user-suffix preservation: k = just past the old '|'; else append " Look "
     // for a fresh window (wind.c:526-535).
@@ -402,13 +421,17 @@ pub fn setTag(w: *Window) Error!void {
     try w.setTag1();
 }
 
-/// `winclean` (wind.c:666-685) — THE TWO-STRIKE. isscratch/isdir/nopen arms are
-/// n/a in v1 (`conservative` unused). A dirty window warns ONCE and clears
+/// `winclean` (wind.c:666-685) — THE TWO-STRIKE. The `isdir` half of
+/// wind.c:667-668 is LIVE since phase 13b ("don't whine if it's a guide file,
+/// error window, etc." — a directory listing is machine-generated, so `Del`
+/// never two-strikes on it); `isscratch`/`nopen` stay n/a (`conservative`
+/// unused). A dirty window warns ONCE and clears
 /// `dirty` (while `file.mod` stays true so the mod dot remains), returning false;
 /// the second call sees `dirty==false` and returns true. A later body edit
 /// re-arms `dirty` (Text.insertAt/deleteRange). Small unnamed files pass silently.
 pub fn clean(w: *Window, ed: *Editor, conservative: bool) bool {
     _ = conservative;
+    if (w.isdir) return true; // wind.c:667-668
     if (w.dirty) {
         if (w.body.file.name.items.len != 0) {
             ed.warning("{s} modified\n", .{w.body.file.name.items}); // wind.c:675
@@ -434,7 +457,7 @@ pub const ctl_size: usize = 60;
 /// `winctlprint` (wind.c:688-696): format `w`'s control line into `buf`,
 /// returning the written slice. The base line is five `%11d ` columns
 /// (12 bytes each = `ctl_size`): id, tag rune count, body rune count,
-/// `isdir` (always 0 in v1 — dir/scratch windows are unbuilt), `dirty`.
+/// `isdir` (LIVE since phase 13b — `w->isdir`, wind.c:695), `dirty`.
 ///
 /// With `fonts`, the /dev/acme-index arm appends five more fields
 /// `"%11d %q %11d %11d %11d "`: `Dx(w.body.fr.r)`, the font name, `fr.maxtab`,
@@ -448,7 +471,7 @@ pub fn ctlPrint(w: *Window, buf: []u8, fonts: bool) []u8 {
     const id: u32 = w.id;
     const tag_nc: usize = w.tag.file.buffer.len();
     const body_nc: usize = w.body.file.buffer.len();
-    const isdir: u32 = 0; // wind.c:695 (single-window: no dir windows)
+    const isdir: u32 = @intFromBool(w.isdir); // wind.c:695
     const dirty: u32 = @intFromBool(w.dirty);
 
     const base = std.fmt.bufPrint(buf, "{d:>11} {d:>11} {d:>11} {d:>11} {d:>11} ", .{
