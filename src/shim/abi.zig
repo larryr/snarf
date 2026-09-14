@@ -13,16 +13,21 @@
 //! the same gate, with `test_ws_*` seams. Inbound frames travel the other way,
 //! browser → module, via the `wsStage`/`wsPush` exports (`src/main_wasm.zig`)
 //! into `WsTransport.pushRecord`, so they need no import here.
+//!
+//! Phase 14b adds the LAST reserved import, `fsOp` (R-P14b-6): one request
+//! record (`FsRecord.zig`) asking the browser's Origin Private File System to
+//! do something, tagged with a ticket. Its completions come back the same way
+//! the ws ones do — module → `fsStage`/`fsPush` exports — kept as a SEPARATE
+//! export pair so the two record streams can never interleave.
 const builtin = @import("builtin");
 
-/// Bumped whenever the import/export surface changes (4→5 this phase, R-GFX-05:
-/// `init` grew its `(w, h)` display size and `EventKind.resize` joined the event
-/// mirror, so a v4 shim — which calls `init()` with no arguments and never
-/// reports a window resize — is a real incompatibility, not a cosmetic one).
-/// `web/shim.js` carries the mirror of this value; the two must match, and the
-/// wasm module re-exports it via `abi_version()` so the shim can check before
-/// calling `init()`.
-pub const version: u32 = 5;
+/// Bumped whenever the import/export surface changes (5→6 this phase,
+/// R-P14b-6: the `fsOp` import and the `fsStage`/`fsPush` export pair joined
+/// the surface, so a v5 shim — which provides no OPFS backend at all — cannot
+/// serve `/mnt/opfs`). `web/shim.js` carries the mirror of this value; the two
+/// must match, and the wasm module re-exports it via `abi_version()` so the
+/// shim can check before calling `init()`.
+pub const version: u32 = 6;
 
 /// The kind tag of a raw input event crossing the ABI (R-P6-10). `web/shim.js`
 /// mirrors these integers when it calls `pushEvent(kind, a, b, c, t)`; the wasm
@@ -61,6 +66,16 @@ pub const WsKind = enum(u8) {
     err = 4,
 };
 
+/// The `fsOp` request record and its two integer mirrors (`FsRecord.Op`,
+/// `FsRecord.Status`). Re-exported here because the record IS part of the ABI
+/// surface this file defines; the codec itself lives in its own file so it can
+/// carry its own round-trip tests (S-07 P-1, R-P14b-6).
+pub const FsRecord = @import("FsRecord.zig");
+pub const FsOp = FsRecord.Op;
+pub const FsStatus = FsRecord.Status;
+/// The op-record format generation, mirrored in JS as `FS_OP_VERSION`.
+pub const fs_op_version: u32 = FsRecord.version;
+
 /// True only for the freestanding wasm build. A comptime const, so the `blit`
 /// and `ws*` dispatches below prune the extern branch entirely in native builds
 /// — the `env.blit`/`env.ws*` symbols are therefore never referenced when this
@@ -94,6 +109,20 @@ pub var test_ws_open: ?WsOpenFn = null;
 pub var test_ws_send: ?WsSendFn = null;
 pub var test_ws_close: ?WsCloseFn = null;
 
+/// Ask the browser to perform ONE filesystem operation against the Origin
+/// Private File System (R-P14b-6). `ptr[0..len]` is an encoded `FsRecord`; the
+/// shim copies it out of wasm memory synchronously and answers LATER — never
+/// re-entrantly — by staging a payload with `fsStage` and calling `fsPush`
+/// with this same `ticket`. Tickets are the module's; the shim only echoes
+/// them back. There is no cancel: a completion for a ticket the device has
+/// forgotten (its fid was clunked) is simply dropped on arrival.
+pub const FsOpFn = *const fn (ptr: [*]const u8, len: u32, ticket: u32) void;
+
+/// Native seam (R-P5-5 pattern): `dev/opfs.zig`'s tests and `tools/`-side
+/// harnesses install a scripted backend here, so the whole device — parking,
+/// completion, error mapping — runs with no browser at all.
+pub var test_fs_op: ?FsOpFn = null;
+
 /// The browser-provided imports, referenced ONLY under wasm (see the dispatch
 /// wrappers). Kept private so nothing outside this file can reach a raw extern.
 const js = struct {
@@ -101,6 +130,7 @@ const js = struct {
     extern "env" fn wsOpen(id: u32) void;
     extern "env" fn wsSend(id: u32, ptr: [*]const u8, len: u32) void;
     extern "env" fn wsClose(id: u32) void;
+    extern "env" fn fsOp(ptr: [*]const u8, len: u32, ticket: u32) void;
 };
 
 /// Blit dispatch (R-P5-5/R-P5-7). Under wasm this calls the `env.blit` import;
@@ -143,8 +173,46 @@ pub fn wsClose(id: u32) void {
     }
 }
 
-test "abi version is present and bumped to 5" {
-    try @import("std").testing.expectEqual(@as(u32, 5), version);
+/// OPFS request dispatch (R-P14b-6). Same comptime gate as `blit`/`wsOpen`, so
+/// `env.fsOp` is unreachable — and unemitted — in every native build. With no
+/// seam installed natively this is a no-op, which is exactly the "backend
+/// absent" state: the ticket never completes, and the device's op stays parked.
+pub fn fsOp(ptr: [*]const u8, len: u32, ticket: u32) void {
+    if (is_wasm) {
+        js.fsOp(ptr, len, ticket);
+    } else if (test_fs_op) |f| {
+        f(ptr, len, ticket);
+    }
+}
+
+test "abi version is present and bumped to 6" {
+    try @import("std").testing.expectEqual(@as(u32, 6), version);
+}
+
+test "abi: fs_op_version and the FsRecord re-exports are the ABI's" {
+    const t = @import("std").testing;
+    try t.expectEqual(@as(u32, 1), fs_op_version);
+    try t.expectEqual(FsRecord.Op.stat, FsOp.stat);
+    try t.expectEqual(FsRecord.Status.ok, FsStatus.ok);
+}
+
+test "abi: fsOp routes to the native test seam" {
+    const t = @import("std").testing;
+    const Rec = struct {
+        var len: u32 = 0;
+        var ticket: u32 = 0;
+        fn capture(_: [*]const u8, l: u32, tk: u32) void {
+            len = l;
+            ticket = tk;
+        }
+    };
+    test_fs_op = Rec.capture;
+    defer test_fs_op = null;
+    var buf: [64]u8 = undefined;
+    const n = try (FsRecord{ .op = .list, .path = "/" }).encode(&buf);
+    fsOp(buf[0..n].ptr, @intCast(n), 42);
+    try t.expectEqual(@as(u32, @intCast(n)), Rec.len);
+    try t.expectEqual(@as(u32, 42), Rec.ticket);
 }
 
 test "abi WsKind integer values match the shim mirror" {
@@ -168,11 +236,13 @@ test "abi EventKind integer values match the shim mirror" {
 }
 
 test "abi: EventKind.resize is 8 and version is 5 (T9)" {
-    // Traceability pin for contract §4 T9 — the facts themselves are already
-    // covered above ("abi version is present and bumped to 5",
+    // Traceability pin for phase 12c's contract §4 T9 — the facts themselves
+    // are already covered above ("abi version is present and bumped to 6",
     // "abi EventKind integer values match the shim mirror"); this test just
-    // names them together as the T9 acceptance point.
+    // names them together as the T9 acceptance point. The NAME is frozen at
+    // the generation that minted it (12c, ABI 5); the assertion tracks the
+    // live `version`, which phase 14b moved to 6.
     const t = @import("std").testing;
     try t.expectEqual(@as(u8, 8), @intFromEnum(EventKind.resize));
-    try t.expectEqual(@as(u32, 5), version);
+    try t.expectEqual(@as(u32, 6), version); // phase 12c froze 5; 14b bumps to 6
 }
