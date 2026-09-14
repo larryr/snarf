@@ -6,17 +6,28 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase16`** (worktree `../snarf-wt/phase16`, 2026-09-14, larry's Mac, local only) — DEBT
-  PASS in sub-waves 16a structure (pure moves) / 16b small cited fixes / 16c tab-width fidelity
-  (ONE sanctioned re-freeze of FROZEN-ACCEPT-3) / 16d size tooling. Contract
-  `agents/contracts/phase16-debt-pass.md`. Touches many files — no other branch meanwhile.
+- *(none as of 2026-09-14 — phase 16 merged `f51e4a0`; remote has only `main`; the planned
+  queue is EMPTY — see `agents/NEXT-PHASES.md` and ask Larry before starting anything)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b, 15 are MERGED to `main`; `main` is green.**
-  692/692 tests, node smoke 40/40, `zig build native` OK, `zig fmt` clean, Zig 0.16.0,
-  **ABI v6**, wasm ≈ 2196 KiB ReleaseSafe (user keeps ReleaseSafe).
+- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b, 15, 16 are MERGED to `main`; `main` is green.**
+  712/712 tests (≈3.8 s), node smoke 40/40, `zig build native` OK, `zig fmt` clean, Zig 0.16.0,
+  **ABI v6**, fs-record v2, wasm 2321565 B ReleaseSafe / 289098 B ReleaseSmall (`make sizes`;
+  user keeps ReleaseSafe).
+- **Phase 16 MERGED (`f51e4a0`, 2026-09-14) — DEBT PASS** — see agents/reports/phase16-debt-pass.md
+  (closed/open ledger): 16a ten pure-move splits (`wasm_boot`, `wintag`, `originhook`,
+  `pendinglook`, `client_ops`, `msg_test`, `opfs_io/testsrv`, `draw_msgs/font/ctl/testsrv`,
+  `mux`, `wsys_enc`); 16b fourteen cited fixes incl. **browser `Kdown` fixed** (4e values in
+  `typing.zig`; native `dev_input` translates p9p 0x80), OPFS stat memo (6→1), fs-record v2
+  `close`, tentative-newfid clunk, `BadOffset`, `colgrow` but=1, `bsinsert`, `discardClunk`
+  by-Rclunk, `retryFiltered` snapshot, acme's `isalnum`; 16c **FROZEN-ACCEPT-3 re-frozen**
+  `0x7f16941423defd73 → 0x9171d75adca5e8eb` (tab width 72→36, 160 px on line 4); 16d
+  `make small`/`make sizes`. REMAINING over-cap files (pre-existing, harness-heavy):
+  `draw_backend` 818, `nsdir` 760, `input` 585, `fsys` 539, `Frame` 514, `Text` 498, `nsio`
+  451, `server` 450, `regx_exec` 432, `Buffer` 432, `parse` 417, `opfs` 412, `xfid` 408,
+  `regx_compile` 407, `Font` 406, `Load` 404.
 - **Phase 15 MERGED (`efeb3fe`, 2026-09-14) — ADR-0005 SPIKE DONE, PASSED**: zero adapter-
   forced core changes (`src/draw`,`src/ninep` byte-identical); NEW `src/host/devdraw/{wsys,Conn,
   dev_draw,dev_input}.zig` + `main_native.zig` (`zig build run-native` opens a devdraw window);
@@ -146,9 +157,10 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: phase 16 — the DEBT PASS** (contract in the worktree; 16a→16d), then
-  recommendations to Larry (REVIEW-NOTES + a `NEXT-PHASES.md` proposal). Planned queue then
-  EMPTY — stop and ask. — R-EDIT-03 + paper
+- **NEXT: NOTHING QUEUED.** The 2026-09-14 planned queue (13b → 14 → 15 → debt pass) is
+  complete. Proposals ranked in `agents/NEXT-PHASES.md` (tier 1: Put/Get + Dump/Load;
+  external commands via `/bin` — needs the host-command allow-list ADR first; remaining
+  builtins). Wait for Larry's pick. — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:

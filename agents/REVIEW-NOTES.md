@@ -11,6 +11,32 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 16 — debt-collection pass (merged `f51e4a0`, 2026-09-14)
+
+**For you — try it:** reload the browser — **ArrowDown works now** (it never did: the core
+used plan9port's key code while the browser device used Plan 9 4e's). Tabs in normal windows
+are 36 px like acme, not libframe's 72. `make sizes` prints the ReleaseSafe vs ReleaseSmall
+wasm sizes (2.32 MB vs 289 KB); the default is still ReleaseSafe as you decided.
+
+**What changed:** ten pure-move file splits (every over-cap file from phases 12b–15 is under
+400 lines; `draw.zig` 806→357 with every golden byte-identical); fourteen cited fixes (the
+OPFS stat chatter 6→1 per file open, the flushed-walk slot leak, one OPFS writable per write
+sequence so large saves are not quadratic, acme's own `isalnum`, `colgrow` for squeezed new
+windows, backspace processing in `+Errors`, the `Kdown` bug, and small protocol hygiene);
+one sanctioned golden re-freeze for the tab width with pixel-level evidence.
+
+**Decisions made for you:** `make small` is a Makefile target, not a `zig build` step
+(modules share one optimize mode per build). Two HANDOFF debt claims turned out to be wrong
+and were withdrawn with cites (`applyAddress` already stopped at the first bad rune; the
+`isalnum` note was wrong in both directions).
+
+**Still open (ledger in the report):** `Text.zig`, `fsys.zig`, `opfs.zig`, `Load.zig` plus
+eleven pre-existing files over the cap that no report had flagged (mostly test harnesses
+above the first test — a second structure pass); `colgrow`'s other arms; the served body
+write's backspace handling; `Queue.clear` on Tversion skipping `clunk`; Retina.
+
+**The planned queue is now EMPTY.** Recommendations: `agents/NEXT-PHASES.md`.
+
 ## Phase 15 — ADR-0005 native-host SPIKE (merged `efeb3fe`, 2026-09-14)
 
 **For you — try it:** `zig build run-native` (uses `~/proj/plan9port/bin/devdraw`; set
