@@ -6,7 +6,11 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 12d merged `6d13dda`; remote has only `main`)*
+- **`phase12e`** (worktree `../snarf-wt/phase12e`, 2026-09-14, larry's Mac, local only) —
+  STRUCTURE-ONLY: `core/Gesture.zig` carve-out from `Editor.zig`, warnings bodies →
+  `errors.zig`, `origin/handshake.zig` split + `Client.seedQid`, `main_wasm` → `origin_glue.zig`,
+  size pass (measure only). Owns those files + `src/accept.zig` field paths. Zero behavior
+  change; any golden move = defect. Contract `agents/contracts/phase12e-structure.md`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
