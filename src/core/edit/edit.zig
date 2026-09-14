@@ -481,8 +481,10 @@ test "edit: builtin row" {
     const ei = edit_idx.?;
     try testing.expect(!builtins.exectab[ei].mark);
     try testing.expectEqualStrings("Delete", builtins.exectab[ei - 1].name);
-    // Phase 12b inserted Look (exec.c:116) between Edit (:106) and New (:117).
-    try testing.expectEqualStrings("Look", builtins.exectab[ei + 1].name);
+    // Phase 12b inserted Look (exec.c:116) and phase 13b Get (exec.c:109), so
+    // Edit's successor is now Get, exactly as exec.c:109 follows :106.
+    try testing.expectEqualStrings("Get", builtins.exectab[ei + 1].name);
+    try testing.expectEqualStrings("Look", builtins.exectab[ei + 2].name);
 
     // Inline-arg path: sweeping "Edit ,d" in the tag runs `,d` against the BODY.
     {
