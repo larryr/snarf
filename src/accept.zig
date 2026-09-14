@@ -884,7 +884,7 @@ test "phase-10: served tree scene" {
     // shows up with its live tag.
     const rindex = try ns.resolve("/mnt/snarf-self/index");
     try testing.expectEqualStrings("index", rindex.remainder);
-    const idx = try cl.walk(rindex.entry.target.root_fid, &.{rindex.remainder});
+    const idx = try cl.walk(rindex.entry.first().root_fid, &.{rindex.remainder});
     _ = try cl.open(idx.fid, ninep.msg.OREAD);
     var ibuf: [512]u8 = undefined;
     const in = try cl.read(idx.fid, 0, &ibuf);
@@ -901,13 +901,13 @@ test "phase-10: served tree scene" {
     var idbuf: [16]u8 = undefined;
     const idname = try std.fmt.bufPrint(&idbuf, "{d}", .{w.id});
     const rctl = try ns.resolve("/mnt/snarf-self");
-    const ctl = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "ctl" });
+    const ctl = try cl.walk(rctl.entry.first().root_fid, &.{ idname, "ctl" });
     _ = try cl.open(ctl.fid, ninep.msg.ORDWR);
     var cbuf: [128]u8 = undefined;
     const cn = try cl.read(ctl.fid, 0, &cbuf);
     try testing.expect(std.mem.startsWith(u8, cbuf[0..cn], idprefix));
 
-    const body = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "body" });
+    const body = try cl.walk(rctl.entry.first().root_fid, &.{ idname, "body" });
     _ = try cl.open(body.fid, ninep.msg.OREAD);
     var bbuf: [64]u8 = undefined;
     const bn = try cl.read(body.fid, 0, &bbuf);

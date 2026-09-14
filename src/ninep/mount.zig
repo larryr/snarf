@@ -1,36 +1,65 @@
-//! mount.zig — ordered mount table / `Namespace` (S-02 §1).
+//! mount.zig — ordered mount table / `Namespace` with UNION mounts (S-02 §1).
 //!
-//! A `Namespace` is a per-instance ordered table `path prefix → (client, root
-//! fid)`. `resolve` does longest-prefix match on path COMPONENT boundaries
-//! (never a bare string prefix: `/mnt/host` must not match `/mnt/hostx`).
-//! v1 has `mount` (rejects an exact-duplicate prefix) and `bind`
-//! (replace-or-insert) — "no unions" per S-02 §1 / contract R7, OQ-9P-1.
-//! `list` renders the table `ns(1)`-style, one `mount <prefix>` line per
-//! entry in insertion order, for `/dev/ns` (S-02 §1) later.
+//! A `Namespace` is a per-instance ordered table `path prefix → ordered list of
+//! (client, root fid)`. `resolve` does longest-prefix match on path COMPONENT
+//! boundaries (never a bare string prefix: `/mnt/host` must not match
+//! `/mnt/hostx`).
 //!
-//! Imports: std + client.zig only (S-07 §6).
+//! ## Unions (phase 12d, OQ-9P-1 resolved YES)
+//!
+//! This is the kernel's `Mhead`/`Mount` chain, flattened: one `Entry` per mount
+//! point (`Mhead`), an ordered `targets` list (the `Mount` chain) underneath
+//! (`9/port/chan.c:646-760 cmount`). `bind`'s flag mirrors `MREPL`/`MBEFORE`/
+//! `MAFTER` (`sys/include/libc.h:538-540`): REPL discards the existing chain
+//! (`chan.c:739-742`), BEFORE prepends and AFTER appends (`chan.c:744-753`).
+//! `MCREATE`/`MCACHE` are out of scope (no create, no cache yet).
+//!
+//! Walking and reading THROUGH a union lives in `nsdir.zig`; this file only
+//! keeps the table. `resolve` hands back the whole `Entry`, so its shape is
+//! unchanged from v1 (ruling R-P12d-1).
+//!
+//! `list` renders the table `ns(1)`-style for `/dev/ns` (S-02 §1).
+//!
+//! Imports: std + client.zig + nspath.zig only (S-07 §6).
 const std = @import("std");
 const Client = @import("client.zig").Client;
+const nspath = @import("nspath.zig");
 
-/// One 9P endpoint a mount point resolves to: the client driving it and the
-/// fid already attached to its root.
+/// Which end of the union a `bind` lands on. [libc.h:538-540 MREPL/MBEFORE/MAFTER]
+pub const BindFlag = enum {
+    /// MREPL: the new target replaces the whole chain (chan.c:739-742).
+    replace,
+    /// MBEFORE: "mount goes before others in union directory" — index 0.
+    before,
+    /// MAFTER: "mount goes after others in union directory" — appended.
+    after,
+};
+
+/// One 9P endpoint a mount point resolves to: the client driving it, the fid
+/// already attached to its root, and the flag it was bound with (the kernel's
+/// `Mount.mflag`, which `/proc/n/ns` prints back — devproc.c:623-638).
 pub const Target = struct {
     client: *Client,
     root_fid: u32,
+    flag: BindFlag = .replace,
 };
 
-/// One entry in the ordered mount table. `prefix` is an owned, canonical
-/// copy (see `canonicalize`): always absolute, no trailing '/' except the
-/// root "/", no empty/"."/".." component.
-///
-/// Extension point: v1 carries a single `Target`. A future union mount
-/// (stacking several targets at one prefix, R7/OQ-9P-1) would widen this to
-/// a list of `Target`s tried in bind order — `Resolved` would not need to
-/// change shape, since it hands back the winning `*const Entry` and the
-/// remainder; whatever walks a union would iterate `entry`'s targets itself.
+/// One entry in the ordered mount table: a mount POINT and the union of
+/// targets stacked at it, in bind order (the kernel's `Mhead` + its `Mount`
+/// chain). `prefix` is an owned, canonical copy (see `nspath.canonicalize`):
+/// always absolute, no trailing '/' except the root "/", no empty/"."/".."
+/// component. `targets` is never empty — an entry that loses its last target
+/// is removed from the table.
 pub const Entry = struct {
     prefix: []u8,
-    target: Target,
+    targets: std.ArrayList(Target) = .empty,
+
+    /// The head of the union: the target a walk tries first and the one an
+    /// exact-match resolve uses (`mh->mount->to`, chan.c:1030). Callers that
+    /// want the whole union walk it through `nsdir`, not here (R-P12d-1).
+    pub fn first(self: *const Entry) Target {
+        return self.targets.items[0];
+    }
 };
 
 /// The result of a successful `resolve`: the winning table entry and the
@@ -42,7 +71,8 @@ pub const Resolved = struct {
 };
 
 pub const Error = error{
-    /// No mounted prefix is a component-wise ancestor of the path.
+    /// No mounted prefix is a component-wise ancestor of the path, or
+    /// `unmount`/`unbindTarget` named something that is not in the table.
     NotMounted,
     /// `mount` (not `bind`) named a prefix that is already mounted exactly.
     MountExists,
@@ -51,9 +81,9 @@ pub const Error = error{
     OutOfMemory,
 };
 
-/// Ordered table of path-prefix → 9P-target bindings (S-02 §1). Ties in
-/// `resolve` cannot occur: `mount` rejects an exact-duplicate prefix and
-/// `bind` replaces in place, so canonical prefixes stay unique.
+/// Ordered table of path-prefix → 9P-target bindings (S-02 §1). Prefixes are
+/// unique: `mount` rejects an exact duplicate and `bind` stacks onto (or
+/// replaces) the existing entry, so `resolve` can never tie.
 pub const Namespace = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayList(Entry) = .empty,
@@ -62,46 +92,105 @@ pub const Namespace = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Frees the owned prefix strings and the table itself. Clunks NOTHING:
-    /// boot owns the root fids (and the `Client`s they belong to) and tears
-    /// them down independently of the namespace (contract R7).
+    /// Frees the owned prefix strings, the target lists, and the table itself.
+    /// Clunks NOTHING: boot owns the root fids (and the `Client`s they belong
+    /// to) and tears them down independently of the namespace (contract R7).
     pub fn deinit(self: *Namespace) void {
-        for (self.entries.items) |e| self.allocator.free(e.prefix);
+        for (self.entries.items) |*e| {
+            self.allocator.free(e.prefix);
+            e.targets.deinit(self.allocator);
+        }
         self.entries.deinit(self.allocator);
         self.* = undefined;
     }
 
-    /// Mount `client`/`root_fid` at `prefix`. An exact-duplicate prefix is
-    /// rejected with `error.MountExists` — Plan 9's `bind(2)` can stack a
-    /// union there; v1 cannot (see `bind` and the `Entry` extension-point
-    /// comment).
+    /// Mount `client`/`root_fid` at `prefix` as the sole target. An exact
+    /// duplicate prefix is rejected with `error.MountExists`; stacking a union
+    /// there is `bind`'s job (`.before`/`.after`), exactly as `mount(2)`'s
+    /// MREPL/MBEFORE/MAFTER flags decide in Plan 9.
     pub fn mount(self: *Namespace, prefix: []const u8, client: *Client, root_fid: u32) Error!void {
-        const canon = try canonicalize(self.allocator, prefix);
+        const canon = try nspath.canonicalize(self.allocator, prefix);
         errdefer self.allocator.free(canon);
         if (self.findExact(canon) != null) return error.MountExists;
-        try self.entries.append(self.allocator, .{
-            .prefix = canon,
-            .target = .{ .client = client, .root_fid = root_fid },
-        });
+        try self.addEntry(canon, .{ .client = client, .root_fid = root_fid, .flag = .replace });
     }
 
-    /// Bind `client`/`root_fid` at `prefix`, replacing whatever was mounted
-    /// there (insert if nothing was). Divergence from Plan 9 `bind(2)`
-    /// (R7/OQ-9P-1): real `bind` can layer a union (MREPL/MBEFORE/MAFTER) of
-    /// several targets at one prefix; v1 always replaces in place — one
-    /// `Target` per `Entry`. Union bind semantics are future work.
-    pub fn bind(self: *Namespace, prefix: []const u8, client: *Client, root_fid: u32) Error!void {
-        const canon = try canonicalize(self.allocator, prefix);
+    /// Bind `client`/`root_fid` at `prefix` with union order `flag`
+    /// (`cmount`, chan.c:646-760):
+    ///   * `.replace` (MREPL) drops whatever chain was there (chan.c:739-742);
+    ///   * `.before` (MBEFORE) inserts at the head of the union;
+    ///   * `.after` (MAFTER) appends at the tail.
+    /// On a prefix that is not mounted yet, all three simply create the entry.
+    ///
+    /// Unlike the kernel we do not require the mount point to exist first
+    /// (chan.c:662 errors when binding BEFORE/AFTER onto a non-directory):
+    /// Snarf has no root filesystem to hold the mount points, so the table
+    /// itself synthesizes them (R-9P-16, see `nsdir`).
+    pub fn bind(
+        self: *Namespace,
+        prefix: []const u8,
+        client: *Client,
+        root_fid: u32,
+        flag: BindFlag,
+    ) Error!void {
+        const canon = try nspath.canonicalize(self.allocator, prefix);
+        const target = Target{ .client = client, .root_fid = root_fid, .flag = flag };
         if (self.findExact(canon)) |entry| {
             self.allocator.free(canon); // reuse the already-owned prefix
-            entry.target = .{ .client = client, .root_fid = root_fid };
+            switch (flag) {
+                .replace => {
+                    entry.targets.clearRetainingCapacity();
+                    try entry.targets.append(self.allocator, target);
+                },
+                .before => try entry.targets.insert(self.allocator, 0, target),
+                .after => try entry.targets.append(self.allocator, target),
+            }
             return;
         }
         errdefer self.allocator.free(canon);
-        try self.entries.append(self.allocator, .{
-            .prefix = canon,
-            .target = .{ .client = client, .root_fid = root_fid },
-        });
+        try self.addEntry(canon, target);
+    }
+
+    /// Drop the whole mount point — every union member at `prefix`
+    /// (`cunmount(mnt, nil)`, chan.c:762-820). `error.NotMounted` if nothing is
+    /// mounted exactly there. Clunks nothing (see `deinit`).
+    pub fn unmount(self: *Namespace, prefix: []const u8) Error!void {
+        const canon = try nspath.canonicalize(self.allocator, prefix);
+        defer self.allocator.free(canon);
+        for (self.entries.items, 0..) |*e, i| {
+            if (!std.mem.eql(u8, e.prefix, canon)) continue;
+            self.allocator.free(e.prefix);
+            e.targets.deinit(self.allocator);
+            _ = self.entries.orderedRemove(i);
+            return;
+        }
+        return error.NotMounted;
+    }
+
+    /// Drop ONE union member from `prefix` — the kernel's
+    /// `cunmount(mnt, mounted)` (chan.c:762-820), which unlinks the single
+    /// `Mount` whose channel matches. Matching is by (client, root fid). The
+    /// surviving members keep their order; an entry that loses its last member
+    /// is removed outright. `error.NotMounted` if the prefix is absent or holds
+    /// no such member.
+    pub fn unbindTarget(self: *Namespace, prefix: []const u8, client: *Client, root_fid: u32) Error!void {
+        const canon = try nspath.canonicalize(self.allocator, prefix);
+        defer self.allocator.free(canon);
+        for (self.entries.items, 0..) |*e, i| {
+            if (!std.mem.eql(u8, e.prefix, canon)) continue;
+            for (e.targets.items, 0..) |t, ti| {
+                if (t.client != client or t.root_fid != root_fid) continue;
+                _ = e.targets.orderedRemove(ti);
+                if (e.targets.items.len == 0) {
+                    self.allocator.free(e.prefix);
+                    e.targets.deinit(self.allocator);
+                    _ = self.entries.orderedRemove(i);
+                }
+                return;
+            }
+            return error.NotMounted; // prefix is there, this member is not
+        }
+        return error.NotMounted;
     }
 
     /// Longest-prefix match of `path` against the table, on path COMPONENT
@@ -110,12 +199,15 @@ pub const Namespace = struct {
     /// "/" matches every absolute path. `path` must be absolute (else
     /// `error.BadPath`); it is used verbatim otherwise (no "."/".."
     /// canonicalization — that policing applies to mounted prefixes only).
+    ///
+    /// The winning entry may hold a union: `entry.targets` is that union in
+    /// bind order, and `nsdir.walk` is what tries them (R-P12d-1).
     pub fn resolve(self: *const Namespace, path: []const u8) error{ NotMounted, BadPath }!Resolved {
         if (path.len == 0 or path[0] != '/') return error.BadPath;
         var best: ?*const Entry = null;
         var best_remainder: []const u8 = "";
         for (self.entries.items) |*e| {
-            const rem = matchPrefix(e.prefix, path) orelse continue;
+            const rem = nspath.matchPrefix(e.prefix, path) orelse continue;
             if (best == null or e.prefix.len > best.?.prefix.len) {
                 best = e;
                 best_remainder = rem;
@@ -125,12 +217,33 @@ pub const Namespace = struct {
         return .{ .entry = entry, .remainder = best_remainder };
     }
 
-    /// Render the table `ns(1)`-style: one `mount <prefix>\n` line per entry,
-    /// insertion order (S-02 §1, for `/dev/ns`).
+    /// Render the table `ns(1)`-style, insertion order, for `/dev/ns`
+    /// (S-02 §1). One line per union member, mirroring `/proc/n/ns`
+    /// (devproc.c:954-966 `mount [flags] ...` / `bind [flags] ...`):
+    /// the head of each union prints as `mount <prefix>`, every stacked
+    /// member as `bind -b <prefix>` or `bind -a <prefix>` per its own flag
+    /// (`int2flag`, devproc.c:623-638). We have no server names to print —
+    /// a `Client` is not a path — so the line carries the mount point only;
+    /// `ns(1)`'s "an rc script that could recreate the name space" is not a
+    /// claim we can make yet.
     pub fn list(self: *const Namespace, w: *std.Io.Writer) std.Io.Writer.Error!void {
         for (self.entries.items) |e| {
-            try w.print("mount {s}\n", .{e.prefix});
+            for (e.targets.items, 0..) |t, i| {
+                if (i == 0) {
+                    try w.print("mount {s}\n", .{e.prefix});
+                } else {
+                    try w.print("bind -{c} {s}\n", .{ flagChar(t.flag), e.prefix });
+                }
+            }
         }
+    }
+
+    /// Append a fresh entry owning `canon` with one target.
+    fn addEntry(self: *Namespace, canon: []u8, target: Target) Error!void {
+        var entry = Entry{ .prefix = canon };
+        errdefer entry.targets.deinit(self.allocator);
+        try entry.targets.append(self.allocator, target);
+        try self.entries.append(self.allocator, entry);
     }
 
     /// The entry whose canonical prefix equals `canon` exactly, if any.
@@ -142,37 +255,15 @@ pub const Namespace = struct {
     }
 };
 
-/// Does `path` fall under mounted `prefix` at a component boundary? Returns
-/// the remainder (leading '/' stripped, "" on exact match) or null. Both
-/// arguments are assumed absolute; `prefix` is assumed canonical (no
-/// trailing '/' unless it IS "/").
-fn matchPrefix(prefix: []const u8, path: []const u8) ?[]const u8 {
-    if (prefix.len == 1) return path[1..]; // root "/": matches everything
-    if (!std.mem.startsWith(u8, path, prefix)) return null;
-    if (path.len == prefix.len) return path[prefix.len..]; // exact match, ""
-    if (path[prefix.len] != '/') return null; // e.g. prefix "/dev", path "/devx"
-    return path[prefix.len + 1 ..];
-}
-
-/// Canonicalize a mount-table prefix into a freshly owned copy: must be
-/// absolute; a single trailing '/' is stripped (except when the whole
-/// prefix collapses to root "/"); any empty (e.g. "//"), "." or ".."
-/// component is `error.BadPath`.
-fn canonicalize(allocator: std.mem.Allocator, prefix: []const u8) Error![]u8 {
-    if (prefix.len == 0 or prefix[0] != '/') return error.BadPath;
-    if (std.mem.eql(u8, prefix, "/")) return allocator.dupe(u8, "/");
-
-    var end = prefix.len;
-    while (end > 1 and prefix[end - 1] == '/') end -= 1;
-    const trimmed = prefix[0..end];
-    if (trimmed.len == 1) return allocator.dupe(u8, "/"); // e.g. "//"
-
-    var it = std.mem.splitScalar(u8, trimmed[1..], '/');
-    while (it.next()) |comp| {
-        if (comp.len == 0) return error.BadPath;
-        if (std.mem.eql(u8, comp, ".") or std.mem.eql(u8, comp, "..")) return error.BadPath;
-    }
-    return allocator.dupe(u8, trimmed);
+/// `ns(1)`/`int2flag` letter for a stacked member (devproc.c:630-633). A
+/// `.replace` member can only ever be the head of a chain, which prints as
+/// `mount`, so it never reaches this function; 'a' is the harmless fallback.
+fn flagChar(flag: BindFlag) u8 {
+    return switch (flag) {
+        .before => 'b',
+        .after => 'a',
+        .replace => 'a',
+    };
 }
 
 // ==========================================================================
@@ -270,12 +361,12 @@ test "mount: bind rebinding" {
     try ns.mount("/dev", &c2, 2);
     try testing.expectEqual(@as(usize, 1), ns.entries.items.len);
 
-    try ns.bind("/dev", &c9, 9);
+    try ns.bind("/dev", &c9, 9, .replace);
     try testing.expectEqual(@as(usize, 1), ns.entries.items.len);
 
     const r = try ns.resolve("/dev/x");
-    try testing.expectEqual(&c9, r.entry.target.client);
-    try testing.expectEqual(@as(u32, 9), r.entry.target.root_fid);
+    try testing.expectEqual(&c9, r.entry.first().client);
+    try testing.expectEqual(@as(u32, 9), r.entry.first().root_fid);
     try testing.expectEqualStrings("x", r.remainder);
 }
 
