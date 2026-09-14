@@ -34,6 +34,10 @@
 const std = @import("std");
 
 pub const Conn = @import("Conn.zig");
+/// The connection's mux half (tags, `rpc`, the long polls, the receive path) —
+/// split out of `Conn.zig` in phase 16a; `Conn` aliases every entry point, so
+/// nothing calls through this name.
+pub const mux = @import("mux.zig");
 
 /// drawfcall.h:110 — `MAXWMSG`.
 pub const max_msg: usize = 4 * 1024 * 1024;
