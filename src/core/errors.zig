@@ -186,10 +186,6 @@ pub fn errorWin(ed: *Editor, dir: []const u8) Text.Error!*Window {
 /// buckets are LEFT PENDING rather than dropped — the C always has a row.
 ///
 /// DIVERGENCES:
-///   * `textbsinsert` (util.c:243, text.c:307-364) is reduced to a plain
-///     `insertAt`: backspace/^U processing of command output is DEFERRED (no
-///     external commands write here yet — the only writers are `ed.warning`
-///     lines). FLAG for the host-command wave.
 ///   * The C's `w->owner` juggling (util.c:236-239/249) and `wincommit`
 ///     (util.c:240, no tag cache in the port) are n/a; the RBUFSIZE chunking
 ///     (util.c:247-253) is a `bufread` optimization — `Buffer` already blocks.
@@ -214,8 +210,11 @@ pub fn flushWarnings(ed: *Editor) Text.Error!void {
         // dropped so a too-narrow rightmost column can never wedge the frame loop.
         const w = errorWin(ed, wn.dir) catch continue;
         const t = &w.body;
-        const q0 = t.file.buffer.len(); // util.c:241
-        try t.insertAt(q0, wn.text.items, true); // util.c:243 textbsinsert (see above)
+        // util.c:241-243. `bsInsert` is `textbsinsert` (text.c:307-364): a `\b`
+        // in the message erases the rune before it, and leading backspaces eat
+        // text already in the window — which is why the shown range starts at
+        // what it RETURNS, not at the old end of file.
+        const q0 = try t.bsInsert(t.file.buffer.len(), wn.text.items, true);
         try t.show(q0, t.file.buffer.len(), true); // util.c:245 textshow(t, q0, nc, 1)
         try w.setTag1(); // util.c:247 winsettag
         w.dirty = false; // util.c:250

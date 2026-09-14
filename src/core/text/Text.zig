@@ -451,6 +451,11 @@ pub fn bsWidth(self: *Text, c: u21) usize {
 /// acme's `isalnum` (util.c:327-342), shared with `select` — see `bsWidth`.
 const isalnum = @import("select.zig").isAlnum;
 
+/// `textbsinsert` (text.c:307-364): insert with backspace processing. The body
+/// lives in `text/bsinsert.zig` (size seam, S-07 §2); this decl alias keeps
+/// `t.bsInsert(q0, bytes, tofile)` reading as a method.
+pub const bsInsert = @import("bsinsert.zig").bsInsert;
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -463,6 +468,7 @@ test {
     _ = @import("typing.zig");
     _ = @import("select.zig");
     _ = @import("scroll.zig");
+    _ = @import("bsinsert.zig");
 }
 
 fn makeFile(allocator: std.mem.Allocator, bytes: []const u8) !File {
