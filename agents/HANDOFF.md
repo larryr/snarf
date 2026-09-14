@@ -101,6 +101,11 @@ authorization for this file only). Prune freely — git keeps history.
   fixed 640×480 (canvasResize + DPR, R-GFX-05, still deferred — `web/index.html:15`),
   so the editor occupies the top-left corner of the browser window; DPR=1 renders
   chunky on Retina. **(Fixed size RETIRED by phase 12c; the DPR half remains.)**
+- **STANDING INSTRUCTION (user, 2026-09-14)**: "continue to execute on each planned phase in
+  turn; keep notes after each phase for me to review; when all planned phases are complete
+  recommend next phases." Planned queue: 13b directory windows → 14 OPFS → ADR-0005
+  native-host spike. Per-phase digest for Larry: `agents/REVIEW-NOTES.md` (newest first;
+  update it with every merge, commit it with the merge or the handoff).
 - **STANDING AUTHORIZATION (user, 2026-07-19)**: run phases autonomously — merge each
   phase to `main` WITHOUT per-phase sign-off once orchestrator-inspected + suite green +
   fmt clean + boundary check passes; leave a report per phase in `agents/reports/`
