@@ -31,18 +31,30 @@ const draw = @import("draw");
 const Text = @import("Text.zig");
 const Editor = @import("../Editor.zig");
 
-// Plan 9 key runes (larryr/plan9port@337c6ac include/keyboard.h:18-43).
+// Plan 9 key runes. THE VALUES ARE THE 4e TREE'S (larryr/plan9@ed1a9c2
+// sys/include/keyboard.h:22-46), which R-P6-7 makes the device contract for
+// `/dev/kbd` — `dev/profiles.zig` and `web/shim.js` have always encoded those.
+// The two headers agree on every constant below EXCEPT one: 4e spells
+// `Kdown = Kview = Spec|0x00` (0xF800) while plan9port spells it `0x80`
+// (p9p include/keyboard.h:27-28). This file used the p9p value, so a browser
+// ArrowDown — 0xF800 on the wire — fell through to "insert a rune" and the
+// native host worked only because devdraw sends the p9p value (phase-15
+// spike). `host/devdraw/dev_input.zig` now translates devdraw's spelling on
+// the way in, so there is ONE convention inside the module.
 const KF: u21 = 0xF000;
-const Khome: u21 = KF | 0x0D;
-const Kup: u21 = KF | 0x0E;
-const Kpgup: u21 = KF | 0x0F;
-pub const Kleft: u21 = KF | 0x11;
-pub const Kright: u21 = KF | 0x12;
-const Kpgdown: u21 = KF | 0x13;
-const Kend: u21 = KF | 0x18;
-pub const Kdown: u21 = 0x80; // also Kview
-const Kbs: u21 = 0x08;
-const Kdel: u21 = 0x7f;
+/// `Spec` — the second private-space base; only `Kdown`/`Kview` use it
+/// (4e keyboard.h:24).
+const Spec: u21 = 0xF800;
+const Khome: u21 = KF | 0x0D; // keyboard.h:26
+const Kup: u21 = KF | 0x0E; // keyboard.h:27
+const Kpgup: u21 = KF | 0x0F; // keyboard.h:28
+pub const Kleft: u21 = KF | 0x11; // keyboard.h:30
+pub const Kright: u21 = KF | 0x12; // keyboard.h:31
+const Kpgdown: u21 = KF | 0x13; // keyboard.h:34
+const Kend: u21 = KF | 0x18; // keyboard.h:36
+pub const Kdown: u21 = Spec | 0x00; // keyboard.h:32, also Kview
+const Kbs: u21 = 0x08; // keyboard.h:42
+const Kdel: u21 = 0x7f; // keyboard.h:43
 /// Wheel-notch scroll runes (dat.h:562-563). `pub` so the Editor's wheel arm can
 /// synthesize them (acme.c:618-628).
 pub const Kscrolloneup: u21 = KF | 0x20;
@@ -73,9 +85,12 @@ fn scrollUp(t: *Text, n: usize) Text.Error!void {
 /// True for a rune we insert verbatim: a graphic character, a tab, or a newline.
 /// Everything else (control codes, the KF private-use navigation/command block,
 /// Kdown/Kdel) is either handled explicitly or a DEFERRED no-op — never inserted.
+/// `r < KF` now covers `Kdown` too (0xF800 is above the private-space base), so
+/// the explicit term is gone and 0x80 — a C1 control, not a key rune in the 4e
+/// tree — is treated as the ordinary character it is there.
 fn insertable(r: u21) bool {
     if (r == '\n' or r == '\t') return true;
-    return r >= 0x20 and r != Kdel and r != Kdown and r < KF;
+    return r >= 0x20 and r != Kdel and r < KF;
 }
 
 /// `texttype` (text.c:668-942) subset — feed one key rune `r` to `t`.
@@ -541,4 +556,24 @@ test "typing: arrows scroll the caret visible" {
     try testing.expectEqual(@as(usize, 0), t.org); // scrolled back to the caret
     try testing.expectEqual(@as(usize, 1), t.q0);
     try testing.expectEqual(@as(usize, 1), t.q1);
+}
+
+test "typing: the K-runes are the 4e tree's, Kdown included (16b item 13)" {
+    // [larryr/plan9@ed1a9c2 sys/include/keyboard.h:22-46] — R-P6-7 makes these
+    // the /dev/kbd contract, so they must match `dev/profiles.zig` and
+    // `web/shim.js` exactly. Kdown is the one plan9port spells differently
+    // (0x80); the host adapter translates it (host/devdraw/dev_input.zig).
+    try testing.expectEqual(@as(u21, 0xF800), Kdown); // Spec|0x00, also Kview
+    try testing.expectEqual(@as(u21, 0xF00D), Khome);
+    try testing.expectEqual(@as(u21, 0xF00E), Kup);
+    try testing.expectEqual(@as(u21, 0xF00F), Kpgup);
+    try testing.expectEqual(@as(u21, 0xF011), Kleft);
+    try testing.expectEqual(@as(u21, 0xF012), Kright);
+    try testing.expectEqual(@as(u21, 0xF013), Kpgdown);
+    try testing.expectEqual(@as(u21, 0xF018), Kend);
+    try testing.expectEqual(@as(u21, 0x08), Kbs);
+    try testing.expectEqual(@as(u21, 0x7f), Kdel);
+    // 0x80 is no longer a key rune here: in the 4e tree it is an ordinary
+    // (C1 control) character, and `insertable` treats it as one.
+    try testing.expect(Kdown != 0x80);
 }
