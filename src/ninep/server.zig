@@ -313,6 +313,9 @@ pub const Server = struct {
             .tclunk => |c| return server_mut.handleClunk(self, tag, c.fid),
             .tflush => |fl| return self.handleFlush(tag, fl.oldtag),
             .tstat => |s| return self.handleStat(tag, s.fid),
+            .tcreate => |c| return server_mut.handleCreate(self, tag, c),
+            .tremove => |r| return server_mut.handleRemove(self, tag, r.fid),
+            .twstat => |w| return server_mut.handleWstat(self, tag, w),
             // Any R-message (a response) is illegal arriving at a server.
             else => return self.replied(self.replyError(tag, error.BadMessage)),
         }
@@ -421,10 +424,8 @@ pub const Server = struct {
 
     /// Device/adapter signal (R-P6-3), UNCHANGED since phase 6: data MAY now
     /// exist on the file(s) whose `qid.path == path`; re-dispatch just those
-    /// parked requests, in park order. A thin alias over `retryParked`'s
-    /// filtered form (R-P14a-1) — `src/main_wasm.zig` and `dev/input.zig` call
-    /// it after a push batch. SAFE from inside `Ops.write`: retries read into
-    /// `pbuf`, never `rbuf`.
+    /// parked requests, in park order (a thin alias over the filtered retry,
+    /// R-P14a-1). SAFE from inside `Ops.write`: retries read into `pbuf`.
     pub fn completeReads(self: *Server, path: u64) Error!usize {
         return park.retryParkedPath(self, path);
     }
@@ -664,16 +665,23 @@ test "server: tauth/tcreate/tremove/twstat defaults" {
     // create/remove/wstat now DECODE (phase 14a lifted ruling R5); with no
     // `Ops` slot bound the framework answers lib9p's refusal strings
     // [lib9p/srv.c:17,20,23 Enocreate/Enoremove/Enowstat].
-    const bodies = [_]struct { body: msg.Body, want: []const u8 }{
-        .{ .body = .{ .tcreate = .{ .fid = 0, .name = "x", .perm = 0o644, .mode = msg.OWRITE } }, .want = "bad message" },
-        .{ .body = .{ .tremove = .{ .fid = 0 } }, .want = "bad message" },
-        .{ .body = .{ .twstat = .{ .fid = 0, .stat = &([_]u8{0} ** 49) } }, .want = "bad message" },
-    };
-    for (bodies) |c| {
-        const r = try f.transact(.{ .tag = 77, .body = c.body });
-        try testing.expectEqual(@as(u16, 77), r.tag);
-        try f.expectRerror(r, c.want);
-    }
+    // fid 0 is the attached root: a directory, unopened — so each refusal is
+    // reached past every fid check lib9p makes first (srv.c:383/573/644).
+    const rc = try f.transact(.{ .tag = 77, .body = .{ .tcreate = .{ .fid = 0, .name = "x", .perm = 0o644, .mode = msg.OWRITE } } });
+    try testing.expectEqual(@as(u16, 77), rc.tag);
+    try f.expectRerror(rc, server_mut.create_prohibited);
+
+    var blob: [64]u8 = undefined;
+    const nst = try (stat{ .qid = .{ .path = ~@as(u64, 0), .vers = 0xFFFF_FFFF, .qtype = @bitCast(@as(u8, 0xFF)) }, .ktype = 0xFFFF, .kdev = 0xFFFF_FFFF, .mode = 0xFFFF_FFFF, .atime = 0xFFFF_FFFF, .mtime = 0xFFFF_FFFF, .length = ~@as(u64, 0), .name = "", .uid = "", .gid = "", .muid = "" }).encode(&blob);
+    const rw = try f.transact(.{ .tag = 77, .body = .{ .twstat = .{ .fid = 0, .stat = blob[0..nst] } } });
+    try f.expectRerror(rw, server_mut.wstat_prohibited);
+
+    // Tremove is a clunk with a side effect: the fid is gone even though the
+    // remove itself was refused (`5/remove`, R-P14a-3).
+    const rr = try f.transact(.{ .tag = 77, .body = .{ .tremove = .{ .fid = 0 } } });
+    try f.expectRerror(rr, server_mut.remove_prohibited);
+    const after = try f.transact(.{ .tag = 78, .body = .{ .tstat = .{ .fid = 0 } } });
+    try f.expectRerror(after, "unknown fid");
 }
 
 test "server: stat name and length" {
