@@ -20,6 +20,9 @@
 //! formatter, shared verbatim with the browser device so the two hosts cannot
 //! drift). Never `core`, never `draw`.
 pub const wsys = @import("devdraw/wsys.zig");
+/// The wsys codec's encode half (`sizeW2M`/`convW2M`) — split out in phase 16a;
+/// `wsys` aliases both, so nothing calls through this name.
+pub const wsys_enc = @import("devdraw/wsys_enc.zig");
 pub const Conn = wsys.Conn;
 pub const dev_draw = @import("devdraw/dev_draw.zig");
 pub const dev_input = @import("devdraw/dev_input.zig");
