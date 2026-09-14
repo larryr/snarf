@@ -803,6 +803,35 @@ test "client: walk: multi-chunk partial clunks established newfid" {
     try testing.expectEqual(@as(u32, 0), client.allocFid());
 }
 
+test "client: seedQid seeds fid cache for clone walk" {
+    var st = ScriptedTransport.init(testing.allocator);
+    defer st.deinit();
+    var client = try Client.init(testing.allocator, st.endpoint(), 8192);
+    defer client.deinit();
+    try doVersion(&client, &st);
+
+    // Seed fid 5 with a qid learned out of band (e.g. a hand-driven Rattach
+    // during the origin handshake, see origin/handshake.zig) — no RPC needed.
+    const seeded = Qid{ .path = 42, .vers = 1, .qtype = .{ .dir = true } };
+    client.seedQid(5, seeded);
+    try testing.expect(client.fids.contains(5));
+    try testing.expectEqual(seeded, client.fids.get(5).?);
+
+    // Overwriting an existing entry replaces it, not merges or errors.
+    const reseeded = Qid{ .path = 99 };
+    client.seedQid(5, reseeded);
+    try testing.expectEqual(reseeded, client.fids.get(5).?);
+
+    // A subsequent zero-name walk (clone) on that fid behaves as before: the
+    // server's Rwalk carries no qid for a pure clone, so the client mirrors
+    // the source fid's last-known qid onto newfid — here, the seeded one.
+    try st.pushReply(.{ .tag = 0, .body = .{ .rwalk = Body.Rwalk.init(&.{}) } });
+    const info = try client.walk(5, &.{});
+    try testing.expectEqual(@as(u32, 0), info.fid); // first fid handed out
+    try testing.expectEqual(reseeded, info.qid);
+    try testing.expectEqual(reseeded, client.fids.get(0).?);
+}
+
 test "client: tag wrap skips NOTAG" {
     var st = ScriptedTransport.init(testing.allocator);
     defer st.deinit();
