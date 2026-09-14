@@ -829,7 +829,7 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     try testing.expectEqual(@as(u64, 0xa4af36d064fbd9c9), hb.hash());
 }
 
-test "phase-10: served tree scene" {
+test "phase-10: served tree scene (T15)" {
     const core = @import("core");
     const alloc = testing.allocator;
 
@@ -884,11 +884,23 @@ test "phase-10: served tree scene" {
     // shows up with its live tag.
     const rindex = try ns.resolve("/mnt/snarf-self/index");
     try testing.expectEqualStrings("index", rindex.remainder);
-    const idx = try cl.walk(rindex.entry.target.root_fid, &.{rindex.remainder});
+    const idx = try cl.walk(rindex.entry.first().root_fid, &.{rindex.remainder});
     _ = try cl.open(idx.fid, ninep.msg.OREAD);
     var ibuf: [512]u8 = undefined;
     const in = try cl.read(idx.fid, 0, &ibuf);
     try cl.clunk(idx.fid);
+
+    // T15: the same file reached through `nsdir.walk` — the union walker's
+    // path, not the old direct resolve()-then-Client.walk() one above — must
+    // land on a fid with identical content (regression: the served-tree scene
+    // is unchanged by the union work).
+    const nh = try ninep.nsdir.walk(&ns, "/mnt/snarf-self/index");
+    try testing.expect(nh == .fid);
+    defer ninep.nsdir.close(&ns, nh);
+    _ = try nh.fid.client.open(nh.fid.fid, ninep.msg.OREAD);
+    var nbuf: [512]u8 = undefined;
+    const nn = try nh.fid.client.read(nh.fid.fid, 0, &nbuf);
+    try testing.expectEqualStrings(ibuf[0..in], nbuf[0..nn]);
 
     const w = tree.row.col.items[0].w.items[0];
     try testing.expectEqual(@as(u32, 1), w.id);
@@ -901,13 +913,13 @@ test "phase-10: served tree scene" {
     var idbuf: [16]u8 = undefined;
     const idname = try std.fmt.bufPrint(&idbuf, "{d}", .{w.id});
     const rctl = try ns.resolve("/mnt/snarf-self");
-    const ctl = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "ctl" });
+    const ctl = try cl.walk(rctl.entry.first().root_fid, &.{ idname, "ctl" });
     _ = try cl.open(ctl.fid, ninep.msg.ORDWR);
     var cbuf: [128]u8 = undefined;
     const cn = try cl.read(ctl.fid, 0, &cbuf);
     try testing.expect(std.mem.startsWith(u8, cbuf[0..cn], idprefix));
 
-    const body = try cl.walk(rctl.entry.target.root_fid, &.{ idname, "body" });
+    const body = try cl.walk(rctl.entry.first().root_fid, &.{ idname, "body" });
     _ = try cl.open(body.fid, ninep.msg.OREAD);
     var bbuf: [64]u8 = undefined;
     const bn = try cl.read(body.fid, 0, &bbuf);

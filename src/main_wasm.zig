@@ -119,9 +119,15 @@ const App = struct {
     // --- namespace + origin mount (phase 12) ---
     /// The session's mount table (S-02 §1). Empty at boot: the draw and input
     /// stacks are reached through their own captured clients, not by path. The
-    /// origin binds `/mnt/origin` into it when (and only when) it comes up.
+    /// origin binds `/n/origin` into it when (and only when) it comes up.
+    ///
+    /// SEAM (contract §3d, S-02 §1): `/dev/ns` — a read-only file rendering
+    /// `ns.list(w)` — is not served yet. It belongs to a device server that can
+    /// see this table; `core/served/fsys.zig` serves `/mnt/snarf-self` off the
+    /// `Editor` and has no `*Namespace`, so wiring it is a small wave of its
+    /// own (a `/dev` server plus an `Editor`→namespace handle), not free.
     ns: ninep.mount.Namespace,
-    /// `/mnt/origin` (R-P12-5/6/7). Holds interior pointers (the client's
+    /// `/n/origin` (R-P12-5/6/7). Holds interior pointers (the client's
     /// transport captures `&origin.ws`), so like everything else here it lives
     /// in the heap App and never moves.
     origin: OriginMount,
@@ -361,7 +367,7 @@ export fn tick(now_ms: u32) void {
     const a = app orelse return;
     _ = a.srv.poll() catch |e| @panic(@errorName(e)); // draw stack
     input_pump.drain(inputDevices(a), &a.editor) catch |e| @panic(@errorName(e)); // input stack → Editor
-    pollOrigin(a, now_ms); // /mnt/origin handshake + disconnect watch
+    pollOrigin(a, now_ms); // /n/origin handshake + disconnect watch
     a.editor.frameEnd(a.display) catch |e| @panic(@errorName(e));
 }
 
@@ -388,16 +394,16 @@ fn inputDevices(a: *App) input_pump.Devices {
 /// failure and loss remain `+Errors` warnings. `now_ms` is the animation-frame
 /// clock: freestanding wasm has no `std.Io` and no OS, so this is the module's
 /// only source of time and the 10 s dial budget is counted in these ticks. A
-/// failure here never touches the editor — an absent `/mnt/origin` is a supported
+/// failure here never touches the editor — an absent `/n/origin` is a supported
 /// state, not an error.
 fn pollOrigin(a: *App, now_ms: u32) void {
     switch (a.origin.poll(now_ms)) {
         .none => {},
         .mounted => {
-            const msg = "/mnt/origin: mounted";
+            const msg = "/n/origin: mounted";
             consoleLog(msg.ptr, msg.len);
         },
-        .failed => |why| a.editor.warning("/mnt/origin: not mounted ({s})\n", .{why}),
-        .lost => |why| a.editor.warning("/mnt/origin: disconnected ({s})\n", .{why}),
+        .failed => |why| a.editor.warning("/n/origin: not mounted ({s})\n", .{why}),
+        .lost => |why| a.editor.warning("/n/origin: disconnected ({s})\n", .{why}),
     }
 }

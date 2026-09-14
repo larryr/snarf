@@ -18,13 +18,13 @@ const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
 
 /// `Reconnect`: close any live origin connection, re-dial, re-attach, re-bind
-/// `/mnt/origin` (R-P12-7). Takes no argument and ignores every `execute`
+/// `/n/origin` (R-P12-7). Takes no argument and ignores every `execute`
 /// parameter — it acts on the session, not on a Text.
 ///
 /// Emits NOTHING on the happy path. The dial is asynchronous (R-P12-5), so the
 /// one warning line R-P12-7 asks for is the OUTCOME line the connection's poll
 /// writes when version+attach finish or give up — printing "dialing..." here
-/// too would make the common case two lines. Windows named `/mnt/origin/...`
+/// too would make the common case two lines. Windows named `/n/origin/...`
 /// need no special handling: their fids died when the socket did (R-P12-6).
 pub fn reconnect(
     ed: *Editor,

@@ -246,7 +246,7 @@ try {
 }
 check("origin absent: 10s dial timeout crossed without trap", () => !timeoutTrapped);
 
-// ---- phase 12: /mnt/origin against a real snarf-origin --------------------
+// ---- phase 12: /n/origin against a real snarf-origin --------------------
 //
 // Spawns zig-out/bin/snarf-origin (its port is baked by `zig build -Dport=`;
 // the banner is parsed for the actual value — if the port is busy, e.g. your
@@ -355,6 +355,17 @@ if (!originUp) {
     sentTypes.includes(100) && sentTypes.includes(104));
   check("origin: server log shows 9p attach", () =>
     srv.lines.some((l) => l.includes("9p attach /")));
+
+  // The `binding` phase's Twalk("bin")/Rwalk round-trip follows attach in the
+  // same handshake; give it a few more ticks before asserting the module
+  // logged the mount at its new (T16, phase 12d) mount point — pollOrigin in
+  // src/main_wasm.zig.
+  for (let i = 0; i < 40 && !logs.includes("/n/origin: mounted"); i++) {
+    ex2.tick((now += 16));
+    await sleep(50);
+  }
+  check("origin: console logs '/n/origin: mounted' (T16)", () =>
+    logs.includes("/n/origin: mounted"));
 
   // Kill the server: the close record must be absorbed without a trap.
   srv.child.kill("SIGKILL");

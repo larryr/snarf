@@ -77,7 +77,8 @@ web/ (index.html, shim.js)   assets/fonts/   build.zig  build.zig.zon  .zigversi
 1. `index.html` loads `shim.js`; shim feature-detects (SAB? FS Access? touch?), creates the
    worker, instantiates `snarf.wasm` with the import object.
 2. Module `init()` builds the namespace: starts device servers, mounts them (in-memory
-   transport), attempts `wss://<origin>/9p` → `/mnt/origin` (absence tolerated, R-9P-10).
+   transport), attempts `wss://<origin>/9p` → `/n/origin` (absence tolerated, R-9P-10;
+   its `bin/` is also bound into the `/bin` union with `-a`).
 3. Editor core starts: opens `/dev/draw/new`, `/dev/mouse`, `/dev/kbd`, draws the initial
    column layout, enters the event loop.
 4. Shim begins pumping resize/pointer/key/clipboard events into the input ring.

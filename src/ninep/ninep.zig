@@ -11,6 +11,8 @@ pub const chan = @import("chan.zig");
 pub const Client = @import("client.zig").Client;
 pub const server = @import("server.zig");
 pub const mount = @import("mount.zig");
+pub const nspath = @import("nspath.zig");
+pub const nsdir = @import("nsdir.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -171,13 +173,13 @@ test "phase-1: client reads a served file over a chan pipe" {
     defer ns.deinit();
     try ns.mount("/", &cl, root.fid);
     const r = try ns.resolve("/sub/leaf");
-    try testing.expectEqual(&cl, r.entry.target.client);
+    try testing.expectEqual(&cl, r.entry.first().client);
     try testing.expectEqualStrings("sub/leaf", r.remainder);
     var names: [8][]const u8 = undefined;
     var n_names: usize = 0;
     var it = std.mem.splitScalar(u8, r.remainder, '/');
     while (it.next()) |name| : (n_names += 1) names[n_names] = name;
-    const via_ns = try cl.walk(r.entry.target.root_fid, names[0..n_names]);
+    const via_ns = try cl.walk(r.entry.first().root_fid, names[0..n_names]);
     _ = try cl.open(via_ns.fid, msg.OREAD);
     try testing.expectEqual(@as(usize, 5), try cl.read(via_ns.fid, 0, &buf));
     try testing.expectEqualStrings("leaf\n", buf[0..5]);

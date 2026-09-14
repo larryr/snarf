@@ -4,7 +4,7 @@ A port of Plan 9's **ACME** editor — rewritten in **Zig**, compiled to **WebAs
 running in the browser. Everything outside the editor is a file served over **9P**: the
 page's DOM (`/dev/dom`), the clipboard (`/dev/snarf` — hence the name), browser storage,
 the host file system via the File System Access API (`/mnt/host`), and the origin server's
-optional 9P export (`/mnt/origin`).
+optional 9P export (`/n/origin`).
 
 Status: **implementation in progress** — an interactive editor runs in the browser
 (click/type/select, B2 execute, B3 look, the Edit language); requirements and
