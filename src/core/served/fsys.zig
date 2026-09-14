@@ -59,6 +59,9 @@ pub const Q = enum(u8) {
     w_event,
     w_tag,
     w_xdata,
+    /// The session mount table, rendered as `ns(1)`-shaped text (S-02 §1).
+    /// Appended LAST so no existing qid path renumbers (R-P10-A). Phase 13b.
+    ns,
 };
 
 /// `QID(w,q)` (dat.h:481).
@@ -86,19 +89,15 @@ const DirEnt = struct { name: []const u8, q: Q, dir: bool, perm: u32 };
 /// (a DIRECTORY, 0500). `acme/cons/consctl/draw/editout/label/log` are deferred
 /// (R-P10-J). "." is implicit (the framework never asks for it in a dir read).
 ///
-/// SEAM(ns) — phase 13a, ruling R-P13a-4 ("`/dev/ns` → `/mnt/snarf-self/ns`,
-/// Snarf has no `/dev` server of its own; OPTIONAL"). `Editor.ns` now exists,
-/// so the file itself is ~20 lines: an `ns` row here (alphabetically after
-/// `new`), a `Q.ns = 10` arm, and a read that renders `ed.ns.?.list(w)` sliced
-/// by offset. VERIFIED and NOT BUILT: a `dirtab` row is also a LISTING row, so
-/// adding it changes what the served root reports and breaks the existing test
-/// "served: root dir read lists sorted window dirs" (its `want` array and its
-/// entry-boundary offset arithmetic). Ruling R-P13a-1 requires every existing
-/// test to pass UNCHANGED, and R-P13a-4 makes this file optional, so the seam
-/// stays. Phase 13b changes served listings anyway and should land it there.
+/// `ns` (13a's deferred SEAM(ns), ruling R-P13a-4 — `/dev/ns` becomes
+/// `/mnt/snarf-self/ns` because Snarf has no `/dev` server of its own) LANDED in
+/// phase 13b, which is the wave allowed to move served listings. It is the
+/// session mount table as text, the `ns(1)` analog; a dirtab row is also a
+/// LISTING row, which is exactly why it had to wait.
 const dirtab = [_]DirEnt{
     .{ .name = "index", .q = .index, .dir = false, .perm = 0o400 },
     .{ .name = "new", .q = .new, .dir = true, .perm = DMDIR | 0o500 },
+    .{ .name = "ns", .q = .ns, .dir = false, .perm = 0o400 },
 };
 
 /// Per-window directory (`dirtabw`, fsys.c:80-95) — v1 rows: `body`
@@ -118,6 +117,7 @@ fn entryFor(q: Q) DirEnt {
         .dir => .{ .name = ".", .q = .dir, .dir = true, .perm = DMDIR | 0o500 },
         .index => dirtab[0],
         .new => dirtab[1],
+        .ns => dirtab[2],
         .w_body => dirtabw[0],
         .w_ctl => dirtabw[1],
         .w_tag => dirtabw[2],
@@ -284,6 +284,7 @@ pub const Fsys = struct {
         // Windowless files (fsys.c:585-590, xfid.c:300-317).
         switch (q) {
             .index => return xfid.indexRead(self.ed, offset, buf, self.allocator), // xfid.c:1090-1147
+            .ns => return self.nsRead(offset, buf), // the mount table (S-02 §1)
             .new => return 0, // never a real fid (walk-to-new returns the window dir)
             else => {}, // per-window file
         }
@@ -307,6 +308,23 @@ pub const Fsys = struct {
             .w_addr, .w_data, .w_xdata => return error.FileDoesNotExist,
             else => return error.FileDoesNotExist,
         }
+    }
+
+    /// `/mnt/snarf-self/ns` — `Namespace.list` rendered and sliced by offset,
+    /// the `ns(1)` view of the session mount table (S-02 §1, ruling R-P13a-4).
+    /// A build with no mount table (every headless harness) reads empty rather
+    /// than erroring: the file exists, the namespace simply has nothing in it.
+    fn nsRead(self: *Fsys, offset: u64, buf: []u8) ReadError!usize {
+        const ns = self.ed.ns orelse return 0;
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        ns.list(&aw.writer) catch return error.IoError;
+        const text = aw.writer.buffered();
+        if (offset >= text.len) return 0;
+        const avail = text[@intCast(offset)..];
+        const n = @min(avail.len, buf.len);
+        @memcpy(buf[0..n], avail[0..n]);
+        return n;
     }
 
     /// Compose a directory read (fsys.c:598-637): stat blobs for each entry, at
@@ -702,6 +720,27 @@ test "served: walk new places the window per makeNewWindow's activecol (T15)" {
     try testing.expectEqual(c2, h.ed.activecol.?);
 }
 
+test "served: the ns file renders the mount table (smoke)" {
+    const h = try Harness.create(testing.allocator, "one", "a\n");
+    defer h.destroy();
+
+    // A mount table with one entry, bound to the editor the tree serves.
+    var ns = ninep.mount.Namespace.init(testing.allocator);
+    defer ns.deinit();
+    var t = ninep.nsdir.FakeTree{ .names = &.{"mouse"}, .tag = "m\n" };
+    var dev = try ninep.nsdir.FakeServer.init(testing.allocator, &t);
+    defer dev.deinit();
+    try ns.mount("/dev", dev.client, dev.root_fid);
+    h.ed.ns = &ns;
+
+    try h.connect();
+    _ = try h.walk(0, 1, &.{"ns"});
+    _ = try h.open(1, msg.OREAD);
+    const rr = try h.read(1, 0, 4096);
+    try testing.expect(rr.body == .rread);
+    try testing.expectEqualStrings("mount /dev\n", rr.body.rread.data);
+}
+
 test "served: root dir read lists sorted window dirs" {
     const h = try Harness.create(testing.allocator, "one", "a\n"); // id 1
     defer h.destroy();
@@ -717,8 +756,10 @@ test "served: root dir read lists sorted window dirs" {
     const rr = try h.read(0, 0, 8192);
     try testing.expect(rr.body == .rread);
 
-    // Entries come out index, new, then window ids ASCENDING.
-    const want = [_][]const u8{ "index", "new", "1", "2" };
+    // Entries come out index, new, ns, then window ids ASCENDING. (`ns` joined
+    // the root dirtab in phase 13b — the wave allowed to move served listings;
+    // see the `dirtab` comment.)
+    const want = [_][]const u8{ "index", "new", "ns", "1", "2" };
     var data = rr.body.rread.data;
     var off: usize = 0;
     var idx: usize = 0;
@@ -732,7 +773,7 @@ test "served: root dir read lists sorted window dirs" {
     try testing.expectEqual(want.len, idx);
 
     // Entry-boundary offset continuation: cut the request so only index+new fit,
-    // then a second read at that offset yields exactly the two window dirs.
+    // then a second read at that offset yields ns plus the two window dirs.
     const size0 = 2 + @as(usize, std.mem.readInt(u16, data[0..2], .little)); // index
     const size1 = 2 + @as(usize, std.mem.readInt(u16, data[size0..][0..2], .little)); // new
     const cut: u32 = @intCast(size0 + size1);
@@ -746,7 +787,7 @@ test "served: root dir read lists sorted window dirs" {
     data = second.body.rread.data;
     off = 0;
     idx = 0;
-    const want2 = [_][]const u8{ "1", "2" };
+    const want2 = [_][]const u8{ "ns", "1", "2" };
     while (off < data.len) : (idx += 1) {
         const size = std.mem.readInt(u16, data[off..][0..2], .little);
         const total = 2 + @as(usize, size);
