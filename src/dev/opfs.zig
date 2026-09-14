@@ -729,10 +729,11 @@ test "devopfs wire T8: dir read serves the cached listing, continues by offset, 
     try testing.expectEqualStrings("f.txt", second.name);
     try testing.expectEqual(@as(usize, 1), sc.log.items.len); // still one — served from cache
 
-    // A misaligned offset (BadOffset): "bad message", not a crash or garbage.
+    // A misaligned offset: "bad offset" (lib9p/srv.c:474 sread), not a crash,
+    // not garbage, and no longer the generic "bad message" (16b item 2).
     const bad = try drive(h, &sc, .{ .tag = h.nextTag(), .body = .{ .tread = .{ .fid = 0, .offset = 1, .count = 4096 } } }, &.{});
     try testing.expect(bad.body == .rerror);
-    try testing.expectEqualStrings("bad message", bad.body.rerror.ename);
+    try testing.expectEqualStrings("bad offset", bad.body.rerror.ename);
 }
 
 test "devopfs wire T9: every fsOp status maps to its exact Rerror string" {

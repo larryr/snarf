@@ -232,15 +232,22 @@ pub fn buildListing(
 
 /// Serve `buf` from a built listing at `offset`. `read(5)`: a directory read
 /// returns WHOLE stat records and the offset must be zero or a value a previous
-/// read returned, so a misaligned continuation is a protocol error ("bad
-/// message") rather than a stream of garbage.
+/// read returned, so a misaligned continuation is refused rather than answered
+/// with a stream of garbage.
+///
+/// The refusal is `"bad offset"` — lib9p's own answer for precisely this case
+/// (`sread`: a directory read whose offset is neither 0 nor `fid->diroffset`
+/// gets `Ebadoffset`), not the generic `"bad message"` this used to send.
+/// [lib9p/srv.c:11 Ebadoffset, :474 sread]. A record that fails to DECODE is a
+/// different fault — this device built the stream itself — and keeps
+/// `"bad message"`.
 pub fn readListing(stream: []const u8, offset: u64, buf: []u8) OpError!usize {
-    if (offset > stream.len) return error.BadMessage;
+    if (offset > stream.len) return error.BadOffset;
     var pos: usize = 0;
     while (pos < offset) {
         const st = Stat.decode(stream[pos..]) catch return error.BadMessage;
         pos += st.encodedSize();
-        if (pos > offset) return error.BadMessage; // offset fell inside a record
+        if (pos > offset) return error.BadOffset; // offset fell inside a record
     }
     var n: usize = 0;
     while (pos + n < stream.len) {
@@ -336,6 +343,8 @@ test "opfs_tree: listing build + offset-addressed read" {
 
     // A short buffer stops on a record boundary; a misaligned offset is refused.
     try testing.expectEqual(first.encodedSize(), try readListing(stream, 0, buf[0 .. stream.len - 1]));
-    try testing.expectError(error.BadMessage, readListing(stream, 1, &buf));
-    try testing.expectError(error.BadMessage, readListing(stream, stream.len + 1, &buf));
+    // "bad offset", lib9p's own answer for a directory read at an offset it
+    // never handed out (srv.c:474 sread) — 16b item 2.
+    try testing.expectError(error.BadOffset, readListing(stream, 1, &buf));
+    try testing.expectError(error.BadOffset, readListing(stream, stream.len + 1, &buf));
 }
