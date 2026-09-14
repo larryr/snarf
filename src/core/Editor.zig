@@ -145,6 +145,19 @@ but3col: ?*draw.Image = null,
 /// a single warning line instead of a crash. Same inversion as `draw.Backend`
 /// and the input device's vtables — an erased ctx plus one function pointer.
 origin: ?OriginHook = null,
+/// The session mount table (S-02 §1); null in headless unit tests that never
+/// touch the namespace. `core` reads files only through this — never through a
+/// device or the shim (R-OV-03).
+///
+/// The other half of the R-OV-03 boundary from `origin` above: that hook is the
+/// ONE command that must talk to the transport, this handle is every FILE the
+/// editor will ever reach. `src/main_wasm.zig` assigns it at boot
+/// (`a.editor.ns = &a.ns`), `boot.Tree.bind` assigns it from `boot.Options.ns`,
+/// and every harness that never names a path leaves it null. Phase 13a lands
+/// the handle; phase 13b (directory windows) is its first consumer, through
+/// `ninep.nsjob` — never through `ninep.nsdir`, whose synchronous walk would
+/// block the browser's main thread (R-9P-13).
+ns: ?*ninep.mount.Namespace = null,
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,

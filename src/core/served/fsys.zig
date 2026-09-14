@@ -85,6 +85,17 @@ const DirEnt = struct { name: []const u8, q: Q, dir: bool, perm: u32 };
 /// Root directory (`dirtab`, fsys.c:65-78) — v1 rows: `index` (0400) and `new`
 /// (a DIRECTORY, 0500). `acme/cons/consctl/draw/editout/label/log` are deferred
 /// (R-P10-J). "." is implicit (the framework never asks for it in a dir read).
+///
+/// SEAM(ns) — phase 13a, ruling R-P13a-4 ("`/dev/ns` → `/mnt/snarf-self/ns`,
+/// Snarf has no `/dev` server of its own; OPTIONAL"). `Editor.ns` now exists,
+/// so the file itself is ~20 lines: an `ns` row here (alphabetically after
+/// `new`), a `Q.ns = 10` arm, and a read that renders `ed.ns.?.list(w)` sliced
+/// by offset. VERIFIED and NOT BUILT: a `dirtab` row is also a LISTING row, so
+/// adding it changes what the served root reports and breaks the existing test
+/// "served: root dir read lists sorted window dirs" (its `want` array and its
+/// entry-boundary offset arithmetic). Ruling R-P13a-1 requires every existing
+/// test to pass UNCHANGED, and R-P13a-4 makes this file optional, so the seam
+/// stays. Phase 13b changes served listings anyway and should land it there.
 const dirtab = [_]DirEnt{
     .{ .name = "index", .q = .index, .dir = false, .perm = 0o400 },
     .{ .name = "new", .q = .new, .dir = true, .perm = DMDIR | 0o500 },

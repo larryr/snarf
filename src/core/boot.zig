@@ -20,7 +20,9 @@
 //! Imports: `std` + `draw` + sibling core files only (S-07 §6 — never dev/shim).
 const std = @import("std");
 const draw = @import("draw");
+const ninep = @import("ninep");
 const Chrome = @import("Chrome.zig");
+const Editor = @import("Editor.zig");
 const Row = @import("Row.zig");
 const Column = @import("Column.zig");
 const Window = @import("Window.zig");
@@ -43,6 +45,10 @@ pub const tag_suffix = " Del Snarf | Look ";
 pub const Options = struct {
     win_name: []const u8 = "scratch",
     body: []const u8 = "",
+    /// The session mount table this scene's editor reads files through
+    /// (S-02 §1, phase 13a). Carried on the `Tree` and installed on the
+    /// `Editor` by `Tree.bind`; null for every harness that never names a path.
+    ns: ?*ninep.mount.Namespace = null,
 };
 
 /// The assembled window tree. Owns the `Chrome` and the heap `Row` (which owns
@@ -53,6 +59,18 @@ pub const Tree = struct {
     allocator: std.mem.Allocator,
     chrome: *Chrome,
     row: *Row,
+    /// `Options.ns`, held for `bind`. The Tree does not use it itself — it has
+    /// no 9P of its own; it is the editor that reads files (R-OV-03).
+    ns: ?*ninep.mount.Namespace = null,
+
+    /// Bind the routing machine to this scene: the window tree it hit-tests
+    /// (`ed.row`) plus the namespace it reads files through (`ed.ns`, phase
+    /// 13a). Every caller used to write the first line by hand; this is that
+    /// line plus the handle, so a new scene cannot forget the namespace.
+    pub fn bind(tree: *Tree, ed: *Editor) void {
+        ed.row = tree.row;
+        if (tree.ns) |n| ed.ns = n;
+    }
 
     pub fn deinit(tree: *Tree) void {
         const a = tree.allocator;
@@ -194,7 +212,7 @@ pub fn boot(
     // First column fills the row (rowadd with no prior column, rows.c:87-90).
     const c = (try row.add(-1)) orelse return error.ColumnTooNarrow;
 
-    var tree = Tree{ .allocator = a, .chrome = chrome, .row = row };
+    var tree = Tree{ .allocator = a, .chrome = chrome, .row = row, .ns = opts.ns };
     _ = try tree.addWinTo(c, opts.win_name, opts.body);
     return tree;
 }
@@ -310,6 +328,30 @@ test "boot: setTag1 fresh tag is byte-identical to name ++ tag_suffix" {
     try testing.expectEqual(w.tag.file.buffer.len(), w.tag.q1);
     // The body File is owned by the Window (R-P9-5).
     try testing.expect(w.owns_body);
+}
+
+test "boot: the ns option reaches the editor through Tree.bind" {
+    // Phase 13a: `core` reads files ONLY through `ed.ns` (R-OV-03). A scene
+    // booted with no namespace leaves it null — every pre-13a harness.
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+
+    var ns = ninep.mount.Namespace.init(testing.allocator);
+    defer ns.deinit();
+
+    var tree = try boot(testing.allocator, fx.disp, fx.font, proto.Rect.make(0, 0, 600, 460), .{
+        .win_name = "scratch",
+        .body = "",
+        .ns = &ns,
+    });
+    defer tree.deinit();
+
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    try testing.expect(ed.ns == null);
+    tree.bind(&ed);
+    try testing.expectEqual(&ns, ed.ns.?);
+    try testing.expectEqual(tree.row, ed.row.?);
 }
 
 // ===========================================================================
