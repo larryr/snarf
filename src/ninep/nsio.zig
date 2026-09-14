@@ -12,7 +12,7 @@
 //!
 //! POINTER STABILITY and the R-P13a-2 equivalence ruling: see `nsjob.zig`.
 //!
-//! Size note (S-07's ~400-line soft cap, the `nsdir.zig` convention): 336 lines
+//! Size note (S-07's ~400-line soft cap, the `nsdir.zig` convention): ~330 lines
 //! of actual code before the test banner; the rest is the cited rationale. The
 //! three jobs share `Drain` and splitting further would cut that seam in half.
 //!
@@ -35,7 +35,6 @@ const Status = nsjob.Status;
 const Step = nsjob.Step;
 const WalkJob = nsjob.WalkJob;
 const read_chunk = nsjob.read_chunk;
-const small_reply = nsjob.small_reply;
 
 // ==========================================================================
 // Drain — walk → Topen(OREAD) → Tread* → Tclunk, the spine of ReadFileJob and
@@ -155,11 +154,14 @@ const Drain = struct {
         } }, self.buf);
     }
 
+    /// Abandon an in-flight drain. Fire-and-forget throughout — a job may be
+    /// deinit'd on a client with no pump, where waiting for a reply is both
+    /// impossible and poisonous (`tickets`' tombstone note).
     fn deinit(self: *Drain) void {
         if (self.client) |c| {
             self.st.abort(c);
             // In `.clunking` the Tclunk is already on the wire.
-            if (self.phase == .clunking) c.freeFid(self.fid) else c.clunk(self.fid) catch {};
+            if (self.phase == .clunking) c.freeFid(self.fid) else tickets.discardClunk(c, self.fid);
         }
         self.walk.deinit();
         self.allocator.free(self.buf);
@@ -208,9 +210,16 @@ pub const ReadFileJob = struct {
 pub const StatJob = struct {
     walk: WalkJob,
     st: Step = .{},
-    buf: [small_reply]u8 = undefined,
+    /// The Rstat slot (and then the Rclunk one). `read_chunk`, not
+    /// `small_reply`: an Rstat carries a variable-length record, and a
+    /// worst-case stat(5) — four 255-byte strings, `2 + 39 + 4·(2+255)` = 1069
+    /// bytes, plus the `7 + 2` byte Rstat frame — does NOT fit in 512. A slot
+    /// too small is `error.ProtocolError`, i.e. a legal long-named file would
+    /// fail to stat, so the slot is sized like every other variable-length one
+    /// in this file.
+    buf: [read_chunk]u8 = undefined,
     /// Owned copy of the stat(5) blob: the Tclunk that follows reuses `buf`.
-    sbuf: [small_reply]u8 = undefined,
+    sbuf: [read_chunk]u8 = undefined,
     client: ?*Client = null,
     fid: u32 = 0,
     result: Stat = undefined,
@@ -271,10 +280,12 @@ pub const StatJob = struct {
         }
     }
 
+    /// Abandon an in-flight stat. Fire-and-forget, for the same reason as
+    /// `Drain.deinit`.
     pub fn deinit(self: *StatJob) void {
         if (self.client) |c| {
             self.st.abort(c);
-            if (self.phase == .clunking) c.freeFid(self.fid) else c.clunk(self.fid) catch {};
+            if (self.phase == .clunking) c.freeFid(self.fid) else tickets.discardClunk(c, self.fid);
         }
         self.walk.deinit();
         self.* = undefined;

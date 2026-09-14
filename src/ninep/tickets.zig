@@ -10,7 +10,7 @@
 //! file generalises it to EVERY T-message the editor issues, which is what
 //! `nsjob.zig` builds its namespace jobs out of.
 //!
-//! Two invariants make the scheme safe (rulings R-P13a-1/-3):
+//! Three invariants make the scheme safe (rulings R-P13a-1/-3):
 //!
 //!   * **`check` never pumps and never blocks.** It drains whatever frames the
 //!     transport can hand over right now (a `WouldBlock` ends the drain) and
@@ -20,6 +20,17 @@
 //!     reply whose tag is not its own through `dispatch`, so an out-of-order
 //!     reply for a standing ticket is absorbed rather than being a protocol
 //!     error; only a tag matching neither is a real violation.
+//!   * **Abandoning never leaves an owed reply homeless.** Giving up on a
+//!     request does NOT free its tag: the slot becomes a TOMBSTONE (`.discard`)
+//!     that absorbs and drops whatever finally arrives. Without it, abandoning
+//!     poisons the NEXT ticket's `check`: the server still owes a reply for the
+//!     old tag, that reply arrives on some later tick with no slot to land in,
+//!     and `drainReady` reports ProtocolError to whichever innocent ticket
+//!     happened to drain it. The whole cleanup path — `cancel`, and the
+//!     mid-flight clunks a job's `deinit` owes — is therefore ASYNCHRONOUS:
+//!     nothing on it may call `Client.rpc`, which on an un-pumped client (the
+//!     origin, whose frames only arrive on a later tick) sends its T-message,
+//!     fails with WouldBlock, and abandons the tag anyway.
 //!
 //! TWO SLOT MODES (deviation from the phase-13a contract §3a sketch, forced by
 //! ruling R-P13a-1 "zero change to the existing behaviour"). The sketch has
@@ -65,7 +76,8 @@ pub const Ticket = struct { tag: u16 };
 /// The client-side slot for one `Ticket`. `buf` is the caller-owned destination
 /// the reply is copied into; the client only borrows it and it must outlive the
 /// ticket. `state` advances waiting → done/failed exactly once, when the
-/// matching reply is dispatched (during any `rpc`/pump/`check`).
+/// matching reply is dispatched (during any `rpc`/pump/`check`), or waiting →
+/// discard when the caller abandons the request.
 pub const Pending = struct {
     buf: []u8,
     mode: Mode,
@@ -77,6 +89,13 @@ pub const Pending = struct {
         /// Rerror arrived (a flushed ticket lands here as error.Interrupted), or
         /// the reply was malformed/oversized (error.ProtocolError).
         failed: Error,
+        /// TOMBSTONE: nobody wants this reply any more, but the server still
+        /// owes one, so the tag stays booked (`buf` is empty and never
+        /// written). `dispatch` drops the reply and removes the slot; `check`
+        /// treats the tag as consumed (ProtocolError, like an unknown tag).
+        /// Produced by `cancel` — for both the flushed tag and the Tflush's own
+        /// tag — and by `beginDiscard`/`discardClunk`.
+        discard,
     },
 
     /// What the slot wants copied out of the reply — see the header note.
@@ -120,6 +139,9 @@ pub fn check(c: *Client, t: Ticket) Error!?Message {
     const entry = c.pending.getPtr(t.tag) orelse return error.ProtocolError;
     switch (entry.state) {
         .waiting => return null,
+        // Abandoned: the tag is still booked for the reply the server owes,
+        // but the ticket is as consumed as if the slot were gone.
+        .discard => return error.ProtocolError,
         .done => |n| {
             const bytes = entry.buf[0..n];
             _ = c.pending.remove(t.tag);
@@ -132,20 +154,73 @@ pub fn check(c: *Client, t: Ticket) Error!?Message {
     }
 }
 
-/// Abandon a ticket. Sends `Tflush(oldtag = t.tag)` synchronously via `rpc`
-/// (flushes themselves never park, so this cannot wedge). The server answers the
-/// old tag FIRST — Rerror "interrupted" if the request was still parked, which
-/// `rpc` dispatches into the slot — then Rflush on the flush's own tag; OR, if
-/// the reply raced ahead, it is dispatched into the slot and then Rflush
-/// arrives. Either ordering is handled: the ticket is always CONSUMED here and
-/// any dispatched result is discarded. [flush(5); srv.c deferred-Rflush]
+/// Abandon a ticket. ASYNCHRONOUS, and it must stay that way: it sends
+/// `Tflush(oldtag = t.tag)` on a tombstone slot and returns, never waiting for
+/// a reply (an `rpc` here would pump on a pumped client — against R-P13a-3 —
+/// and, on an un-pumped one, would send the Tflush and then fail WouldBlock,
+/// abandoning BOTH tags with no slot for the two replies still owed).
+///
+/// The ticket is CONSUMED either way, and both server orderings are absorbed
+/// [flush(5); srv.c's deferred Rflush]:
+///
+///   * still parked ⇒ Rerror "interrupted" on the OLD tag, then Rflush on the
+///     flush's own tag;
+///   * the real reply raced ahead ⇒ Rwalk/Rread/… on the old tag, then Rflush.
+///
+/// Both tags hold `.discard` slots, so whichever arrives first (and on whatever
+/// later tick) is dropped and its slot removed. If the old tag had ALREADY been
+/// answered into its slot, nothing more is owed for it and the slot is dropped
+/// outright — only the flush's tag is left tombstoned.
+///
+/// Finally drains whatever is ready, so the common pumped case (both replies
+/// already queued) leaves no tombstone behind at all.
 pub fn cancel(c: *Client, t: Ticket) Error!void {
-    defer _ = c.pending.remove(t.tag);
-    const reply = try c.rpc(.{ .tag = c.allocTag(), .body = .{ .tflush = .{ .oldtag = t.tag } } });
-    switch (reply.body) {
-        .rflush => return,
-        else => return error.ProtocolError,
+    abandon(c, t.tag);
+    try beginDiscard(c, .{ .tag = 0, .body = .{ .tflush = .{ .oldtag = t.tag } } });
+    try drainReady(c);
+}
+
+/// Give up on a slot without sending anything: tombstone it if the server still
+/// owes a reply, drop it if the reply already landed. Idempotent; an unknown tag
+/// is a no-op.
+fn abandon(c: *Client, tag: u16) void {
+    const entry = c.pending.getPtr(tag) orelse return;
+    if (entry.state == .waiting) {
+        entry.state = .discard;
+        entry.buf = c.rbuf[0..0]; // a tombstone borrows nothing
+    } else {
+        _ = c.pending.remove(tag);
     }
+}
+
+/// Send `t` on a tombstone slot: a fresh tag is allocated and booked so the
+/// reply has somewhere to land, but the reply itself is dropped. For the
+/// fire-and-forget messages of a cleanup path (Tflush, Tclunk), which must not
+/// block and whose answers nobody reads.
+///
+/// Slot lifetime: a tombstone is removed when its reply arrives (`dispatch`).
+/// A transport that never answers therefore leaks one map entry per abandoned
+/// request until `Client.deinit` — bounded by the number of abandoned requests,
+/// and `Client.version` clears the whole table when a session restarts.
+pub fn beginDiscard(c: *Client, t: Message) Error!void {
+    const tag = c.allocTag();
+    try c.pending.put(c.allocator, tag, .{ .buf = c.rbuf[0..0], .mode = .frame, .state = .discard });
+    errdefer _ = c.pending.remove(tag);
+    var m = t;
+    m.tag = tag;
+    try c.sendFrame(m);
+}
+
+/// Release `fid` server-side WITHOUT waiting — the only clunk a job's `deinit`
+/// may use (`Client.clunk` is an `rpc`). The Tclunk goes out on a tombstone and
+/// the number is recycled immediately: a Tclunk releases the fid even when the
+/// reply is an Rerror [`5/clunk`], so the server holds nothing either way, and
+/// the Rclunk lands on the tombstone instead of poisoning a later `check`.
+/// Best effort — a transport that refuses the send leaves the fid to the
+/// session teardown.
+pub fn discardClunk(c: *Client, fid: u32) void {
+    beginDiscard(c, .{ .tag = 0, .body = .{ .tclunk = .{ .fid = fid } } }) catch {};
+    c.freeFid(fid);
 }
 
 // --- read tickets (the phase-6 API, R-P6-4) -------------------------------
@@ -171,6 +246,7 @@ pub fn checkRead(c: *Client, t: Ticket) Error!?usize {
     const entry = c.pending.getPtr(t.tag) orelse return error.ProtocolError;
     switch (entry.state) {
         .waiting => return null,
+        .discard => return error.ProtocolError, // abandoned; see `check`
         .done => |n| {
             _ = c.pending.remove(t.tag);
             return n;
@@ -189,12 +265,20 @@ pub fn checkRead(c: *Client, t: Ticket) Error!?usize {
 /// the client's `rbuf` IMMEDIATELY, before the caller loops and reads over it. A
 /// tag matching no pending ticket is a genuine ProtocolError. A slot already
 /// resolved is left as-is (the first reply for a tag wins; a duplicate is
-/// ignored, not an error).
+/// ignored, not an error). A TOMBSTONE slot (`.discard`) swallows the reply,
+/// whatever its type, and frees the tag: this is what makes an abandoned
+/// request harmless to every later ticket.
 ///
 /// `frame` is the raw bytes `reply` was decoded from; `.frame` slots take those
 /// verbatim, `.payload` slots take only the Rread data.
 pub fn dispatch(c: *Client, frame: []const u8, reply: Message) Error!void {
     const entry = c.pending.getPtr(reply.tag) orelse return error.ProtocolError;
+    if (entry.state == .discard) {
+        // The owed reply finally came; nobody wants it. Drop it and release
+        // the tag — the tombstone has done its job.
+        _ = c.pending.remove(reply.tag);
+        return;
+    }
     if (entry.state != .waiting) return; // already resolved; ignore duplicate.
     // A flushed ticket lands here as Rerror "interrupted" ⇒ error.Interrupted.
     if (reply.body == .rerror) {

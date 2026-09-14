@@ -42,7 +42,13 @@ pub fn begin(c: *Client, t: Message, buf: []u8) Client.Error!Ticket
 /// ticket: `null` = still pending; a decoded reply (aliasing `buf`) = done; Rerror ⇒ the
 /// mapped error (Interrupted for a flushed ticket).
 pub fn check(c: *Client, t: Ticket) Client.Error!?Message
-/// Tflush the ticket (existing cancelRead semantics), free the slot.
+/// Tflush the ticket (existing cancelRead semantics), consume the ticket.
+/// AS BUILT: asynchronous — the Tflush goes out on a TOMBSTONE slot and the
+/// flushed tag is tombstoned rather than removed, so the two replies the server
+/// still owes are dropped on arrival instead of poisoning a later `check` (a
+/// synchronous `rpc` here would pump, and on an un-pumped client would fail
+/// WouldBlock after sending). Mid-flight clunks in job `deinit`s use the same
+/// mechanism: `beginDiscard(Tclunk)` + an immediate local `freeFid`.
 pub fn cancel(c: *Client, t: Ticket) Client.Error!void
 ```
 - `PendingRead` → `Pending{ buf, state: waiting | done: usize (bytes of raw frame) | failed }`.
@@ -85,7 +91,11 @@ pub fn runSync(job: anytype, pump: ?Pump) Error!void  // loops step()+pump until
   synchronous `walk`/`DirReader` stay as they are (used by tests and pumped paths); do not
   reimplement them this wave.
 - A job holds at most ONE ticket; `deinit` mid-flight cancels it and clunks any fid it
-  owns (walk fids are clunked on every failure path).
+  owns (walk fids are clunked on every failure path). AS BUILT: every step of that is
+  fire-and-forget — `tickets.cancel` for the ticket, `tickets.discardClunk` for the fid
+  (Tclunk on a tombstone slot + immediate `freeFid`; a Tclunk releases the fid
+  server-side even when the reply is an Rerror, `5/clunk`). A job `deinit` NEVER calls
+  `Client.clunk`/`rpc`: it may run on a client with no pump.
 
 ### 3c. The editor's namespace handle — `src/core/Editor.zig`
 

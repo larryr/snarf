@@ -105,10 +105,24 @@ a later tick, through `wsPush`). One mechanism covers every T-message:
   (`"interrupted"` for a flushed ticket).
 - **`cancel(client, ticket)`** — `Tflush` the ticket and consume it either way, handling
   both server orderings (flushed-reply-then-`Rflush`, or the data racing ahead).
+  Asynchronous like everything else here: it sends the `Tflush` and returns, never
+  waiting for the `Rflush`.
 
 Invariant: a live tag is always in the pending table, so a synchronous op still in
 flight routes a foreign reply into its ticket rather than failing — an out-of-order
 `Rread` for a standing `/dev/mouse` ticket is absorbed while a `Tstat` is outstanding.
+
+Corollary — **abandoning a request keeps its tag**. The server still owes a reply for a
+flushed tag (and for the `Tflush` itself, and for the `Tclunk` a half-finished job owes
+on its way out). Freeing the slot would leave those replies homeless, and a homeless
+reply is a protocol error charged to whichever *unrelated* ticket happens to drain it
+next. So an abandoned slot becomes a **tombstone**: the tag stays booked, the reply that
+eventually arrives — in either order, on any later tick — is dropped, and the slot is
+released then. Cleanup is consequently all fire-and-forget: nothing on a `cancel` or a
+job `deinit` path may issue a synchronous RPC, which on an un-pumped transport would
+send its message, fail `WouldBlock` and abandon the tag with nowhere for the reply to
+land. A transport that never answers leaks one tombstone per abandoned request until the
+session ends (`Tversion` clears the table).
 A **read ticket** is the mode of this mechanism that copies the `Rread` *payload* to the
 front of the caller's buffer; every other ticket takes the *raw reply frame*, so its
 `buf` must be sized for the reply (and a `Tread` issued that way can only ask for

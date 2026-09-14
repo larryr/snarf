@@ -90,6 +90,14 @@ pub const mount_point = "/mnt/snarf-self";
 /// from `/dev` rather than under it because they are two different servers:
 /// the union machinery then synthesizes a `draw` child into `/dev`'s listing
 /// (R-9P-16 — exactly phase 12d's T13 shape).
+///
+/// WARNING, once these are in the table: reach `/dev` and `/dev/draw` ONLY
+/// through `ninep.nsjob`'s asynchronous jobs — never through the synchronous
+/// `nsdir.walk`/`nsdir.DirReader` (nor `Client.read`/`stat`/`clunk`). Both
+/// device clients carry STANDING PARKED reads (`input_pump`'s `/dev/mouse` and
+/// `/dev/kbd` tickets), and every synchronous op is an `rpc`, which pumps until
+/// ITS reply arrives — on a client whose next reply may be a parked read's,
+/// that is exactly the wedge R-P6-4 forbids.
 pub fn mountDevices(
     ns: *ninep.mount.Namespace,
     draw_cl: *ninep.Client,

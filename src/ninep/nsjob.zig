@@ -64,10 +64,11 @@ pub const Status = enum { pending, done };
 /// Rread frame header the `.frame` ticket mode also lands in the buffer.
 pub const read_chunk: usize = nsdir.chunk_size;
 
-/// Reply-buffer size for the small fixed-shape replies a job waits on: Rwalk is
-/// at most `7 + 2 + 16·13` = 217 bytes, Ropen/Rclunk/Rflush are tiny, and every
-/// stat record Snarf produces or consumes is well under this. A larger reply is
-/// `error.ProtocolError` (the slot cannot hold it).
+/// Reply-buffer size for the small FIXED-shape replies a job waits on: Rwalk is
+/// at most `7 + 2 + 16·13` = 217 bytes and Ropen/Rclunk/Rflush are tiny. A
+/// larger reply is `error.ProtocolError` (the slot cannot hold it) — so a reply
+/// carrying anything variable-length (Rstat's record, Rread's data) uses
+/// `read_chunk` instead, never this.
 pub const small_reply: usize = 512;
 
 /// `ReadFileJob`'s default ceiling — acme's own file-size limit (R-EDIT-10).
@@ -105,8 +106,11 @@ pub const Step = struct {
         return m;
     }
 
-    /// Tflush an in-flight ticket. Best effort: a transport with no pump cannot
-    /// complete the flush RPC, and the slot is dropped either way.
+    /// Tflush an in-flight ticket and forget it. Best effort and, crucially,
+    /// NON-blocking: `tickets.cancel` sends the Tflush on a tombstone slot, so
+    /// an un-pumped transport (the origin) still has a home for the two replies
+    /// it will deliver on some later tick — they are dropped there instead of
+    /// surfacing as a ProtocolError to whichever later ticket drains them.
     pub fn abort(self: *Step, c: *Client) void {
         if (self.ticket) |t| {
             tickets.cancel(c, t) catch {};
@@ -243,15 +247,16 @@ pub const WalkJob = struct {
             },
             .cleanup => {
                 // Releasing the tentative newfid of a failed multi-chunk walk
-                // (`Client.walkCleanup`): recycle the number only if the server
-                // acknowledged the Tclunk, else burn it.
+                // (`Client.walkCleanup`'s job). A Tclunk releases the fid
+                // server-side even when the reply is an Rerror [`5/clunk`], so
+                // once the reply has come back in ANY shape — Rclunk, Rerror or
+                // an undecodable frame — the number is recyclable. (Burning it,
+                // as an earlier draft did on the error path, leaked a fid number
+                // per failed union member.)
                 const c = self.client.?;
-                const m = self.st.poll(c) catch null;
-                if (m) |reply| {
-                    if (reply.body == .rclunk) c.freeFid(self.newfid);
-                } else if (self.st.ticket != null) {
-                    return .pending; // still waiting
-                }
+                const finished = if (self.st.poll(c)) |m| m != null else |_| true;
+                if (!finished) return .pending;
+                c.freeFid(self.newfid);
                 self.i += 1;
                 self.phase = .next_member;
                 return .pending;
@@ -285,11 +290,18 @@ pub const WalkJob = struct {
         } }, &self.buf);
     }
 
+    /// Abandon an incomplete walk. Every step of this is fire-and-forget
+    /// (`tickets`' tombstones): a `deinit` may run on a client with no pump, so
+    /// it must never wait for a reply — see `tickets.discardClunk`.
     pub fn deinit(self: *WalkJob) void {
         if (self.client) |c| {
             self.st.abort(c);
             switch (self.phase) {
-                .walking => c.clunk(self.newfid) catch {},
+                // Mid-walk: the server may hold newfid at an intermediate node
+                // (and answers Rerror if it does not) — ask for it back.
+                .walking => tickets.discardClunk(c, self.newfid),
+                // The Tclunk is already on the wire; its reply is owed to the
+                // tombstone `abort` just left, not to us.
                 .cleanup => c.freeFid(self.newfid),
                 else => {},
             }
