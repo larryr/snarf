@@ -66,7 +66,8 @@ rather than staying silent (R-EDIT-25).
 
 ## 7. Open questions
 
-- OQ-EDIT-1: Command execution of non-built-ins — resolve via `/mnt/origin/bin` (origin-
+- OQ-EDIT-1: Command execution of non-built-ins — resolve via `/bin` (the union that the
+  origin's `/n/origin/bin` is bound into, R-9P-03/R-9P-10) (origin-
   exported services invoked by writing to their `ctl` files)? *Current stance: yes, spec'd
   as "external commands are files"; no code execution of fetched binaries in v1.*
 - OQ-EDIT-2: Full plumber with rules file vs. hard-coded plumbing heuristics. *v1:

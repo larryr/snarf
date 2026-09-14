@@ -23,7 +23,7 @@ program scripted against it — can use.
 > A programmer opens a single web page and gets a complete ACME environment: real ACME
 > mouse-and-text semantics, a Plan 9-style namespace where `/dev/dom` is the page it runs
 > in, `/dev/snarf` is the system clipboard, `/mnt/host` is a directory the user granted from
-> their local disk, and `/mnt/origin` is whatever file tree the web server chooses to
+> their local disk, and `/n/origin` is whatever file tree the web server chooses to
 > export. No install, no server-side session state, no JavaScript framework — one `.wasm`
 > module, one small JS shim, one HTML page.
 
@@ -34,7 +34,7 @@ program scripted against it — can use.
 | R-OV-01 | Snarf SHALL implement the ACME editing model (columns, windows, tag lines, execute/look mouse language) as specified in [02-editor-functional.md](02-editor-functional.md). |
 | R-OV-02 | Snarf SHALL be written in Zig and compile to a WebAssembly module that runs in an unmodified evergreen browser (see R-06). |
 | R-OV-03 | All access to resources outside the WASM linear memory SHALL be mediated by 9P file servers mounted in a per-instance namespace (see R-03). Direct ad-hoc JS calls from the editor core are prohibited; only the device layer's shim boundary may touch the browser. |
-| R-OV-04 | Snarf SHALL expose, at minimum, these namespaces: the DOM (`/dev/dom`), browser features (`/dev/snarf`, `/dev/storage`, …), the host file system via the HTML5 File System Access API (`/mnt/host`), and an origin-server 9P export (`/mnt/origin`) when the origin offers one. |
+| R-OV-04 | Snarf SHALL expose, at minimum, these namespaces: the DOM (`/dev/dom`), browser features (`/dev/snarf`, `/dev/storage`, …), the host file system via the HTML5 File System Access API (`/mnt/host`), and an origin-server 9P export (`/n/origin`) when the origin offers one. |
 | R-OV-05 | Graphics SHALL be drawn through a `/dev/draw` device modelled on Plan 9's draw protocol (decision ADR-0003; requirements in [04-graphics.md](04-graphics.md)). |
 | R-OV-06 | The full three-button mouse language, **including chords**, SHALL be usable on hardware without three physical buttons (trackpads, touch screens) via the emulation model in [05-input.md](05-input.md) (decision ADR-0004). |
 | R-OV-07 | Snarf SHALL be buildable on macOS and Linux with the Zig toolchain alone (decision ADR-0001; requirements in [06-platform-and-build.md](06-platform-and-build.md)). |

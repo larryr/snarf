@@ -48,7 +48,7 @@ flowchart TB
     Chan --> DevDom
     Chan --> DevMisc
     Chan --> DevHost
-    NS -->|"/mnt/origin"| WS
+    NS -->|"/n/origin"| WS
     WS --> Origin9P
     DevDraw -.->|"hostcall imports<br/>(pixels → OffscreenCanvas)"| Shim
     DevInput -.->|"pointer/key events in"| Shim

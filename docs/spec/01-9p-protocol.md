@@ -32,9 +32,9 @@ chunked by the client as usual.
 
 | Message | Required for |
 |---------|--------------|
-| `Tcreate`/`Rcreate`, `Tremove`/`Rremove` | writable trees: `/mnt/host`, `/mnt/opfs`, `/dev/storage`, `/mnt/origin` (server permitting), `/dev/dom` (element creation via directories is done with `ctl` instead — devdom returns `Rerror "create prohibited"` and documents the `ctl` verbs) |
+| `Tcreate`/`Rcreate`, `Tremove`/`Rremove` | writable trees: `/mnt/host`, `/mnt/opfs`, `/dev/storage`, `/n/origin` (server permitting), `/dev/dom` (element creation via directories is done with `ctl` instead — devdom returns `Rerror "create prohibited"` and documents the `ctl` verbs) |
 | `Twstat`/`Rwstat` | rename/truncate on writable trees; others return `Rerror` |
-| `Tauth`/`Rauth` | optional everywhere; `/mnt/origin` MAY implement it (OQ-9P-3), in-browser servers return `Rerror "authentication not required"` |
+| `Tauth`/`Rauth` | optional everywhere; `/n/origin` MAY implement it (OQ-9P-3), in-browser servers return `Rerror "authentication not required"` |
 
 ### 2.3 Qids
 
@@ -68,7 +68,7 @@ server can be lifted out of process unchanged (R-9P-04).
 > the payload, pings answered inside the transport so they never reach 9P, **no
 > fragmentation** (a non-FIN frame is rejected — one message per frame, as specified).
 > Blocking transport, thread per connection; the client half for native use is
-> `ws_client.zig`. The shim's WebSocket import and `/mnt/origin` mount are not yet wired.
+> `ws_client.zig`. The shim's WebSocket import and `/n/origin` mount are not yet wired.
 
 ### 3.3 Flow control & tags
 

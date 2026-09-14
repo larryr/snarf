@@ -180,3 +180,9 @@ transport swap (R-P6-1 says this is a transport move, not a redesign).
 made warnings visible it opened a `+Errors` window on every boot; a successful mount is
 expected behavior, so it now logs to the browser console only (`main_wasm.zig pollOrigin`).
 `failed`/`lost` stay as `+Errors` warnings.
+
+**Amendment 2026-09-14 (phase 12d, `agents/contracts/phase12d-unions.md`):** the mount point
+moved out of `/mnt` to **`/n/origin`** (user decision), the origin's `bin/` is now also bound
+into the `/bin` union with `-a`, and the GAP "`Namespace` lacks `unmount(prefix)`" is CLOSED
+(`unmount`/`unbindTarget` exist). This file's `/mnt/origin` spellings are history — read
+phase12d for the current contract.

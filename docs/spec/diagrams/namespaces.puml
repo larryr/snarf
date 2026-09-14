@@ -30,9 +30,14 @@ title Snarf namespace — assembled mount table (spec 02)
 ** mnt
 *** host/ — user-granted local dir (FS Access API)
 *** opfs/ — origin-private FS (always available)
-*** origin/ — origin server 9P export (if present)
 *** snarf-self/ — Snarf's own state, ACME-style
 **** index — list of windows
 **** new/ — open to create a window
 **** 1/ — per-window: addr, body, tag, data, event, ctl
+** n
+*** origin/ — origin server 9P export (if present)
+**** bin/ — also bound into /bin with -a (union)
+**** fs/ — the server's exported directory
+**** version — server identity
+** bin — union: the origin's bin/, then anything bound later
 @endmindmap

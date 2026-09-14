@@ -39,7 +39,8 @@ this module is identical in spirit to `acme/text.c` — no emulation awareness (
 1. Built-ins (table): `New Newcol Del Delcol Cut Paste Snarf Get Put Putall Undo Redo
    Zerox Look Edit Exit Dump Load Sort Tab Font Reconnect ...`
 2. `Edit <cmd>` → structural-regexp engine (§5).
-3. Origin commands: if `/mnt/origin/bin/<name>` exists → write `exec <args>` to its `ctl`,
+3. Origin commands: if `/bin/<name>` exists (the union `/n/origin/bin` is bound into with
+   `-a`, S-02 §1.1) → write `exec <args>` to its `ctl`,
    stream `output` into `+Errors` (or window per ACME `|<>` conventions where the origin
    service supports stdin: `|cmd` pipes the selection through `input`/`output`).
 4. Otherwise: warning `no such command`.

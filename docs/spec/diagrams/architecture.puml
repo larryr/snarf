@@ -41,7 +41,7 @@ Chan --> DevInput
 Chan --> DevDom
 Chan --> DevMisc
 Chan --> DevHost
-NS --> WS : /mnt/origin
+NS --> WS : /n/origin
 WS --> Origin9P
 DevDraw ..> Shim : hostcall imports\n(pixels → OffscreenCanvas)
 DevInput ..> Shim : pointer/key events in
