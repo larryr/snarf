@@ -9,16 +9,23 @@
 //!
 //! Rulings applied (contract phase1-ninep §7):
 //!   R4 — `Ops.stat` returns a decoded `stat.Stat`; we encode it via stat.zig.
-//!   R5 — create/remove/wstat/auth have no `Ops` fields; those type codes are
-//!        answered from the `error.Unsupported` decode path (see handleUnsupported).
+//!   R5 — LIFTED by phase 14a: create/remove/wstat now have `Ops` fields and
+//!        real handlers (`server_mut.zig`); only Tauth/Rauth are still answered
+//!        from the `error.Unsupported` decode path (see handleUnsupported).
 //!
-//! Phase-6 (contract phase6-input, R-P6-2/5): a framework-level parked-read
-//! wait queue with kernel-style RE-RUN completion. `Ops.read` may return
-//! `error.WouldBlockRead` ("no data now, park me"); the request is filed on a
-//! FIFO `parked` list and no reply is sent until `completeReads` re-runs it
-//! (or a Tflush/Tclunk/Tversion tears it down). This is the port of the
-//! deferred-flush machinery in `srv.c` (:245 sflush, :751 respond,
-//! :862 deferred `or->flush[]`, :812-826 tag-reuse doc) and flush(5).
+//! Parking (R-P6-2/5, generalised by phase 14a to EVERY operation): an `Ops`
+//! callback may answer `error.WouldBlock` ("I asked someone, ask me again
+//! later") and the whole T-frame is filed on a FIFO with no reply sent until
+//! `retryParked` re-dispatches it (or a Tflush/Tclunk/Tversion tears it down).
+//! The mechanism lives in `park.zig`; this file only decides *when* to park.
+//! It is the port of the deferred-flush machinery in `srv.c` (:245 sflush,
+//! :751 respond, :862 deferred `or->flush[]`, :812-826 tag-reuse doc) and
+//! flush(5).
+//!
+//! SIZE (S-07 §2): framing, session state, the fid table and the data path
+//! (read/write/stat) live here; every handler that ESTABLISHES, RE-POINTS or
+//! DESTROYS a fid (attach, walk, open, create, clunk, remove, wstat) is in
+//! `server_mut.zig`, and the wait queue is `park.zig`. Same `Server` fields.
 //!
 //! Everything is std-only; no globals; the allocator is explicit (S-07 §6).
 const std = @import("std");
@@ -27,16 +34,23 @@ const msg = @import("msg.zig");
 const stat = @import("stat.zig");
 const errors = @import("errors.zig");
 const transport = @import("transport.zig");
+pub const park = @import("park.zig");
+pub const server_mut = @import("server_mut.zig");
 
 const OpError = errors.OpError;
 
-/// The error set an `Ops.read` may return. It widens `OpError` with the single
-/// synthetic `WouldBlockRead` — the framework signal "no data on this file now,
-/// park the request" (R-P6-2). It is DELIBERATELY NOT a member of
-/// `errors.OpError`: it must never become an Rerror string, so `errors.zig`
-/// stays untouched and `errorString` stays total over `OpError`. `handleRead`
-/// and `completeReads` peel `WouldBlockRead` off before any `replyError`.
-pub const ReadError = OpError || error{WouldBlockRead};
+/// The error sets a PARKABLE `Ops` callback may return: `errors.OpError`
+/// widened with the park signal (`WouldBlock`, plus phase 6's `WouldBlockRead`
+/// spelling for `read`). Neither block member is in `errors.OpError`, so
+/// neither can ever become an Rerror string; the handlers peel them off. A
+/// callback declared with the narrower `errors.OpError` coerces into these
+/// slots unchanged, which is why no device server changed in phase 14a.
+/// Re-exports, so callers name one module (see `park.zig`, `server_mut.zig`).
+pub const ReadError = park.ReadError;
+pub const OpBlockError = park.OpBlockError;
+pub const Outcome = park.Outcome;
+pub const max_parked = park.max_parked;
+pub const CreateResult = server_mut.CreateResult;
 
 /// A server-side fid: the client's handle onto a file. Mirrors `Fid` in
 /// 9p.h:39-54 (fid number, current qid, open mode, per-fid aux pointer, owner).
@@ -57,33 +71,48 @@ pub const Fid = struct {
 /// The file-server callback table. Each fn takes `(ctx, srv, fid, ...)` where
 /// `ctx` is the `Ops` implementation's own context (the `Server.ctx` pointer)
 /// and returns `errors.OpError!...`. Optional slots (`?*const fn`) default to
-/// null and are simply skipped. No create/remove/wstat (R5).
+/// null and are simply skipped. The PARKABLE slots are typed `OpBlockError`
+/// (phase 14a) so an implementation may answer `error.WouldBlock`; one declared
+/// with the narrower `errors.OpError` coerces in unchanged.
 pub const Ops = struct {
     /// Bind the freshly-allocated `fid` to the tree root; return its qid.
     /// [srv.c:211 sattach]
     attach: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, aname: []const u8) OpError!Qid,
     /// Walk `fid` one component named `name`, mutating it to the child; return
     /// the child qid. [srv.c:143 oldwalk1 / walkandclone]
-    walk1: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, name: []const u8) OpError!Qid,
+    walk1: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, name: []const u8) OpBlockError!Qid,
     /// Optional clone hook, called when a walk targets a distinct newfid, after
     /// `new.qid`/`new.ctx` have been seeded from the source. [srv.c:133 clone]
     clone: ?*const fn (ctx: *anyopaque, srv: *Server, old: *Fid, new: *Fid) OpError!void = null,
     /// Open `fid` with `mode`; return the qid to report in Ropen. [srv.c:361]
-    open: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, mode: u8) OpError!Qid,
+    open: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, mode: u8) OpBlockError!Qid,
     /// Read up to `buf.len` bytes at `offset` into `buf`; return count (0=EOF).
-    /// May return `error.WouldBlockRead` to be parked until `completeReads`
-    /// (R-P6-2). [srv.c:467 sread]
+    /// May block (parked until `completeReads`/`retryParked`, R-P6-2).
+    /// [srv.c:467 sread]
     read: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, offset: u64, buf: []u8) ReadError!usize,
     /// Write `data` at `offset`; return count accepted. [srv.c:513 swrite]
-    write: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, offset: u64, data: []const u8) OpError!usize,
+    write: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, offset: u64, data: []const u8) OpBlockError!usize,
     /// Optional clunk notification; the fid is removed unconditionally after.
     /// [srv.c:554 sclunk / :561 rclunk]
     clunk: ?*const fn (ctx: *anyopaque, srv: *Server, fid: *Fid) void = null,
     /// Return the directory entry for `fid` (R4). `stat.zig` is file-as-struct,
     /// so the `Stat` type is the module itself. [srv.c:601 sstat]
-    stat: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid) OpError!stat,
+    stat: *const fn (ctx: *anyopaque, srv: *Server, fid: *Fid) OpBlockError!stat,
     /// Optional flush notification; the reply is always Rflush. [srv.c:245]
     flush: ?*const fn (ctx: *anyopaque, srv: *Server, oldtag: u16) void = null,
+    /// Create `name` under the directory `fid` and open the RESULT as `fid`;
+    /// `perm` includes DMDIR and is masked against the parent BY THE SERVER,
+    /// which alone knows `dir.perm` (`5/open`). Absent ⇒ "create prohibited".
+    /// [lib9p/srv.c:17 Enocreate]
+    create: ?*const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, name: []const u8, perm: u32, mode: u8) OpBlockError!CreateResult = null,
+    /// Remove the file `fid` names; the framework clunks `fid` afterwards
+    /// whether this succeeds or not (`5/remove`). Absent ⇒ "remove prohibited".
+    /// [lib9p/srv.c:20 Enoremove]
+    remove: ?*const fn (ctx: *anyopaque, srv: *Server, fid: *Fid) OpBlockError!void = null,
+    /// Apply the decoded `st` to `fid`; "don't touch" fields are `~0` / empty
+    /// strings and must be left alone (`5/stat`). Absent ⇒ "wstat prohibited".
+    /// [lib9p/srv.c:23 Enowstat]
+    wstat: ?*const fn (ctx: *anyopaque, srv: *Server, fid: *Fid, st: stat) OpBlockError!void = null,
 };
 
 /// One turn of the pump: whether `step` handled a frame or found none ready.
@@ -92,12 +121,6 @@ pub const Progress = enum { idle, handled };
 /// Errors escaping the pump: transport failures plus allocator failure. A
 /// read `WouldBlock` never escapes — it becomes `Progress.idle`.
 pub const Error = transport.Error || std.mem.Allocator.Error;
-
-/// A parked (blocked) Tread awaiting data (R-P6-2). We store the fid NUMBER,
-/// not a `*Fid` — the fid table may rehash between park and completion, so the
-/// pointer would dangle; `completeReads` re-looks-up the number. Mirrors the
-/// per-request state `srv.c` keeps on its deferred-flush list (:862).
-const Parked = struct { tag: u16, fid: u32, offset: u64, count: u32 };
 
 /// A 9P2000 server bound to one transport. Not thread-safe; drive it from one
 /// task via `step`/`poll`. [srv.c:691 srv()]
@@ -112,9 +135,9 @@ pub const Server = struct {
     max_msize: u32,
     rbuf: []u8,
     wbuf: []u8,
-    /// FIFO of blocked Treads, in park order (R-P6-2).
-    parked: std.ArrayList(Parked) = .empty,
-    /// Completion scratch for `completeReads` reads. A SEPARATE buffer, never
+    /// FIFO of parked requests, in park order (R-P6-2, generalised; park.zig).
+    parked: park.Queue = .{},
+    /// Completion scratch for retried reads. A SEPARATE buffer, never
     /// `rbuf`: completions can fire from inside `Ops.write`, where `rbuf` still
     /// holds the in-flight Twrite's data (the aliasing trap, R-P6-5 / O11 D6).
     /// Allocated `max_msize` in `init`, freed in `deinit`.
@@ -196,7 +219,8 @@ pub const Server = struct {
         self.fids.clearRetainingCapacity();
     }
 
-    fn dupUname(self: *Server, s: []const u8) Error![]u8 {
+    /// `pub` for `server_mut.zig` (attach/walk install fids).
+    pub fn dupUname(self: *Server, s: []const u8) Error![]u8 {
         return self.allocator.dupe(u8, s);
     }
 
@@ -205,16 +229,25 @@ pub const Server = struct {
     /// Encode `m` into wbuf and hand the frame to the transport. The message
     /// is one we constructed and always fits within `max_msize`, so encoding
     /// cannot fail (a failure is a framework bug, hence `unreachable`).
-    fn reply(self: *Server, m: msg.Message) Error!void {
+    pub fn reply(self: *Server, m: msg.Message) Error!void {
         const n = msg.encode(&m, self.wbuf) catch unreachable;
         try self.tport.writeMsg(self.wbuf[0..n]);
     }
 
-    fn replyError(self: *Server, tag: u16, e: OpError) Error!void {
-        return self.reply(.{ .tag = tag, .body = .{ .rerror = .{ .ename = errors.errorString(e) } } });
+    /// Rerror with a raw string, for the handful of framework conditions that
+    /// are not file errors and so have no `OpError` member (the parked-queue
+    /// bound). `pub` for `park.zig` / `server_mut.zig`.
+    pub fn replyRaw(self: *Server, tag: u16, ename: []const u8) Error!void {
+        return self.reply(.{ .tag = tag, .body = .{ .rerror = .{ .ename = ename } } });
     }
 
-    fn replyWalk(self: *Server, tag: u16, qids: []const Qid) Error!void {
+    /// `pub` for `park.zig` / `server_mut.zig`.
+    pub fn replyError(self: *Server, tag: u16, e: OpError) Error!void {
+        return self.replyRaw(tag, errors.errorString(e));
+    }
+
+    /// `pub` for `server_mut.zig` (handleWalk lives there).
+    pub fn replyWalk(self: *Server, tag: u16, qids: []const Qid) Error!void {
         return self.reply(.{ .tag = tag, .body = .{ .rwalk = msg.Body.Rwalk.init(qids) } });
     }
 
@@ -222,8 +255,13 @@ pub const Server = struct {
 
     fn handleFrame(self: *Server, frame: []const u8) Error!void {
         const m = msg.decode(frame) catch |e| switch (e) {
-            // R5: valid-but-unimplemented codes answered by type byte.
-            error.Unsupported => return self.handleUnsupported(frame),
+            // Tauth/Rauth, the last unimplemented pair (S-01 §2, OQ-9P-3):
+            // answered by type byte, since decode stopped before the body.
+            // [srv.c:187 sauth]
+            error.Unsupported => return self.replyError(
+                std.mem.readInt(u16, frame[5..7], .little),
+                if (frame[4] == 102) error.AuthNotRequired else error.BadMessage,
+            ),
             // Malformed: reply "bad message" if the tag survives, else drop.
             error.BadMessage => {
                 if (frame.len >= msg.header_size) {
@@ -240,7 +278,7 @@ pub const Server = struct {
         // the new frame and leave the parked entry untouched. [srv.c:812-826
         // tag-reuse race] (parked is only ever non-empty post-version, so this
         // never shadows first-Tversion handling.)
-        if (self.tagParked(tag)) return self.replyError(tag, error.BadMessage);
+        if (self.parked.has(tag)) return self.replyError(tag, error.BadMessage);
 
         // Tversion is the only message legal before (and illegal after) a
         // successful negotiation. [srv.c:166 sversion; R7 second-version]
@@ -250,31 +288,40 @@ pub const Server = struct {
         }
         if (self.msize == 0) return self.replyError(tag, error.BadMessage); // pre-version
 
-        switch (m.body) {
-            .tattach => |a| return self.handleAttach(tag, a),
-            .twalk => return self.handleWalk(tag, m.body.twalk),
-            .topen => |o| return self.handleOpen(tag, o.fid, o.mode),
-            .tread => |r| return self.handleRead(tag, r.fid, r.offset, r.count),
-            .twrite => return self.handleWrite(tag, m.body.twrite),
-            .tclunk => |c| return self.handleClunk(tag, c.fid),
-            .tflush => |fl| return self.handleFlush(tag, fl.oldtag),
-            .tstat => |s| return self.handleStat(tag, s.fid),
-            // Any R-message (a response) is illegal arriving at a server.
-            else => return self.replyError(tag, error.BadMessage),
+        // The handler either answered or asked to be parked; on the latter we
+        // file the WHOLE frame (R-P14a-2) and send nothing.
+        if (try self.dispatchT(m, self.rbuf) == .blocked) {
+            if (!try park.park(self, tag, frame)) {
+                return self.replyRaw(tag, park.too_many_parked);
+            }
         }
     }
 
-    /// R5: answer create/remove/wstat/auth (and stray R-codes) from the raw
-    /// frame. Reaching here means decode parsed the 7-byte header, so the tag
-    /// at frame[5..7] is always recoverable.
-    fn handleUnsupported(self: *Server, frame: []const u8) Error!void {
-        const tag = std.mem.readInt(u16, frame[5..7], .little);
-        const e: OpError = switch (frame[4]) {
-            102 => error.AuthNotRequired, // Tauth [srv.c:187 sauth]
-            114, 122, 126 => error.PermissionDenied, // Tcreate/Tremove/Twstat
-            else => error.BadMessage, // Rauth/Rcreate/Rremove/Rwstat
-        };
-        return self.replyError(tag, e);
+    /// Dispatch one decoded T-message. `scratch` is the buffer a read's payload
+    /// is built in: `rbuf` on the fresh path (the frame is already decoded and
+    /// the reply encodes into `wbuf`), `pbuf` on the retry path, where `rbuf`
+    /// may still alias an in-flight Twrite (R-P6-5 / O11 D6). `pub` for
+    /// `park.zig`, which re-dispatches parked frames through it.
+    pub fn dispatchT(self: *Server, m: msg.Message, scratch: []u8) Error!Outcome {
+        const tag = m.tag;
+        switch (m.body) {
+            .tattach => |a| return server_mut.handleAttach(self, tag, a),
+            .twalk => return server_mut.handleWalk(self, tag, m.body.twalk),
+            .topen => |o| return server_mut.handleOpen(self, tag, o.fid, o.mode),
+            .tread => |r| return self.handleRead(tag, r.fid, r.offset, r.count, scratch),
+            .twrite => return self.handleWrite(tag, m.body.twrite),
+            .tclunk => |c| return server_mut.handleClunk(self, tag, c.fid),
+            .tflush => |fl| return self.handleFlush(tag, fl.oldtag),
+            .tstat => |s| return self.handleStat(tag, s.fid),
+            // Any R-message (a response) is illegal arriving at a server.
+            else => return self.replied(self.replyError(tag, error.BadMessage)),
+        }
+    }
+
+    /// `Outcome.replied` sugar; `pub` for `server_mut.zig`.
+    pub fn replied(_: *Server, r: Error!void) Error!Outcome {
+        try r;
+        return .replied;
     }
 
     // -- per-message handlers ----------------------------------------------
@@ -282,7 +329,7 @@ pub const Server = struct {
     /// [srv.c:166 sversion + :180 rversion/changemsize]
     fn handleVersion(self: *Server, tag: u16, v: msg.Body.Version) Error!void {
         self.clearFids(); // a new session aborts all outstanding fids
-        self.parked.clearRetainingCapacity(); // ...and discards parked reads SILENTLY (R-P6-5)
+        self.parked.clear(self.allocator); // ...and discards parked requests SILENTLY (R-P6-5)
         const clamped: u32 = @min(v.msize, self.max_msize);
         if (!std.mem.startsWith(u8, v.version, msg.version9p)) {
             // Unknown dialect: stay unversioned, let the client retry.
@@ -293,130 +340,40 @@ pub const Server = struct {
         return self.reply(.{ .tag = tag, .body = .{ .rversion = .{ .msize = clamped, .version = msg.version9p } } });
     }
 
-    /// [srv.c:211 sattach]
-    fn handleAttach(self: *Server, tag: u16, a: anytype) Error!void {
-        if (self.fids.contains(a.fid)) return self.replyError(tag, error.FidInUse); // Edupfid
-        if (a.afid != msg.NOFID) return self.replyError(tag, error.AuthNotRequired); // no auth
-        var fid = Fid{ .fid = a.fid, .qid = undefined, .uname = try self.dupUname(a.uname) };
-        const q = self.ops.attach(self.ctx, self, &fid, a.aname) catch |e| {
-            self.allocator.free(fid.uname);
-            return self.replyError(tag, e);
-        };
-        fid.qid = q;
-        try self.fids.put(self.allocator, a.fid, fid);
-        return self.reply(.{ .tag = tag, .body = .{ .rattach = .{ .qid = q } } });
-    }
-
-    /// [srv.c:305 swalk + :133 walkandclone + :339 rwalk]
-    fn handleWalk(self: *Server, tag: u16, t: msg.Body.Twalk) Error!void {
-        const src = self.fids.get(t.fid) orelse return self.replyError(tag, error.UnknownFid);
-        if (src.omode != null) return self.replyError(tag, error.FidOpen); // cannot clone open fid
-        if (t.nwname > 0 and !src.qid.qtype.dir) return self.replyError(tag, error.WalkNoDir);
-        const same = (t.fid == t.newfid);
-        if (!same and self.fids.contains(t.newfid)) return self.replyError(tag, error.FidInUse);
-
-        // Tentative newfid: a private copy that walk1 mutates in place. It is
-        // only installed on success; on any failure it is discarded (== C's
-        // "removefid" of the tentative newfid, srv.c:341).
-        var work = Fid{
-            .fid = t.newfid,
-            .qid = src.qid,
-            .omode = null,
-            .ctx = src.ctx,
-            .uname = try self.dupUname(src.uname),
-        };
-        if (!same) {
-            if (self.ops.clone) |cl| {
-                var srccopy = src;
-                cl(self.ctx, self, &srccopy, &work) catch |e| {
-                    self.allocator.free(work.uname);
-                    return self.replyError(tag, e);
-                };
-            }
-        }
-
-        var qids: [msg.MAXWELEM]Qid = undefined;
-        var i: usize = 0;
-        var first_err: OpError = error.FileDoesNotExist;
-        while (i < t.nwname) : (i += 1) {
-            const q = self.ops.walk1(self.ctx, self, &work, t.wname[i]) catch |e| {
-                first_err = e;
-                break;
-            };
-            work.qid = q;
-            qids[i] = q;
-        }
-        const nwqid = i;
-
-        if (nwqid < t.nwname) {
-            // Walk did not complete: discard the tentative newfid.
-            self.allocator.free(work.uname);
-            if (nwqid == 0) return self.replyError(tag, first_err); // first name failed
-            return self.replyWalk(tag, qids[0..nwqid]); // partial: no error, no newfid
-        }
-
-        // Full success (nwname==0 is a bare clone): install the newfid.
-        if (same) self.allocator.free(src.uname); // replace-in-place frees the old name
-        try self.fids.put(self.allocator, t.newfid, work);
-        return self.replyWalk(tag, qids[0..nwqid]);
-    }
-
-    /// [srv.c:361 sopen + :425 ropen]
-    fn handleOpen(self: *Server, tag: u16, fid: u32, mode: u8) Error!void {
-        const fp = self.fids.getPtr(fid) orelse return self.replyError(tag, error.UnknownFid);
-        const base = mode & 3;
-        const norm_base: u8 = if (base == msg.OEXEC) msg.OREAD else base; // OEXEC→OREAD
-        const wants_write = norm_base == msg.OWRITE or norm_base == msg.ORDWR or (mode & msg.OTRUNC) != 0;
-        if (fp.qid.qtype.dir and wants_write) return self.replyError(tag, error.FileIsDirectory);
-        const q = self.ops.open(self.ctx, self, fp, mode) catch |e| return self.replyError(tag, e);
-        fp.omode = (mode & ~@as(u8, 3)) | norm_base;
-        return self.reply(.{ .tag = tag, .body = .{ .ropen = .{ .qid = q, .iounit = 0 } } });
-    }
-
     /// [srv.c:467 sread]
-    fn handleRead(self: *Server, tag: u16, fid: u32, offset: u64, count: u32) Error!void {
-        const fp = self.fids.getPtr(fid) orelse return self.replyError(tag, error.UnknownFid);
+    fn handleRead(self: *Server, tag: u16, fid: u32, offset: u64, count: u32, scratch: []u8) Error!Outcome {
+        const fp = self.fids.getPtr(fid) orelse return self.replied(self.replyError(tag, error.UnknownFid));
         if (fp.omode == null or (fp.omode.? & 3) == msg.OWRITE) {
-            return self.replyError(tag, error.PermissionDenied);
+            return self.replied(self.replyError(tag, error.PermissionDenied));
         }
         const maxc = self.msize - msg.IOHDRSZ;
-        const clamped: usize = @min(count, maxc);
-        // Reuse rbuf as the read scratch: the incoming frame has already been
-        // fully decoded (Tread carries only scalars), and the reply is encoded
-        // into the *separate* wbuf, so there is no aliasing on encode.
-        const dst = self.rbuf[0..clamped];
+        const clamped: usize = @min(@as(usize, @min(count, maxc)), scratch.len);
+        // `scratch` is rbuf on the fresh path (the incoming frame is already
+        // fully decoded — Tread carries only scalars — and the reply encodes
+        // into the *separate* wbuf) and pbuf on the retry path (R-P6-5/D6).
+        const dst = scratch[0..clamped];
         const n = self.ops.read(self.ctx, self, fp, offset, dst) catch |e| switch (e) {
-            // No data yet: file the request on the wait queue and reply NOTHING
-            // now; `completeReads` re-runs it when data arrives (R-P6-2).
-            error.WouldBlockRead => return self.park(tag, fid, offset, clamped),
-            else => |oe| return self.replyError(tag, oe),
+            // No data yet: park the frame and reply NOTHING now; `retryParked`
+            // re-runs it when data arrives (R-P6-2).
+            error.WouldBlock, error.WouldBlockRead => return .blocked,
+            else => |oe| return self.replied(self.replyError(tag, oe)),
         };
-        return self.reply(.{ .tag = tag, .body = .{ .rread = .{ .data = self.rbuf[0..n] } } });
+        return self.replied(self.reply(.{ .tag = tag, .body = .{ .rread = .{ .data = scratch[0..n] } } }));
     }
 
     /// [srv.c:513 swrite]
-    fn handleWrite(self: *Server, tag: u16, w: anytype) Error!void {
-        const fp = self.fids.getPtr(w.fid) orelse return self.replyError(tag, error.UnknownFid);
+    fn handleWrite(self: *Server, tag: u16, w: anytype) Error!Outcome {
+        const fp = self.fids.getPtr(w.fid) orelse return self.replied(self.replyError(tag, error.UnknownFid));
         const base = if (fp.omode) |m| m & 3 else 0xFF;
-        if (base != msg.OWRITE and base != msg.ORDWR) return self.replyError(tag, error.PermissionDenied);
+        if (base != msg.OWRITE and base != msg.ORDWR) return self.replied(self.replyError(tag, error.PermissionDenied));
         const maxc = self.msize - msg.IOHDRSZ;
         var data = w.data;
         if (data.len > maxc) data = data[0..maxc];
-        const n = self.ops.write(self.ctx, self, fp, w.offset, data) catch |e| return self.replyError(tag, e);
-        return self.reply(.{ .tag = tag, .body = .{ .rwrite = .{ .count = @intCast(n) } } });
-    }
-
-    /// [srv.c:554 sclunk] — notify then remove unconditionally.
-    fn handleClunk(self: *Server, tag: u16, fid: u32) Error!void {
-        const fp = self.fids.getPtr(fid) orelse return self.replyError(tag, error.UnknownFid);
-        // Before the fid dies, interrupt any reads parked on it: Rerror
-        // "interrupted" per entry, in park order (R-P6-5).
-        try self.sweepParked(fid);
-        if (self.ops.clunk) |c| c(self.ctx, self, fp);
-        const owned = fp.uname;
-        _ = self.fids.remove(fid);
-        self.allocator.free(owned);
-        return self.reply(.{ .tag = tag, .body = .rclunk });
+        const n = self.ops.write(self.ctx, self, fp, w.offset, data) catch |e| switch (e) {
+            error.WouldBlock, error.WouldBlockRead => return .blocked,
+            else => |oe| return self.replied(self.replyError(tag, oe)),
+        };
+        return self.replied(self.reply(.{ .tag = tag, .body = .{ .rwrite = .{ .count = @intCast(n) } } }));
     }
 
     /// [srv.c:245 sflush] — if `oldtag` names a parked read, interrupt it FIRST
@@ -424,13 +381,10 @@ pub const Server = struct {
     /// own tag; this deferred ordering is mandated by flush(5) and mirrors
     /// srv.c's deferred `or->flush[]` list (:862 / :751 respond). With nothing
     /// parked under `oldtag` it is a plain Rflush (the idle case, test 4).
-    fn handleFlush(self: *Server, tag: u16, oldtag: u16) Error!void {
+    fn handleFlush(self: *Server, tag: u16, oldtag: u16) Error!Outcome {
         if (self.ops.flush) |fl| fl(self.ctx, self, oldtag);
-        if (self.findParked(oldtag)) |idx| {
-            _ = self.parked.orderedRemove(idx);
-            try self.replyError(oldtag, error.Interrupted); // interrupted FIRST
-        }
-        return self.reply(.{ .tag = tag, .body = .rflush }); // then Rflush
+        _ = try park.flushTag(self, oldtag); // interrupted FIRST (if parked)
+        return self.replied(self.reply(.{ .tag = tag, .body = .rflush })); // then Rflush
     }
 
     /// [srv.c:601 sstat + :626 rstat] — encode the Stat (R4) into a scratch
@@ -438,98 +392,41 @@ pub const Server = struct {
     /// trap of building the blob inside wbuf). A Stat too large for the
     /// scratch degrades to an Rerror — device servers may return arbitrary
     /// strings and the framework must never trap on their size.
-    fn handleStat(self: *Server, tag: u16, fid: u32) Error!void {
-        const fp = self.fids.getPtr(fid) orelse return self.replyError(tag, error.UnknownFid);
-        const st = self.ops.stat(self.ctx, self, fp) catch |e| return self.replyError(tag, e);
+    fn handleStat(self: *Server, tag: u16, fid: u32) Error!Outcome {
+        const fp = self.fids.getPtr(fid) orelse return self.replied(self.replyError(tag, error.UnknownFid));
+        const st = self.ops.stat(self.ctx, self, fp) catch |e| switch (e) {
+            error.WouldBlock, error.WouldBlockRead => return .blocked,
+            else => |oe| return self.replied(self.replyError(tag, oe)),
+        };
         var blob: [1024]u8 = undefined;
-        const n = st.encode(&blob) catch |e| return self.replyError(tag, switch (e) {
+        const n = st.encode(&blob) catch |e| return self.replied(self.replyError(tag, switch (e) {
             error.ShortBuffer => error.IoError,
             error.BadMessage => error.BadMessage,
-        });
-        return self.reply(.{ .tag = tag, .body = .{ .rstat = .{ .stat = blob[0..n] } } });
+        }));
+        return self.replied(self.reply(.{ .tag = tag, .body = .{ .rstat = .{ .stat = blob[0..n] } } }));
     }
 
-    // -- wait queue (R-P6-2 / R-P6-5) --------------------------------------
+    // -- wait queue (R-P6-2 / R-P6-5, generalised: see park.zig) -----------
 
-    /// File a blocked Tread on the FIFO; send NO reply. Called from `handleRead`
-    /// when `Ops.read` returns `error.WouldBlockRead`.
-    fn park(self: *Server, tag: u16, fid: u32, offset: u64, count: usize) Error!void {
-        try self.parked.append(self.allocator, .{
-            .tag = tag,
-            .fid = fid,
-            .offset = offset,
-            .count = @intCast(count),
-        });
-    }
-
-    /// Is `tag` currently parked (in-flight)?
-    fn tagParked(self: *const Server, tag: u16) bool {
-        for (self.parked.items) |p| if (p.tag == tag) return true;
-        return false;
-    }
-
-    /// Index of the parked entry with tag `tag`, or null.
-    fn findParked(self: *const Server, tag: u16) ?usize {
-        for (self.parked.items, 0..) |p, i| if (p.tag == tag) return i;
-        return null;
-    }
-
-    /// Interrupt (Rerror "interrupted") and remove every parked read on `fid`,
-    /// in park order. Used by clunk (R-P6-5).
-    fn sweepParked(self: *Server, fid: u32) Error!void {
-        var i: usize = 0;
-        while (i < self.parked.items.len) {
-            if (self.parked.items[i].fid == fid) {
-                const p = self.parked.orderedRemove(i); // shift left; do not advance i
-                try self.replyError(p.tag, error.Interrupted);
-            } else i += 1;
-        }
-    }
-
-    /// Number of reads currently parked. Test/adapter observability.
+    /// Number of requests currently parked. Test/adapter observability.
     pub fn parkedCount(self: *const Server) usize {
-        return self.parked.items.len;
+        return self.parked.count();
     }
 
-    /// Device/adapter signal (R-P6-3): data MAY now exist on the file(s) whose
-    /// `qid.path == path`. Re-runs each matching parked read IN PARK ORDER,
-    /// looking the fid up afresh to recover its qid: a success sends Rread and
-    /// unparks; `WouldBlockRead` leaves it parked; any other error sends Rerror
-    /// and unparks. Returns the number of replies sent. SAFE to call from
-    /// inside `Ops.write` and from tick-level code — completions read into
-    /// `pbuf`, NEVER `rbuf`, because when a completion fires from within an
-    /// `Ops.write` the `rbuf` still aliases that in-flight Twrite's data
-    /// (R-P6-5 / O11 D6); replies encode into `wbuf` via `reply` as usual.
+    /// Re-dispatch EVERY parked request in park order; returns how many
+    /// completed (phase 14a, contract §3b).
+    pub fn retryParked(self: *Server) Error!usize {
+        return park.retryParked(self);
+    }
+
+    /// Device/adapter signal (R-P6-3), UNCHANGED since phase 6: data MAY now
+    /// exist on the file(s) whose `qid.path == path`; re-dispatch just those
+    /// parked requests, in park order. A thin alias over `retryParked`'s
+    /// filtered form (R-P14a-1) — `src/main_wasm.zig` and `dev/input.zig` call
+    /// it after a push batch. SAFE from inside `Ops.write`: retries read into
+    /// `pbuf`, never `rbuf`.
     pub fn completeReads(self: *Server, path: u64) Error!usize {
-        var replies: usize = 0;
-        var i: usize = 0;
-        while (i < self.parked.items.len) {
-            const p = self.parked.items[i];
-            const fp = self.fids.getPtr(p.fid);
-            // Fid gone (shouldn't happen — clunk sweeps) or a different file:
-            // leave parked, move on.
-            if (fp == null or fp.?.qid.path != path) {
-                i += 1;
-                continue;
-            }
-            const clamped: usize = @min(@as(usize, p.count), self.pbuf.len);
-            const n = self.ops.read(self.ctx, self, fp.?, p.offset, self.pbuf[0..clamped]) catch |e| switch (e) {
-                error.WouldBlockRead => {
-                    i += 1; // still no data — stays parked, order preserved
-                    continue;
-                },
-                else => |oe| {
-                    _ = self.parked.orderedRemove(i); // shift left; do not advance i
-                    try self.replyError(p.tag, oe);
-                    replies += 1;
-                    continue;
-                },
-            };
-            _ = self.parked.orderedRemove(i); // shift left; do not advance i
-            try self.reply(.{ .tag = p.tag, .body = .{ .rread = .{ .data = self.pbuf[0..n] } } });
-            replies += 1;
-        }
-        return replies;
+        return park.retryParkedPath(self, path);
     }
 };
 
@@ -542,240 +439,12 @@ pub const Server = struct {
 // ===========================================================================
 const testing = std.testing;
 
-/// In-memory duplex transport: `requests` are frames the test enqueues for the
-/// server to read; `replies` are frames the server writes back.
-const TestTransport = struct {
-    alloc: std.mem.Allocator,
-    requests: std.ArrayList([]u8) = .empty,
-    replies: std.ArrayList([]u8) = .empty,
-    closed: bool = false,
-
-    fn deinit(self: *TestTransport) void {
-        for (self.requests.items) |fr| self.alloc.free(fr);
-        for (self.replies.items) |fr| self.alloc.free(fr);
-        self.requests.deinit(self.alloc);
-        self.replies.deinit(self.alloc);
-    }
-
-    fn pushReq(self: *TestTransport, frame: []const u8) !void {
-        try self.requests.append(self.alloc, try self.alloc.dupe(u8, frame));
-    }
-
-    fn popReply(self: *TestTransport) ?[]u8 {
-        if (self.replies.items.len == 0) return null;
-        return self.replies.orderedRemove(0);
-    }
-
-    fn vWrite(ctx: *anyopaque, frame: []const u8) transport.Error!void {
-        const self: *TestTransport = @ptrCast(@alignCast(ctx));
-        if (frame.len < msg.header_size) return error.BadFrame;
-        if (std.mem.readInt(u32, frame[0..4], .little) != frame.len) return error.BadFrame;
-        const copy = self.alloc.dupe(u8, frame) catch unreachable;
-        self.replies.append(self.alloc, copy) catch unreachable;
-    }
-
-    fn vRead(ctx: *anyopaque, buf: []u8) transport.Error![]u8 {
-        const self: *TestTransport = @ptrCast(@alignCast(ctx));
-        if (self.requests.items.len == 0) return if (self.closed) error.Closed else error.WouldBlock;
-        const front = self.requests.items[0];
-        if (front.len > buf.len) return error.FrameTooBig;
-        @memcpy(buf[0..front.len], front);
-        _ = self.requests.orderedRemove(0);
-        self.alloc.free(front);
-        return buf[0..front.len];
-    }
-
-    fn vClose(ctx: *anyopaque) void {
-        const self: *TestTransport = @ptrCast(@alignCast(ctx));
-        self.closed = true;
-    }
-
-    const vtable = transport.Transport.VTable{ .writeMsg = vWrite, .readMsg = vRead, .close = vClose };
-
-    fn asTransport(self: *TestTransport) transport.Transport {
-        return .{ .ctx = self, .vtable = &vtable };
-    }
-};
-
-/// A tree node addressed by qid path. Directories list child paths by number.
-const Node = struct {
-    path: u64 = 0,
-    name: []const u8 = "",
-    is_dir: bool = false,
-    content: []const u8 = "",
-    writable: bool = false,
-    children: []const u64 = &.{},
-};
-
-/// Contract §10 fixture: root(1) dir → {index(2) "hello, snarf\n" ro,
-/// notes(3) writable, sub(4) dir → leaf(5) "leaf\n"}.
-const TestTree = struct {
-    nodes: [6]Node,
-    notes: std.ArrayList(u8),
-    alloc: std.mem.Allocator,
-
-    fn init(alloc: std.mem.Allocator) TestTree {
-        return .{
-            .alloc = alloc,
-            .notes = .empty,
-            .nodes = .{
-                .{}, // path 0 — unused
-                .{ .path = 1, .name = "", .is_dir = true, .children = &.{ 2, 3, 4 } },
-                .{ .path = 2, .name = "index", .content = "hello, snarf\n" },
-                .{ .path = 3, .name = "notes", .writable = true },
-                .{ .path = 4, .name = "sub", .is_dir = true, .children = &.{5} },
-                .{ .path = 5, .name = "leaf", .content = "leaf\n" },
-            },
-        };
-    }
-
-    fn deinit(self: *TestTree) void {
-        self.notes.deinit(self.alloc);
-    }
-};
-
-fn qidOf(n: *const Node) Qid {
-    return .{ .path = n.path, .qtype = .{ .dir = n.is_dir } };
-}
-
-fn nodeOf(fid: *Fid) *Node {
-    return @ptrCast(@alignCast(fid.ctx.?));
-}
-
-fn treeAttach(ctx: *anyopaque, srv: *Server, fid: *Fid, aname: []const u8) OpError!Qid {
-    _ = srv;
-    _ = aname;
-    const tree: *TestTree = @ptrCast(@alignCast(ctx));
-    fid.ctx = &tree.nodes[1];
-    return qidOf(&tree.nodes[1]);
-}
-
-fn treeWalk1(ctx: *anyopaque, srv: *Server, fid: *Fid, name: []const u8) OpError!Qid {
-    _ = srv;
-    const tree: *TestTree = @ptrCast(@alignCast(ctx));
-    const cur = nodeOf(fid);
-    for (cur.children) |cp| {
-        const child = &tree.nodes[cp];
-        if (std.mem.eql(u8, child.name, name)) {
-            fid.ctx = child;
-            return qidOf(child);
-        }
-    }
-    return error.FileDoesNotExist;
-}
-
-fn treeOpen(ctx: *anyopaque, srv: *Server, fid: *Fid, mode: u8) OpError!Qid {
-    _ = ctx;
-    _ = srv;
-    _ = mode;
-    return fid.qid;
-}
-
-fn treeRead(ctx: *anyopaque, srv: *Server, fid: *Fid, offset: u64, buf: []u8) OpError!usize {
-    _ = srv;
-    const tree: *TestTree = @ptrCast(@alignCast(ctx));
-    const node = nodeOf(fid);
-    if (node.is_dir) return 0; // fixtures return 0 for dir reads (R7)
-    const data = if (node.writable) tree.notes.items else node.content;
-    if (offset >= data.len) return 0;
-    const avail = data[@intCast(offset)..];
-    const n = @min(avail.len, buf.len);
-    @memcpy(buf[0..n], avail[0..n]);
-    return n;
-}
-
-fn treeWrite(ctx: *anyopaque, srv: *Server, fid: *Fid, offset: u64, data: []const u8) OpError!usize {
-    _ = srv;
-    const tree: *TestTree = @ptrCast(@alignCast(ctx));
-    const node = nodeOf(fid);
-    if (!node.writable) return error.PermissionDenied;
-    const off: usize = @intCast(offset);
-    const end = off + data.len;
-    if (end > tree.notes.items.len) tree.notes.resize(tree.alloc, end) catch return error.IoError;
-    @memcpy(tree.notes.items[off..end], data);
-    return data.len;
-}
-
-fn treeStat(ctx: *anyopaque, srv: *Server, fid: *Fid) OpError!stat {
-    _ = srv;
-    const tree: *TestTree = @ptrCast(@alignCast(ctx));
-    const node = nodeOf(fid);
-    const len: u64 = if (node.is_dir) 0 else if (node.writable) tree.notes.items.len else node.content.len;
-    return .{
-        .qid = qidOf(node),
-        .mode = if (node.is_dir) (stat.DMDIR | 0o555) else 0o644,
-        .length = len,
-        .name = node.name,
-    };
-}
-
-const tree_ops = Ops{
-    .attach = treeAttach,
-    .walk1 = treeWalk1,
-    .open = treeOpen,
-    .read = treeRead,
-    .write = treeWrite,
-    .stat = treeStat,
-};
-
-/// Heap-pinned harness so the transport/tree pointers held by `Server` stay
-/// stable across the whole test.
-const Fixture = struct {
-    alloc: std.mem.Allocator,
-    tt: TestTransport,
-    tree: TestTree,
-    srv: Server,
-    rbuf: [8192]u8 = undefined,
-
-    fn create(alloc: std.mem.Allocator) !*Fixture {
-        const self = try alloc.create(Fixture);
-        self.alloc = alloc;
-        self.tt = .{ .alloc = alloc };
-        self.tree = TestTree.init(alloc);
-        self.srv = try Server.init(alloc, self.tt.asTransport(), &tree_ops, &self.tree, 8192);
-        return self;
-    }
-
-    fn destroy(self: *Fixture) void {
-        self.srv.deinit();
-        self.tree.deinit();
-        self.tt.deinit();
-        self.alloc.destroy(self);
-    }
-
-    /// Encode `m`, feed it to the server, decode the single reply. The reply
-    /// bytes are copied into `self.rbuf` so the decoded slices stay valid.
-    fn transact(self: *Fixture, m: msg.Message) !msg.Message {
-        var enc: [8192]u8 = undefined;
-        const n = try msg.encode(&m, &enc);
-        return self.transactRaw(enc[0..n]);
-    }
-
-    fn transactRaw(self: *Fixture, frame: []const u8) !msg.Message {
-        try self.tt.pushReq(frame);
-        _ = try self.srv.step();
-        const reply = self.tt.popReply() orelse return error.NoReply;
-        defer self.alloc.free(reply);
-        @memcpy(self.rbuf[0..reply.len], reply);
-        return try msg.decode(self.rbuf[0..reply.len]);
-    }
-
-    fn doVersion(self: *Fixture) !void {
-        const r = try self.transact(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
-        try testing.expect(r.body == .rversion);
-    }
-
-    fn doAttach(self: *Fixture, fid: u32) !Qid {
-        const r = try self.transact(.{ .tag = 1, .body = .{ .tattach = .{ .fid = fid, .afid = msg.NOFID, .uname = "glenda", .aname = "" } } });
-        try testing.expect(r.body == .rattach);
-        return r.body.rattach.qid;
-    }
-
-    fn expectRerror(_: *Fixture, r: msg.Message, want: []const u8) !void {
-        try testing.expect(r.body == .rerror);
-        try testing.expectEqualStrings(want, r.body.rerror.ename);
-    }
-};
+/// The test harness (transport + contract §10 fixture tree) moved to
+/// `testsrv.zig` in phase 14a; the aliases keep every test body unchanged.
+const testsrv = @import("testsrv.zig");
+const TestTransport = testsrv.TestTransport;
+const TestTree = testsrv.TestTree;
+const Fixture = testsrv.Fixture;
 
 test "server: pre-version message rejected" {
     const f = try Fixture.create(testing.allocator);
@@ -1405,8 +1074,13 @@ test "server: version reset silently discards parked" {
     // directly): a first Tversion must reply ONLY Rversion and clear the queue.
     const f = try BlockFixture.create(testing.allocator);
     defer f.destroy();
-    try f.srv.parked.append(testing.allocator, .{ .tag = 10, .fid = 1, .offset = 0, .count = 4 });
-    try f.srv.parked.append(testing.allocator, .{ .tag = 11, .fid = 2, .offset = 0, .count = 4 });
+    // Phase 14a: a parked entry is now the raw T-frame (R-P14a-2), so the
+    // preload encodes the two Treads it used to spell as {tag,fid,offset,count}.
+    var pre: [64]u8 = undefined;
+    for ([_]struct { tag: u16, fid: u32 }{ .{ .tag = 10, .fid = 1 }, .{ .tag = 11, .fid = 2 } }) |x| {
+        const n = try msg.encode(&.{ .tag = x.tag, .body = .{ .tread = .{ .fid = x.fid, .offset = 0, .count = 4 } } }, &pre);
+        try testing.expect(try f.srv.parked.append(testing.allocator, x.tag, pre[0..n]));
+    }
     try testing.expectEqual(@as(usize, 2), f.srv.parkedCount());
 
     try f.feed(.{ .tag = msg.NOTAG, .body = .{ .tversion = .{ .msize = 8192, .version = msg.version9p } } });
@@ -1463,4 +1137,47 @@ test "server: completeReads from inside Ops.write does not corrupt the write" {
     // The write data survived intact (validated AFTER the in-write completion).
     try testing.expectEqualStrings("trigger", f.tree.last_write.items);
     try testing.expectEqual(@as(usize, 0), f.srv.parkedCount());
+}
+
+test "server: retryParked is completeReads without the path filter" {
+    // Phase 14a smoke (R-P14a-1): the same parked read completes identically
+    // through either entry point. The named battery is contract §4 T5-T10.
+    const f = try BlockFixture.create(testing.allocator);
+    defer f.destroy();
+    try f.setup();
+    try f.walkOpen(1, "a", msg.OREAD);
+
+    try f.feed(.{ .tag = 61, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 100 } } });
+    try testing.expectEqual(@as(usize, 1), f.srv.parkedCount());
+    // A path filter that matches nothing leaves it parked; so does an empty queue.
+    try testing.expectEqual(@as(usize, 0), try f.srv.completeReads(3));
+    try testing.expectEqual(@as(usize, 0), try f.srv.retryParked());
+    try testing.expectEqual(@as(usize, 1), f.srv.parkedCount());
+
+    try f.inject(2, "xyz");
+    try testing.expectEqual(@as(usize, 1), try f.srv.retryParked());
+    const r = (try f.popMsg()).?;
+    try testing.expectEqual(@as(u16, 61), r.tag);
+    try testing.expectEqualStrings("xyz", r.body.rread.data);
+    try testing.expectEqual(@as(usize, 0), f.srv.parkedCount());
+}
+
+test "server: the parked queue is bounded" {
+    const f = try BlockFixture.create(testing.allocator);
+    defer f.destroy();
+    try f.setup();
+    try f.walkOpen(1, "a", msg.OREAD);
+    var t: u16 = 0;
+    while (t < park.max_parked) : (t += 1) {
+        try f.feed(.{ .tag = t, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 1 } } });
+    }
+    try testing.expectEqual(park.max_parked, f.srv.parkedCount());
+    try testing.expect((try f.popMsg()) == null);
+
+    // One too many ⇒ refused on the spot, queue unchanged.
+    try f.feed(.{ .tag = 999, .body = .{ .tread = .{ .fid = 1, .offset = 0, .count = 1 } } });
+    const r = (try f.popMsg()).?;
+    try testing.expectEqual(@as(u16, 999), r.tag);
+    try testing.expectEqualStrings(park.too_many_parked, r.body.rerror.ename);
+    try testing.expectEqual(park.max_parked, f.srv.parkedCount());
 }
