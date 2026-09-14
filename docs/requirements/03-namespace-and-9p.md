@@ -52,6 +52,14 @@ which namespaces must exist and what they must let a client do. Protocol details
 
 ## 5. Revision log
 
+- **v5** (2026-09-14, phase 14a) — **R-9P-01's mandatory subset is now complete minus
+  auth.** `Tcreate`/`Tremove`/`Twstat` were "Unsupported" from phase 1 (contract ruling
+  R5) and are implemented framework-wide; `Tauth`/`Rauth` is the only pair left, still
+  optional (OQ-9P-3). A server that does not want them binds nothing and gets lib9p's
+  refusal strings. In the same wave **R-9P-13's parking generalised from reads to every
+  operation** (S-01 §§2, 4) — the precondition for R-9P-09's writable browser-local tree,
+  since an OPFS device cannot answer walk/open/create synchronously. No ID renumbered;
+  no new ID needed.
 - **v4** (2026-09-14, phase 13a) — **R-9P-13 widened** from "blocking reads" to *every 9P
   operation the editor issues*. The trigger was `/n/origin`: its frames arrive on a later
   tick, so even a Twalk cannot be answered synchronously, and every wave that reads
