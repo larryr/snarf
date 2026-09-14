@@ -92,6 +92,37 @@ std-only, still no node).
 > `b` = height) carries every later window resize. The shim sizes the canvas
 > backing store from `window.innerWidth/innerHeight` — at devicePixelRatio 1
 > (R-P12c-6) — before it calls either. ABI version = 5 (4→5).
+>
+> Revision log: 2026-09-14 (phase 14b) — the `host: fsOp` import shipped, reserved
+> since phase 5 and the LAST one in the sketch above to land, as
+> `fsOp(ptr, len, ticket)`: `ptr[0..len]` is ONE operation record and `ticket` is
+> the module's, echoed back untouched. Record format (little-endian,
+> `fs_op_version = 1`, `src/shim/FsRecord.zig` with the JS mirror in
+> `web/opfs.js`):
+>
+> ```
+> op[1] pathlen[2] path[pathlen] arg0[8] arg1[4] payloadlen[4] payload[…]
+> op ∈ {stat=1, list=2, read=3, write=4,
+>       create_file=5, create_dir=6, remove=7, truncate=8}
+> ```
+>
+> `read`: arg0 = offset, arg1 = count. `write`: arg0 = offset, payload = data,
+> arg1 = flags (bit0 = truncate-first, RESERVED and always 0 — OTRUNC is its own
+> `truncate` op). `create_*`: arg1 = the `5/open`-masked perm (advisory; OPFS
+> stores no mode). `truncate`: arg0 = the new length. `path` is absolute inside
+> the OPFS root, `/`-rooted, never empty, with no `.`/`..` and no trailing slash.
+>
+> Completions do NOT use the ring and do not share the `ws` pair: a SECOND
+> staging pair, `fsStage(len) → ptr` / `fsPush(ticket, status, ptr, len)`, so the
+> two record streams cannot interleave. `status` ∈ {ok=0, not_found=1, exists=2,
+> not_dir=3, is_dir=4, permission=5, quota=6, not_empty=7, io=8}; a non-`ok`
+> status carries an empty payload. Payloads: `stat` ⇒ `isdir[1] size[8]
+> mtime_ms[8]`; `list` ⇒ repeated `isdir[1] namelen[2] name[…]`; `read` ⇒ the
+> bytes; `write` ⇒ `count[4]`; everything else empty. The shim serializes
+> operations per PATH and runs different paths in parallel, and every completion
+> is delivered from a microtask — never re-entrantly inside `fsOp` (the module's
+> `fsPush` may call back into `fsOp`, which only enqueues). ABI version = 6
+> (5→6).
 
 ## 5. CI (sketch)
 
