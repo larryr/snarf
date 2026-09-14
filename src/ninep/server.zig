@@ -777,6 +777,8 @@ const BlockTree = struct {
     qa: std.ArrayList(u8) = .empty, // path 2 "a"
     qb: std.ArrayList(u8) = .empty, // path 3 "b"
     last_write: std.ArrayList(u8) = .empty, // ctl write payload, recorded AFTER completion (D6)
+    /// Phase 14a: make `stat` — a NON-read operation — park until flipped.
+    block_stat: bool = false,
 
     /// A 40-byte completion payload for test 10 — longer than a Twrite header
     /// (23 bytes) so, had completeReads read into `rbuf`, it would clobber the
@@ -838,8 +840,9 @@ const BlockTree = struct {
         self.last_write.appendSlice(self.alloc, data) catch return error.IoError;
         return data.len;
     }
-    fn statOp(ctx: *anyopaque, _: *Server, fid: *Fid) OpError!stat {
-        _ = ctx;
+    fn statOp(ctx: *anyopaque, _: *Server, fid: *Fid) OpBlockError!stat {
+        const self: *BlockTree = @ptrCast(@alignCast(ctx));
+        if (self.block_stat) return error.WouldBlock;
         const path = fid.qid.path;
         return .{
             .qid = BlockTree.qidOf(path),
@@ -1188,4 +1191,28 @@ test "server: the parked queue is bounded" {
     try testing.expectEqual(@as(u16, 999), r.tag);
     try testing.expectEqualStrings(park.too_many_parked, r.body.rerror.ename);
     try testing.expectEqual(park.max_parked, f.srv.parkedCount());
+}
+
+test "server: a non-read op parks and completes (phase 14a)" {
+    // The generalisation in one case: Tstat blocks, is answered by nothing,
+    // survives a retry that still blocks, then completes exactly once. The
+    // full per-op battery is contract §4 T6.
+    const f = try BlockFixture.create(testing.allocator);
+    defer f.destroy();
+    try f.setup();
+    f.tree.block_stat = true;
+
+    try f.feed(.{ .tag = 30, .body = .{ .tstat = .{ .fid = 0 } } });
+    try testing.expect((try f.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 1), f.srv.parkedCount());
+    try testing.expectEqual(@as(usize, 0), try f.srv.retryParked()); // still blocked
+    try testing.expectEqual(@as(usize, 1), f.srv.parkedCount());
+
+    f.tree.block_stat = false;
+    try testing.expectEqual(@as(usize, 1), try f.srv.retryParked());
+    const r = (try f.popMsg()).?;
+    try testing.expect(r.body == .rstat);
+    try testing.expectEqual(@as(u16, 30), r.tag);
+    try testing.expect((try f.popMsg()) == null);
+    try testing.expectEqual(@as(usize, 0), f.srv.parkedCount());
 }
