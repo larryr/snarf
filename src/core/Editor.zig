@@ -32,7 +32,7 @@ const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Load = @import("Load.zig");
-const expand = @import("expand.zig");
+const pendinglook = @import("pendinglook.zig");
 const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
 const wintag = @import("wintag.zig");
@@ -154,8 +154,8 @@ loads: std.ArrayList(*Load) = .empty,
 /// with a synchronous `access()` (look.c:706); Snarf can only answer with a
 /// `StatJob` that completes on a later frame, so the look waits here. A newer
 /// B3 cancels the older. Owned; stepped by `Load.stepAll`, freed by
-/// `expand.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
-pending_look: ?*expand.PendingLook = null,
+/// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
+pending_look: ?*pendinglook.PendingLook = null,
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,

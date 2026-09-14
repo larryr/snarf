@@ -21,12 +21,12 @@ const std = @import("std");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const select = @import("text/select.zig");
-const expand = @import("expand.zig");
+const pendinglook = @import("pendinglook.zig");
 const warp = @import("warp.zig");
 
 /// look3 (look.c:82-229, minus the deferred arms above). `[q0,q1)` are absolute
 /// rune coords in `t`. A bare click inside `t`'s own selection captures it
-/// (look.c:738-743); then the FILE arm (`expand.startLook`, look.c:783) gets
+/// (look.c:738-743); then the FILE arm (`pendinglook.startLook`, look.c:783) gets
 /// first refusal and, if the text is not a file name, the literal search arm
 /// below runs on the alnum expansion (look.c:786-796). `reverse` selects the
 /// backward scan (Shift-B3).
@@ -49,13 +49,13 @@ pub fn look(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool) Text.Err
         e1 = t.q1;
         if (t.what == .tag) jump = false;
     }
-    if (try expand.startLook(ed, t, e0, e1, reverse, jump)) return; // look.c:783
+    if (try pendinglook.startLook(ed, t, e0, e1, reverse, jump)) return; // look.c:783
     return literal(ed, t, e0, e1, reverse, jump);
 }
 
 /// The literal (within-window search) arm of `look3`: the alnum expansion
 /// (look.c:786-791) and `search` (look.c:200-221's else branch). Reached
-/// directly when the text is not a file name, and from `expand.stepPending`
+/// directly when the text is not a file name, and from `pendinglook.stepPending`
 /// when the parked existence check says it is not.
 pub fn literal(ed: *Editor, t: *Text, q0: usize, q1: usize, reverse: bool, jump: bool) Text.Error!void {
     var e0 = q0;
@@ -393,7 +393,7 @@ test "look: b3 in the tag searches the body" {
 //
 // TWO TRAPS this test must dodge (phase-15 report, "Public API for the test
 // writer"):
-//   (a) the click must NOT be treated as a file name, or `expand.startLook`
+//   (a) the click must NOT be treated as a file name, or `pendinglook.startLook`
 //       parks a `StatJob` and the warp lands a frame or two later via
 //       `Load.addressAndShow` instead of synchronously here. `startLook`
 //       reaches its namespace/StatJob arm only after `ed.row orelse return

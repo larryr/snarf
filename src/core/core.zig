@@ -34,6 +34,9 @@ pub const Load = @import("Load.zig");
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).
 pub const expand = @import("expand.zig");
+/// The parked half of the B3 look (R-P13b-2) — `expandfile`'s asynchronous
+/// existence check, its own file since phase 16a.
+pub const pendinglook = @import("pendinglook.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");

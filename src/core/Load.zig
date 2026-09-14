@@ -38,7 +38,7 @@ const File = @import("File.zig");
 const Text = @import("text/Text.zig");
 const Window = @import("Window.zig");
 const dirwin = @import("dirwin.zig");
-const expand = @import("expand.zig");
+const pendinglook = @import("pendinglook.zig");
 const ast = @import("edit/ast.zig");
 const addr_eval = @import("edit/addr.zig");
 const parse = @import("edit/parse.zig");
@@ -163,7 +163,7 @@ pub fn stepAll(ed: *Editor) Text.Error!void {
             ed.allocator.destroy(ld);
         } else i += 1;
     }
-    try expand.stepPending(ed); // the parked B3 look (R-P13b-2)
+    try pendinglook.stepPending(ed); // the parked B3 look (R-P13b-2)
 }
 
 /// `textclose`'s backpointer hygiene (text.c:109-118) extended to the
@@ -171,7 +171,7 @@ pub fn stepAll(ed: *Editor) Text.Error!void {
 /// `deinit` is tombstone-safe. Reached from `Editor.dropTextRefs`.
 pub fn dropWindow(ed: *Editor, w: *Window) void {
     dropLoadsFor(ed, w);
-    expand.dropWindow(ed, w);
+    pendinglook.dropWindow(ed, w);
 }
 
 /// Abandon every in-flight load targeting `w` (the load half of `dropWindow`;
@@ -197,7 +197,7 @@ pub fn deinitAll(ed: *Editor) void {
         ed.allocator.destroy(ld);
     }
     ed.loads.deinit(ed.allocator);
-    expand.dropPending(ed);
+    pendinglook.dropPending(ed);
 }
 
 /// One state of this load. Never blocks; never pumps (R-P13a-3) — the entry
