@@ -9,6 +9,11 @@ pub const transport = @import("transport.zig");
 pub const errors = @import("errors.zig");
 pub const chan = @import("chan.zig");
 pub const Client = @import("client.zig").Client;
+/// The client's SYNCHRONOUS protocol operations (version/attach/walk/open/read/
+/// write/clunk/stat/create/remove/wstat/flush) — split out of `client.zig` in
+/// phase 16a; `Client` re-exports every one as a decl alias, so call sites use
+/// `cl.walk(...)` as before.
+pub const client_ops = @import("client_ops.zig");
 /// The ASYNCHRONOUS half of the client: generic non-blocking tickets, one per
 /// outstanding T-message (R-9P-13, S-01 §3.2).
 pub const tickets = @import("tickets.zig");
