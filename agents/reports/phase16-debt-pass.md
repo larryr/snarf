@@ -87,7 +87,15 @@ note; `colgrow` (but=1); `textbsinsert`; `Kdown`; tab width 72→36; `applyAddre
 (disproved); `dirName` doc; `Conn` split.
 
 **Still open:** `core/text/Text.zig` 498, `dev/opfs.zig` 412, `core/Load.zig` 404,
-`core/served/fsys.zig` 539 pre-test lines (Text/fsys pre-existing); `colgrow` `but<0/2/3` arms
+`core/served/fsys.zig` 539 pre-test lines (Text/fsys pre-existing); **and eleven further
+pre-existing files over the cap that no phase report had flagged** (the gate's full scan,
+"lines before the first `test`" — a metric that also counts test harnesses declared above the
+first test block): `dev/draw_backend.zig` 818, `ninep/nsdir.zig` 760, `dev/input.zig` 585,
+`draw/frame/Frame.zig` 514, `ninep/server.zig` 450, `core/edit/regx_exec.zig` 432,
+`core/Buffer.zig` 432, `core/edit/parse.zig` 417, `core/served/xfid.zig` 408,
+`core/edit/regx_compile.zig` 407, `draw/Font.zig` 406 — candidates for a second structure
+pass (the harness-heavy ones, `draw_backend`/`nsdir`/`input`, mostly need their test fixtures
+moved to `*_testsrv.zig` files as 16a did for draw/opfs); `colgrow` `but<0/2/3` arms
 and `coladd`'s grow loop (cols.c:81-87 — would move `coladd` geometry goldens); served body
 write still plain-insert (`xfid.c:597` `textbsinsert`); `Queue.clear` on Tversion drops fid
 state without `Ops.clunk`; wasm ≈ 2.3 MB ReleaseSafe (+70 KiB this pass: colgrow, bsinsert,
