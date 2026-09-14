@@ -267,6 +267,7 @@ function installResize(pushEvent) {
   }
   window.addEventListener("resize", onResize);
   window.addEventListener("orientationchange", onResize);
+  onResize(); // catch a resize that landed between init(w,h) and these listeners
 }
 
 // Device-space (x,y) from a pointer event, relative to the canvas top-left
