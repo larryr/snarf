@@ -302,16 +302,21 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
 /// `moveto` (look.c:897) is issued as a `/dev/mouse` write when `jump`
 /// (R-P15-3): the native host warps the pointer into the window that just
 /// opened, the browser host ignores it (R-EDIT-25's divergence, made literal).
-pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump: bool) Text.Error!void {
+pub fn addressAndShow(ed: *Editor, w: *Window, a0: ?[]const u21, jump_in: bool) Text.Error!void {
     const t = &w.body;
     var r = File.Range{ .q0 = t.q0, .q1 = t.q1 }; // look.c:876 eval=FALSE default
+    // look.c:892 `if(eval == FALSE) e->jump = FALSE` — an out-of-order OR
+    // unparseable address suppresses the warp (review fix, phase 15).
+    var jump = jump_in;
     if (a0) |ap| {
         if (applyAddress(ed, t, ap)) |got| {
             if (got.q0 > got.q1) {
                 ed.warning("addresses out of order\n", .{}); // look.c:882-884
+                jump = false;
             } else r = got;
         } else |e| {
             ed.warning("{s}\n", .{addr_eval.describe(e)});
+            jump = false;
         }
     }
     try t.show(r.q0, r.q1, true); // look.c:894 textshow(t, r.q0, r.q1, 1)
