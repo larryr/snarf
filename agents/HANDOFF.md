@@ -6,19 +6,25 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase14b`** (worktree `../snarf-wt/phase14b`, 2026-09-14, larry's Mac, local only) —
-  OPFS device: NEW `src/dev/opfs*.zig` (parked `Ops` over a `Requester` vtable), `src/opfs_glue.zig`,
-  `fsOp` import + `fsStage`/`fsPush` exports (**ABI v6**), `web/shim.js` (+ maybe `web/opfs.js`),
-  `ns_boot.zig` mount `/mnt/opfs`, smoke stub, S-02 §4 / S-06 §4 / R-03 docs. Owns those files.
-  Contract `agents/contracts/phase14b-opfs.md` (supersedes the 2026-09-02 draft
-  `phase14-opfs.md`, which stays as history).
+- **`phase15`** (worktree `../snarf-wt/phase15`, 2026-09-14, larry's Mac, local only) — ADR-0005
+  NATIVE-HOST SPIKE: NEW `src/host/devdraw/{wsys,dev_draw,dev_input}.zig`, `main_native.zig`
+  rewrite, `build.zig` native exe; the ONE core change = warp requests as `/dev/mouse` writes
+  (R-EDIT-25 amendment). Contract `agents/contracts/phase15-native-spike.md`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
 
-- **Phases 1–12, 12b–12e, 13a, 13b, 14a are MERGED to `main`; `main` is green.**
-  639/639 tests (≈3.6 s), node smoke 30/30, `zig fmt` clean, Zig 0.16.0, **ABI v5**, wasm
-  ≈ 2089 KiB ReleaseSafe (user keeps ReleaseSafe; size is a debt-pass item).
+- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b are MERGED to `main`; `main` is green.**
+  665/665 tests (≈3.5 s), node smoke 40/40, `zig fmt` clean, Zig 0.16.0, **ABI v6**, wasm
+  ≈ 2186 KiB ReleaseSafe (user keeps ReleaseSafe; size is a debt-pass item).
+- **Phase 14b MERGED (`851d0dc`, 2026-09-14) — `/mnt/opfs`** — see agents/reports/phase14b-opfs.md
+  and REVIEW-NOTES: `dev/opfs*.zig` (parked ops over a `Requester`; slot table pending→ready→
+  taken), `shim/FsRecord.zig` op-record codec (version 1), `env.fsOp` + `fsStage`/`fsPush`
+  (**ABI v6**), `web/opfs.js`, fourth boot pipe, unconditional mount. R-9P-09 OPFS half DONE;
+  `/mnt/host` (picker) and `/dev/storage` remain. DEBT (pass): tentative-newfid slot leak on a
+  flushed parked walk (framework: `handleWalk` should `ops.clunk` a discarded newfid); 6×
+  `stat` per file open (per-path StatReply memo); writable-per-chunk writes; `bad offset`
+  string; `main_wasm.zig` 458 / `opfs.zig` 440 pre-test.
 - **Phase 14a MERGED (`afff8ac`, 2026-09-14)** — see agents/reports/phase14a-server-parking-create.md:
   ANY `Ops` fn may return `park.WouldBlock` (NEW `ninep/park.zig`, raw-frame FIFO, bound 64,
   `retryParked`; `completeReads(path)` alias kept — `dev/input`/`fsys`/`origin` unchanged);
@@ -130,10 +136,10 @@ authorization for this file only). Prune freely — git keeps history.
   under per-agent contracts → orchestrator Inspect → merge. (The original plan file
   lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
   and this file ARE the plan.)
-- **NEXT: phase 14b OPFS device** (`dev/opfs.zig` over 14a's parked ops, `fsOp` import +
-  `fsStage`/`fsPush` exports, **ABI v6**, `/mnt/opfs` mounted at boot, smoke stub; the
-  2026-09-02 draft `agents/contracts/phase14-opfs.md` is superseded by
-  `phase14b-opfs.md` when it lands). Then the ADR-0005 native-host spike, then the debt pass. — R-EDIT-03 + paper
+- **NEXT: phase 15 — the ADR-0005 native-host SPIKE** (core natively + `devdraw` adapter as
+  9P devices under `src/host/devdraw/`; warp = `/dev/mouse` write; pass criterion = zero
+  adapter-forced changes in core/draw/ninep). Then the DEBT PASS (list above + 12b/13b/14a
+  items), then recommendations to Larry. — R-EDIT-03 + paper
   §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
   columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
   `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:

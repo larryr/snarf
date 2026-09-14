@@ -11,6 +11,33 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 14b — `/mnt/opfs` (merged `851d0dc`, 2026-09-14) — ABI v6
+
+**For you — try it:** reload; B3 `mnt/` then `opfs/`: an empty directory window on the
+browser's private file system (`/mnt/opfs/`). It stays empty until `Put` exists (next wave
+candidates). To inspect it from devtools: `for await (const e of (await
+navigator.storage.getDirectory()).entries()) console.log(e)`. To seed a file for browsing:
+`const d = await navigator.storage.getDirectory(); const f = await
+d.getFileHandle("hello.txt",{create:true}); const w = await f.createWritable(); await
+w.write("hi from opfs\n"); await w.close();` then B2 `Get` in the `/mnt/opfs/` tag and B3
+`hello.txt`.
+
+**What changed:** every 9P op on this tree parks while the browser answers (14a's framework);
+completions travel over a new `fsOp` import + `fsStage`/`fsPush` exports (ABI v6, so the page
+and module must match — a stale tab shows an ABI mismatch until reloaded). Walk/open/read/
+write/create/remove/stat/wstat(length) all work over the wire; the smoke test drives the
+real module from `mnt/` into `opfs/`, opens a file, and `Get`s a new one.
+
+**Decisions made for you:** `/mnt/opfs` is mounted unconditionally; a browser without OPFS
+gets `i/o error` on first use plus one console line (simpler than a conditional mount). No
+rename (Chromium-only `move()`); `wstat` supports length only. `is a directory` uses the
+kernel's `file is a directory`.
+
+**Debt for the pass:** a parked walk that is flushed leaks one slot (framework should clunk a
+discarded tentative fid); six `stat` round trips per file open (a per-path cache); one OPFS
+writable per 8 KiB chunk (quadratic large writes — matters for `Put`); `main_wasm.zig` 458 and
+`opfs.zig` 440 pre-test lines; `bad offset` string. wasm ≈ 2.19 MB ReleaseSafe.
+
 ## Phase 14a — 9P server framework: parking for every op, create/remove/wstat (merged `afff8ac`, 2026-09-14)
 
 **For you:** nothing visible; this is the server half of OPFS. Reload is safe.
