@@ -246,7 +246,7 @@ try {
 }
 check("origin absent: 10s dial timeout crossed without trap", () => !timeoutTrapped);
 
-// ---- phase 12: /mnt/origin against a real snarf-origin --------------------
+// ---- phase 12: /n/origin against a real snarf-origin --------------------
 //
 // Spawns zig-out/bin/snarf-origin (its port is baked by `zig build -Dport=`;
 // the banner is parsed for the actual value — if the port is busy, e.g. your

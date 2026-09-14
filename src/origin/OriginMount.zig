@@ -1,7 +1,7 @@
-//! OriginMount — `/mnt/origin`, the browser's WebSocket 9P mount (R-P12-5/6/7).
+//! OriginMount — `/n/origin`, the browser's WebSocket 9P mount (R-P12-5/6/7).
 //!
 //! file-as-struct (S-07 P-1): this file *is* the mount. It owns one
-//! `shim.WsTransport`, one `ninep.Client` over it, and the `/mnt/origin` entry
+//! `shim.WsTransport`, one `ninep.Client` over it, and the `/n/origin` entry
 //! in the editor's `ninep.mount.Namespace`. It is a BOOT-GLUE type — it sees
 //! both `ninep` and `shim`, which `core` may never do (S-07 §6) — so it lives in
 //! its own module rather than in `core`, and `src/main_wasm.zig` is its only
@@ -18,9 +18,16 @@
 //!
 //! So version+attach are driven HERE, one step per `poll()`, at the frame level
 //! (`ninep.msg.encode`/`decode` straight onto the transport). When Rattach lands
-//! the negotiated msize is written into the `Client` and `/mnt/origin` is bound;
-//! from then on the `Client` owns the transport and callers use its ticket API
+//! the negotiated msize is written into the `Client`; one more hand-driven step
+//! (`binding`) walks the origin's `bin` directory, and only then are `/n/origin`
+//! and (if the export has a `bin`) `/bin` bound in one go. From then on the
+//! `Client` owns the transport and callers use its ticket API
 //! (`beginRead`/`checkRead`), the only async surface `ninep` offers today.
+//!
+//! The bin walk MUST happen before `mounted`: while the handshake runs,
+//! `OriginMount` is the sole reader of the transport, so a raw `recv()` cannot
+//! steal a frame from the `Client`. Once mounted, the `Client` drains its own
+//! transport and this file must not read frames any more.
 //!
 //! GAP (reported, not patched): `ninep` has no async ticket for walk/open/clunk,
 //! so nothing but a read can be driven over this transport yet. Reaching real
@@ -30,9 +37,10 @@
 //! ## Lifecycle
 //!
 //!   idle ──dial()──▶ dialing ──wsOpen──▶ versioning ──Rversion──▶ attaching
-//!                                                     ──Rattach──▶ mounted
-//!   any of dialing/versioning/attaching ──close|error|10 s──▶ down (mount absent)
-//!   mounted ──close|error──▶ down (fids dead, `/mnt/origin` unbound)
+//!                       ──Rattach──▶ binding ──Rwalk|Rerror──▶ mounted
+//!   any of dialing/versioning/attaching/binding ──close|error|10 s──▶ down
+//!                                                          (mount absent)
+//!   mounted ──close|error──▶ down (fids dead, `/n/origin` and `/bin` unbound)
 //!
 //! There is no automatic retry (R-P12-6): `Reconnect` calls `dial()` again, which
 //! tears the old connection down and builds a FRESH transport (new connection id)
@@ -51,8 +59,17 @@ const Namespace = ninep.mount.Namespace;
 const Client = ninep.Client;
 const msg = ninep.msg;
 
-/// Where the origin tree lands in the namespace (R-P12-5).
-pub const mount_point = "/mnt/origin";
+/// Where the origin tree lands in the namespace (R-P12-5, R-9P-10). `/n` is
+/// Plan 9's network-mount directory (`ns(1)`, `srv(4)`: `/n/<service>`); the
+/// user chose it over the phase-12 spelling under `/mnt` on 2026-09-14.
+pub const mount_point = "/n/origin";
+
+/// The origin's `bin` directory is unioned into `/bin` with MAFTER, so command
+/// lookup can be acme's "the window's directory, then the path" (R-EDIT-20,
+/// exec.c `run()`), with `/bin` a union exactly as it is on Plan 9. An export
+/// with no `bin` simply contributes nothing.
+pub const bin_point = "/bin";
+pub const bin_name = "bin";
 
 /// R-P12-5: a dial that has not produced Rattach within this many milliseconds
 /// is abandoned and the mount is simply absent. Measured from the first `poll`
@@ -71,25 +88,26 @@ pub const uname = "larry";
 pub const closed_text = "websocket closed";
 
 /// Where the connection is. `down` is terminal until the next `dial()`.
-pub const Phase = enum { idle, dialing, versioning, attaching, mounted, down };
+pub const Phase = enum { idle, dialing, versioning, attaching, binding, mounted, down };
 
 /// What `poll` observed this tick. Exactly one of these turns into exactly one
 /// `ed.warning` line in the caller (R-P12-5/6/7); `none` is the common case.
 pub const Event = union(enum) {
     /// Nothing changed.
     none,
-    /// version+attach completed and `/mnt/origin` is bound.
+    /// version+attach completed and `/n/origin` (plus `/bin`, when the export
+    /// has a `bin` directory) is bound.
     mounted,
     /// The dial never completed (timeout, refused, protocol violation). The
     /// mount is ABSENT and boot is otherwise identical (R-P12-5).
     failed: []const u8,
-    /// A live mount died: `/mnt/origin` is unbound and every origin fid is dead
+    /// A live mount died: `/n/origin` is unbound and every origin fid is dead
     /// (R-P12-6). No automatic redial.
     lost: []const u8,
 };
 
 allocator: std.mem.Allocator,
-/// The editor's mount table; `/mnt/origin` is bound into and removed from it.
+/// The editor's mount table; `/n/origin` is bound into and removed from it.
 ns: *Namespace,
 /// The current connection. Replaced wholesale by each `dial()`.
 ws: WsTransport,
@@ -99,6 +117,9 @@ ws: WsTransport,
 client: ?Client = null,
 /// The attach fid the mount resolves through; meaningless unless `mounted`.
 root_fid: u32 = 0,
+/// The fid on the origin's `bin` directory, once `/bin` carries it as a union
+/// member; null when the export has no `bin` (or nothing is mounted).
+bin_fid: ?u32 = null,
 phase: Phase = .idle,
 /// Next connection id. B1 ruling 6: a FRESH id per dial, so a late record from
 /// a previous socket is rejected by `push` instead of relying on JS guards.
@@ -192,7 +213,7 @@ pub fn poll(self: *OriginMount, now_ms: u32) Event {
             if (self.ws.state() == .closed) return self.lose();
             return .none;
         },
-        .dialing, .versioning, .attaching => {},
+        .dialing, .versioning, .attaching, .binding => {},
     }
 
     // The socket died mid-handshake: the mount is simply absent (R-P12-5).
@@ -210,6 +231,7 @@ pub fn poll(self: *OriginMount, now_ms: u32) Event {
         .dialing => self.stepDialing(),
         .versioning => self.stepVersioning(),
         .attaching => self.stepAttaching(),
+        .binding => self.stepBinding(),
         else => unreachable,
     };
 }
@@ -244,22 +266,66 @@ fn stepVersioning(self: *OriginMount) Event {
 }
 
 /// Waiting for Rattach. On success adopt the negotiated session into the
-/// `Client` and bind `/mnt/origin`.
+/// `Client`, then ask for the origin's `bin` directory (Twalk on tag 0, one
+/// component) before binding anything.
 fn stepAttaching(self: *OriginMount) Event {
     const m = (self.recv() catch |e| return self.fail(@errorName(e))) orelse return .none;
     if (m.tag != 0) return self.fail("bad Rattach tag");
-    switch (m.body) {
-        .rattach => {},
+    const root_qid = switch (m.body) {
+        .rattach => |a| a.qid,
         .rerror => |e| return self.fail(e.ename),
         else => return self.fail("bad Rattach"),
-    }
+    };
     // Adopt the hand-driven handshake into the Client (ruling R-P12-B2-1): the
     // only session state `version()` would have set that later ops depend on is
     // `msize` — `next_fid`/`next_tag` already start where a fresh session does,
-    // and `fids` is only a qid cache `walk` falls back out of.
+    // and `fids` is only a qid cache `walk` falls back out of. Seed that cache
+    // with the root qid Rattach just gave us, so a later pure clone of the
+    // mount's root fid knows it is a directory.
     const c = self.clientPtr().?;
     c.msize = self.neg_msize;
-    self.ns.bind(mount_point, c, self.root_fid) catch |e| return self.fail(@errorName(e));
+    c.fids.put(c.allocator, self.root_fid, root_qid) catch {};
+
+    const bin_fid = c.allocFid();
+    self.send(.{ .tag = 0, .body = .{
+        .twalk = msg.Body.Twalk.init(self.root_fid, bin_fid, &.{bin_name}),
+    } }) catch |e| {
+        c.freeFid(bin_fid);
+        return self.fail(@errorName(e));
+    };
+    self.bin_fid = bin_fid;
+    self.phase = .binding;
+    return .none;
+}
+
+/// Waiting for the `bin` Rwalk. Either way the mount comes up: an origin need
+/// not export commands, so a walk that fails just leaves `/bin` alone
+/// (contract §3c). A failed one-element Twalk leaves newfid untouched
+/// server-side (5/walk), so the fid number is safe to recycle.
+fn stepBinding(self: *OriginMount) Event {
+    const m = (self.recv() catch |e| return self.fail(@errorName(e))) orelse return .none;
+    if (m.tag != 0) return self.fail("bad Rwalk tag");
+    const c = self.clientPtr().?;
+    var have_bin = false;
+    switch (m.body) {
+        .rwalk => |w| have_bin = w.nwqid == 1 and w.wqid[0].qtype.dir,
+        .rerror => {}, // no `bin` in this export
+        else => return self.fail("bad Rwalk"),
+    }
+    if (!have_bin) {
+        if (self.bin_fid) |f| c.freeFid(f);
+        self.bin_fid = null;
+    }
+
+    self.ns.bind(mount_point, c, self.root_fid, .replace) catch |e| return self.fail(@errorName(e));
+    if (self.bin_fid) |f| {
+        // MAFTER: the origin's commands go at the END of the union, so a local
+        // `/bin` member (when one exists) still wins (chan.c:744-753).
+        self.ns.bind(bin_point, c, f, .after) catch |e| {
+            self.ns.unmount(mount_point) catch {}; // all or nothing
+            return self.fail(@errorName(e));
+        };
+    }
     self.phase = .mounted;
     self.reason_len = 0;
     return .mounted;
@@ -273,7 +339,7 @@ pub fn clientPtr(self: *OriginMount) ?*Client {
     return null;
 }
 
-/// True while `/mnt/origin` resolves.
+/// True while `/n/origin` resolves.
 pub fn isMounted(self: *const OriginMount) bool {
     return self.phase == .mounted;
 }
@@ -335,23 +401,18 @@ fn setReason(self: *OriginMount, why: []const u8) void {
     self.reason_len = n;
 }
 
-/// Remove `/mnt/origin` from the mount table.
+/// Remove this mount's rows from the table: our member of the `/bin` union
+/// first (leaving any other member in place), then `/n/origin` outright.
+/// Both must be gone before `lost`/`failed` reaches the editor (R-P12-6).
 ///
-/// GAP (reported, not patched): `ninep.mount.Namespace` has `mount`/`bind` but
-/// no `unmount`, and R-P12-6 requires an unbind. Rather than widen a fenced
-/// framework file mid-phase, this drops the entry through the table's own
-/// public fields — exactly what a `Namespace.unmount(prefix)` would do (free the
-/// owned prefix, remove the row). The framework should grow that method before a
-/// SECOND runtime-managed mount exists.
+/// The phase-12 GAP is closed: `Namespace` grew `unmount`/`unbindTarget` in
+/// phase 12d, so this no longer reaches into the table's fields.
 fn unbind(self: *OriginMount) void {
-    const ns = self.ns;
-    for (ns.entries.items, 0..) |e, i| {
-        if (std.mem.eql(u8, e.prefix, mount_point)) {
-            ns.allocator.free(e.prefix);
-            _ = ns.entries.orderedRemove(i);
-            return;
-        }
+    if (self.clientPtr()) |c| {
+        if (self.bin_fid) |f| self.ns.unbindTarget(bin_point, c, f) catch {};
     }
+    self.bin_fid = null;
+    self.ns.unmount(mount_point) catch {};
 }
 
 // ===========================================================================
@@ -369,8 +430,25 @@ fn feed(om: *OriginMount, m: msg.Message) !void {
     om.push(om.ws.id, .data, buf[0..n]);
 }
 
-/// Drive `dial → open → Rversion → Rattach`, asserting the mount comes up.
+/// Rwalk for the `bin` lookup: `found` decides whether the export has one.
+fn feedBinWalk(om: *OriginMount, found: bool) !void {
+    if (found) {
+        try feed(om, .{ .tag = 0, .body = .{
+            .rwalk = msg.Body.Rwalk.init(&.{.{ .path = 2, .qtype = .{ .dir = true } }}),
+        } });
+    } else {
+        try feed(om, .{ .tag = 0, .body = .{ .rerror = .{ .ename = "does not exist" } } });
+    }
+}
+
+/// Drive `dial → open → Rversion → Rattach → Rwalk(bin)`, asserting the mount
+/// comes up with the origin's `bin` in the `/bin` union.
 fn bringUp(om: *OriginMount, now: u32) !void {
+    try bringUpBin(om, now, true);
+}
+
+/// `bringUp` with control over whether the export has a `bin` directory.
+fn bringUpBin(om: *OriginMount, now: u32, has_bin: bool) !void {
     om.dial();
     om.push(om.ws.id, .open, "");
     try testing.expectEqual(Event.none, om.poll(now)); // sends Tversion
@@ -381,6 +459,8 @@ fn bringUp(om: *OriginMount, now: u32) !void {
     try feed(om, .{ .tag = 0, .body = .{
         .rattach = .{ .qid = .{ .path = 1, .qtype = .{ .dir = true } } },
     } });
+    try testing.expectEqual(Event.none, om.poll(now)); // sends Twalk bin
+    try feedBinWalk(om, has_bin);
     try testing.expect(om.poll(now) == .mounted);
 }
 
@@ -409,8 +489,8 @@ test "origin: a dial that never completes leaves the namespace working" {
     try testing.expectEqual(Phase.down, om.phase);
     try testing.expectEqual(Event.none, om.poll(1_000_000));
 
-    // `/mnt/origin` is absent; the rest of the namespace still resolves.
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin/version"));
+    // `/n/origin` is absent; the rest of the namespace still resolves.
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin/version"));
     try testing.expectEqualStrings("/dev", (try ns.resolve("/dev/mouse")).entry.prefix);
 }
 
@@ -438,10 +518,10 @@ test "origin: a refused dial is one warning and an absent mount" {
     const ev = om.poll(10);
     try testing.expect(ev == .failed);
     try testing.expectEqualStrings("connection refused", ev.failed);
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin"));
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
 }
 
-test "origin: version+attach binds /mnt/origin" {
+test "origin: version+attach binds /n/origin and unions the origin bin into /bin" {
     var ns = Namespace.init(testing.allocator);
     defer ns.deinit();
     var om = OriginMount.init(testing.allocator, &ns);
@@ -450,13 +530,32 @@ test "origin: version+attach binds /mnt/origin" {
     try bringUp(&om, 100);
     try testing.expect(om.isMounted());
 
-    const r = try ns.resolve("/mnt/origin/version");
-    try testing.expectEqualStrings("/mnt/origin", r.entry.prefix);
+    const r = try ns.resolve("/n/origin/version");
+    try testing.expectEqualStrings("/n/origin", r.entry.prefix);
     try testing.expectEqualStrings("version", r.remainder);
-    try testing.expectEqual(om.clientPtr().?, r.entry.target.client);
-    try testing.expectEqual(om.root_fid, r.entry.target.root_fid);
+    try testing.expectEqual(om.clientPtr().?, r.entry.first().client);
+    try testing.expectEqual(om.root_fid, r.entry.first().root_fid);
     // The negotiated msize was adopted into the Client (ruling R-P12-B2-1).
     try testing.expectEqual(@as(u32, 8192), om.clientPtr().?.msize);
+
+    // ...and the origin's `bin` is the one (MAFTER) member of `/bin`.
+    const b = try ns.resolve("/bin");
+    try testing.expectEqual(@as(usize, 1), b.entry.targets.items.len);
+    try testing.expectEqual(om.bin_fid.?, b.entry.first().root_fid);
+    try testing.expectEqual(ninep.mount.BindFlag.after, b.entry.first().flag);
+}
+
+test "origin: an export without bin mounts anyway and leaves /bin untouched" {
+    var ns = Namespace.init(testing.allocator);
+    defer ns.deinit();
+    var om = OriginMount.init(testing.allocator, &ns);
+    defer om.deinit();
+
+    try bringUpBin(&om, 100, false);
+    try testing.expect(om.isMounted());
+    try testing.expectEqual(@as(?u32, null), om.bin_fid);
+    try testing.expectEqualStrings("/n/origin", (try ns.resolve("/n/origin")).entry.prefix);
+    try testing.expectError(error.NotMounted, ns.resolve("/bin"));
 }
 
 test "origin: the handshake sends Tversion then Tattach, and never parks" {
@@ -520,7 +619,7 @@ test "origin: an Rerror to Tattach fails the mount with the server's text" {
     const ev = om.poll(3);
     try testing.expect(ev == .failed);
     try testing.expectEqualStrings("permission denied", ev.failed);
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin"));
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
 }
 
 test "origin: a disconnect fails outstanding tickets, kills fids, unbinds" {
@@ -543,8 +642,9 @@ test "origin: a disconnect fails outstanding tickets, kills fids, unbinds" {
     try testing.expect(ev == .lost);
     try testing.expectEqualStrings("1006 abnormal closure", ev.lost);
 
-    // R-P12-6: the mount is gone...
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin/version"));
+    // R-P12-6: the mount is gone, and so is our member of the `/bin` union...
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin/version"));
+    try testing.expectError(error.NotMounted, ns.resolve("/bin"));
     // ...the outstanding ticket fails...
     try testing.expectError(error.Closed, c.checkRead(ticket));
     // ...and every origin fid is dead, however it is touched.
@@ -584,11 +684,11 @@ test "origin: Reconnect re-dials on a fresh connection and re-binds" {
     try bringUp(&om, 30);
     try testing.expect(om.ws.id != first_id);
     try testing.expect(om.isMounted());
-    const r = try ns.resolve("/mnt/origin/version");
+    const r = try ns.resolve("/n/origin/version");
     try testing.expectEqualStrings("version", r.remainder);
-    try testing.expectEqual(om.clientPtr().?, r.entry.target.client);
+    try testing.expectEqual(om.clientPtr().?, r.entry.first().client);
 
-    // Exactly one `/mnt/origin` row: the re-bind replaced, it did not stack.
+    // Exactly one `/n/origin` row: the re-bind replaced, it did not stack.
     var seen: usize = 0;
     for (ns.entries.items) |e| {
         if (std.mem.eql(u8, e.prefix, mount_point)) seen += 1;
@@ -605,7 +705,7 @@ test "origin: Reconnect on a live mount replaces it" {
     try bringUp(&om, 10);
     // No disconnect first: Reconnect closes the live socket itself (R-P12-7).
     om.dial();
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin"));
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
     try testing.expectEqual(Phase.dialing, om.phase);
     om.push(om.ws.id, .open, "");
     _ = om.poll(11);
@@ -614,7 +714,9 @@ test "origin: Reconnect on a live mount replaces it" {
     } });
     _ = om.poll(12);
     try feed(&om, .{ .tag = 0, .body = .{ .rattach = .{ .qid = .{ .path = 1, .qtype = .{ .dir = true } } } } });
-    try testing.expect(om.poll(13) == .mounted);
+    try testing.expectEqual(Event.none, om.poll(13)); // sends Twalk bin
+    try feedBinWalk(&om, true);
+    try testing.expect(om.poll(14) == .mounted);
 }
 
 test "origin: a record from a stale connection id is dropped" {
@@ -646,5 +748,5 @@ test "origin: a malformed frame poisons the connection instead of desyncing" {
     const ev = om.poll(2);
     try testing.expect(ev == .failed);
     try testing.expectEqual(Phase.down, om.phase);
-    try testing.expectError(error.NotMounted, ns.resolve("/mnt/origin"));
+    try testing.expectError(error.NotMounted, ns.resolve("/n/origin"));
 }

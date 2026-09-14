@@ -72,7 +72,7 @@ pub const exectab = [_]Entry{
     // exec.c:119 — flag2 is the C's XXX==2, TRUTHY (dat.h:488-493): tobody=TRUE is
     // LOAD-BEARING (a tag Paste lands in the body), so it is ported as `true`.
     .{ .name = "Paste", .fn_ = cmd_edit.paste, .mark = true, .flag1 = true, .flag2 = true }, // exec.c:119
-    // Snarf-only (R-P12-7): re-dial `/mnt/origin`. Not in exec.c — acme has no
+    // Snarf-only (R-P12-7): re-dial `/n/origin`. Not in exec.c — acme has no
     // droppable mount. Marks nothing and edits nothing; both flags unused.
     .{ .name = "Reconnect", .fn_ = cmd_origin.reconnect, .mark = false, .flag1 = false, .flag2 = false },
     .{ .name = "Redo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:122 (isundo=FALSE; flag2 XXX unused)

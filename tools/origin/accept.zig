@@ -1,6 +1,6 @@
 //! Origin-server acceptance tests: a real listener on an ephemeral loopback
 //! port, a real WebSocket client, and the real `ninep.Client` — the browser's
-//! view of `/mnt/origin` without a browser (S-02 §5, S-01 §3.2). Also the
+//! view of `/n/origin` without a browser (S-02 §5, S-01 §3.2). Also the
 //! test root that pulls in every tools/origin unit test.
 const std = @import("std");
 const ninep = @import("ninep");
