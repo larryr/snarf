@@ -24,6 +24,8 @@ pub const look = @import("look.zig");
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
 /// (text.c:121-275), phase 13b, R-EDIT-03.
 pub const dirwin = @import("dirwin.zig");
+/// One in-flight window load — the asynchronous `textload` (text.c:192-317).
+pub const Load = @import("Load.zig");
 /// Window placement (`makenewwindow`, util.c:449-495) + the shared window mint
 /// helper — phase 12b, R-EDIT-23.
 pub const place = @import("place.zig");

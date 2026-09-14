@@ -31,6 +31,7 @@ const snarf_ops = @import("snarf.zig");
 const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
+const Load = @import("Load.zig");
 const Regx = @import("edit/Regx.zig");
 
 const Editor = @This();
@@ -158,6 +159,13 @@ origin: ?OriginHook = null,
 /// `ninep.nsjob` — never through `ninep.nsdir`, whose synchronous walk would
 /// block the browser's main thread (R-9P-13).
 ns: ?*ninep.mount.Namespace = null,
+/// The in-flight window loads (phase 13b): acme's blocking `textload`
+/// (text.c:192-317) turned into one step-per-frame job each, because the
+/// browser's main thread may not block on a 9P reply (R-9P-13). POINTERS, not
+/// values — a `ninep.nsjob` job hands its own inline reply buffer to a live
+/// ticket and must never MOVE (nsjob.zig's pointer-stability rule), so the list
+/// may reallocate but the Loads may not. Owned; `Load.deinitAll` frees them.
+loads: std.ArrayList(*Load) = .empty,
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
@@ -171,6 +179,7 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 }
 
 pub fn deinit(self: *Editor) void {
+    Load.deinitAll(self); // abandon every in-flight window load (phase 13b)
     self.snarf.deinit(self.allocator);
     self.edit_lastpat.deinit(self.allocator);
     for (self.warnings.items) |*wn| wn.deinit(self.allocator);
@@ -221,6 +230,7 @@ pub fn dropTextRefs(ed: *Editor, w: *Window) void {
         }
     }
     ed.gesture.dropTextRefs(tag, body); // `gesture_text` moved to Gesture.zig
+    Load.dropWindow(ed, w); // and any load still filling this window (13b)
 }
 
 /// `cut` (exec.c:947-1016) — forwarder into `snarf.cut`; see there for the
@@ -290,6 +300,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     // The C's main loop drains `cwarn` (acme.c:512-515) before it redraws;
     // running the flush FIRST means a freshly minted `+Errors` window has its
     // live tag composed by the sweep below, in this same frame (util.c:211-258).
+    try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try errors.flushWarnings(ed);
     if (ed.row) |row| {
         for (row.col.items) |c| {

@@ -229,7 +229,11 @@ pub const Parser = struct {
     /// `compoundaddr` (edit.c:666-686): a `,`/`;` pair, right-recursive. The left
     /// side (null ⇒ line 0) rides the `comma`/`semi` payload; the right side rides
     /// `next`. A `,`/`;` whose own right side is a left-less pair is a syntax error.
-    fn compoundaddr(p: *Parser) ast.Error!?*ast.Addr {
+    ///
+    /// `pub` since phase 13b: `Load.applyAddress` parses the `:addr` half of a
+    /// B3 expansion with it (look.c:880 `address(TRUE, …)` reads the SAME grammar
+    /// through `agetc`, so the two cannot drift).
+    pub fn compoundaddr(p: *Parser) ast.Error!?*ast.Addr {
         const left = try p.simpleaddr();
         const t = p.skipbl();
         if (!is(t, ',') and !is(t, ';')) return left;
