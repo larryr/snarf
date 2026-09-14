@@ -6,7 +6,13 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 13a merged; remote has only `main`)*
+- **`phase13b`** (worktree `../snarf-wt/phase13b`, 2026-09-14, larry's Mac, local only) —
+  DIRECTORY WINDOWS: NEW `core/{dirwin,Load,openfile,expand}.zig`, `exec/cmd_get.zig` (dirs
+  only), `Window.isdir`, acme two-column boot with `/` rightmost (scratch demo removed from
+  main_wasm), `/mnt/snarf-self/ns`, S-05 §2 columnation fix, `phase13-opfs.md` → `phase14-opfs.md`.
+  Owns those files + `core/look.zig` (expand seam), `core/boot.zig`, `served/fsys.zig`,
+  `main_wasm.zig`/`ns_boot.zig`, `accept.zig` (new 13B scene only). Contract
+  `agents/contracts/phase13b-directory-windows.md`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
