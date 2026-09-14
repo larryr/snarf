@@ -100,8 +100,13 @@ actually mounts at boot today are:
 `/` and `/mnt` are mounted by nobody: they are synthesized from those prefixes (§1.2).
 So a listing of `/` reads `dev/ mnt/` with the origin down and `bin/ dev/ mnt/ n/` with
 it up. Not yet mounted: `/dev/snarf`, `/dev/dom`, the browser feature files,
-`/mnt/host`, `/mnt/opfs`, and `/mnt/snarf-self/ns` itself.
+`/mnt/host` and `/mnt/opfs`. (`/mnt/snarf-self/ns` itself is SERVED as of phase 13b.)
 
+> Revision log: 2026-09-14 (phase 13b) — `/mnt/snarf-self/ns` is BUILT (§6): the served
+> root's dirtab grew an `ns` row rendering `Namespace.list`, which was possible only in
+> a wave allowed to move served listings. A window's `ctl` line now reports the real
+> `isdir` column (wind.c:695) instead of a hard-coded 0, because directory windows exist.
+>
 > Revision log: 2026-09-14 (phase 13a) — §1.3 gained the as-built table: the boot
 > namespace is no longer empty (`/dev`, `/dev/draw`, `/mnt/snarf-self` mounted at boot,
 > `ns_boot.zig`). `/dev/ns` became **`/mnt/snarf-self/ns`** (ruling R-P13a-4: Snarf has
@@ -219,11 +224,15 @@ item — v1 exposes it to other tabs via `BroadcastChannel` transport experiment
 **Served from boot (phase 13a).** Wave 10a served this tree only on demand ("runtime
 mounting waits for the first in-editor client", R-P10-E). That is RETIRED: the entry
 point stands up the server, client and mount at boot and polls the server on every tick,
-so the first client is the editor itself. The root also carries `ns` (§1.3) once that
-file is built; it is specified above but **not implemented yet** — a row in the served
-root's dirtab is also a row in its listing, so adding it moves an existing served-tree
-expectation and belongs with the next wave that changes those listings (directory
-windows).
+so the first client is the editor itself.
+
+**`ns` and the `ctl` `isdir` column (phase 13b).** The served root now carries `ns`
+(§1.3), a read-only file rendering `Namespace.list` in `ns(1)` style — 13a specified it
+and deliberately did not build it, because a row in the served root's dirtab is also a
+row in its listing; directory windows were the wave allowed to move those expectations.
+Its qid `FILE` value is appended after the existing ones so no path renumbers. In the
+same wave a window's `ctl` line stopped hard-coding its fourth column: it reports
+`w->isdir` (wind.c:695), which is 1 for a directory window and 0 otherwise.
 
 **Deferred extension — `kbd hold` (specified here, not implemented in v1).** acme(4)'s
 event interface is asymmetric: with an `event` file open, B2/B3 actions are

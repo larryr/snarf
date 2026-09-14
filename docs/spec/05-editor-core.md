@@ -23,8 +23,27 @@ File  = buffer shared by windows (Zerox); name = namespace path
 ```
 
 Layout math (column widths, window stacking, grow/shrink rules) ports ACME's `col.c`
-behavior. Directory windows (R-EDIT-03) render namespace `Tread`-of-directory results,
-one entry per line, dirs suffixed `/`.
+behavior. Directory windows (R-EDIT-03) render namespace `Tread`-of-directory results
+**columnated**, dirs suffixed `/` — not one entry per line. The layout is
+`textcolumnate` (`acme/text.c:136-198`), implemented in `src/core/dirwin.zig`:
+
+- entries are sorted rune-wise, then by length (`dircmp`, text.c:121-133);
+- a directory window gets **narrower tabs** — `fr.maxtab = min(maxtab, TABDIR) *
+  stringwidth("0")`, with `TABDIR = 3` (text.c:21) and `maxtab = 4` (acme.c:145-146),
+  i.e. 27 px at the 9×18 font (text.c:148);
+- each entry's width is its `stringwidth`, bumped by one `stringwidth("0")` when the
+  remainder to the next tab stop is under one, then rounded up to a tab stop; the
+  column width is the maximum of those;
+- `ncol = max(1, Dx(fr.r) / colw)`, `nrow = ceil(n / ncol)`, and row *i* holds entries
+  *i*, *i+nrow*, *i+2·nrow*, … — so the listing reads **down** the columns, tabs
+  between entries and a newline per row.
+
+The listing is built by an ASYNCHRONOUS `textload` (`src/core/Load.zig`): a `StatJob`,
+then a `ListDirJob`, stepped one 9P state per frame from `Editor.frameEnd`. The window
+exists immediately with an empty body; the entries arrive a frame or two later (a
+mount reached over the network takes as long as its round trips). A failed load leaves
+the window in place, empty and named, with `can't open <name>: …` in `+Errors`
+(text.c:216).
 
 ## 3. The mouse language interpreter
 
@@ -63,6 +82,23 @@ Resolution order: (1) `name:line`/`name:/re/` address syntax → open window at 
 then absolute) → open file/dir; (4) `http(s)://` → `/dev/location`-adjacent open in new
 tab (`window.open` via devmisc, popup-blocker caveat surfaced in `+Errors`); (5) literal
 text search in body (wrapping, highlighting next match).
+
+**Asynchronous existence check (R-P13b-2, browser host).** ACME decides between (3) and
+(5) with a synchronous `access()` inside `look3` (`acme/look.c:706`). Snarf cannot: the
+answer lives behind a 9P walk whose reply may only arrive on a later browser tick
+(R-9P-13), and the main thread must not block. So a B3 look splits in two:
+
+1. `src/core/expand.zig` expands TEXTUALLY (`expandfile`, look.c:592-729 minus its I/O)
+   and, for a file-shaped candidate, resolves it to an absolute name and parks a
+   `StatJob` as `Editor.pending_look` — **one at a time**; a newer B3 cancels the older.
+2. `Editor.frameEnd` steps it. Success ⇒ `openfile.openFile`; any failure (the
+   `access()` failure) ⇒ the literal search of (5), run on the original expansion.
+
+The only observable difference from ACME is timing: both outcomes land a frame or two
+late. Unrooted names resolve against the window's own directory (R-EDIT-20) and then
+against `wdir`, which is `/` (R-P13b-3 — the port has no process working directory).
+URLs currently warn instead of opening (R-EDIT-13, backlog); `<include>` names fall
+through to the literal search (no include list in v1).
 
 ## 7. Snarf buffer (R-EDIT-14)
 
