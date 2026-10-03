@@ -6,11 +6,30 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-09-14 — phase 16 merged `f51e4a0`; remote has only `main`; the planned
-  queue is EMPTY — see `agents/NEXT-PHASES.md` and ask Larry before starting anything)*
+- *(none as of 2026-10-03 — phase 16 merged `f51e4a0`; the planned queue is EMPTY — see
+  `agents/NEXT-PHASES.md` and ask Larry before starting anything)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
+
+- **Spike landed (2026-10-03) — rhun self-drawn frame vs. plan9port `devdraw`**: see
+  `agents/reports/spike-rhun-self-drawn-frame.md`. Written by a remote session (GitHub
+  identity `larry-sk`, pull-only — see account fact below) as GitHub issue #1 since it
+  couldn't push; landed from `larryr`'s local machine, branch `spike-rhun-frame` merged to
+  `main`, issue closed. **Recommendation: borrow rhun's model, not its code — it's already
+  the browser host's architecture** (`dev/draw.zig` + `HeadlessBackend` + `dev/input.zig`,
+  unchanged, plus a new `src/host/frame/<platform>.zig`); keep `devdraw` as the ADR-0005
+  fallback. Three addenda from follow-up discussion with Larry: (A) build `devdraw` from
+  the pinned plan9port fork ourselves (~570 KiB / 15–18k lines measured closure) instead of
+  requiring a plan9port install — needs an ADR-0002 amendment (fetch vs. vendor), reduces
+  frame urgency to ~30–35%; (B) a Zig shell over the system webview (`WKWebView` et al.) as
+  a legitimate fourth backend, not proposed as a wave; (C) **warp is lost only on the pure
+  browser host + Wayland** — the webview shell keeps real warp via its bridge; the browser
+  host's full recovery is untried **Pointer Lock** (own-drawn cursor under lock, Esc-key
+  conflict with acme's Esc to resolve). Experiments re-ranked: Pointer Lock spike on the
+  browser host first, then devdraw-in-tree (A), then the headless scripted driver, then the
+  native frame if ever. No code written (feasibility write-up only, per the task). All of
+  this is proposal-stage — nothing queued; needs Larry's pick per NEXT-PHASES.
 
 - **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b, 15, 16 are MERGED to `main`; `main` is green.**
   712/712 tests (≈3.8 s), node smoke 40/40, `zig build native` OK, `zig fmt` clean, Zig 0.16.0,
@@ -197,6 +216,12 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## Environment & account facts
 
+- **Claude cloud sessions tied to `lrau@skyhawk.ai` act as GitHub user `larry-sk`**
+  (2026-10-03), which has **pull-only** on `larryr/snarf` — reads and filing issues work,
+  pushes 403 (both `git push` and the GitHub API). Such a session should file a GitHub
+  issue for work it can't land itself (see issue #1 / `spike-rhun-self-drawn-frame.md` for
+  the pattern: write the content, include a `git am`-able patch, ask for it to be landed by
+  a session running as `larryr` or `larry-sk` once added as a collaborator).
 - **PR APIs are blocked in BOTH directions, remote and local** (re-verified 2026-09-05):
   the GitHub App token and larry's local `gh` (2.96.0, authed `larryr`) can push/fetch
   and read repos, but `gh pr list` returns `[]` even with a PR open, REST
