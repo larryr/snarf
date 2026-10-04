@@ -157,10 +157,8 @@ loads: std.ArrayList(*Load) = .empty,
 /// B3 cancels the older. Owned; stepped by `Load.stepAll`, freed by
 /// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
 pending_look: ?*pendinglook.PendingLook = null,
-/// In-flight Puts (phase 17, `Put.zig`; heap-pinned like `loads`).
-puts: std.ArrayList(*Put) = .empty,
-/// `$home` and the in-flight Dump/Load (phase 17, `Session.zig`).
-session: @import("Session.zig") = .{},
+puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
+session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
