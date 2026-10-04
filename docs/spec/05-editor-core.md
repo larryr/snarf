@@ -56,10 +56,14 @@ many places; Snarf commits on a **button press in the tag** (acme.c:644-650 — 
 `textselect`, so a B2 on `Put` sees the new name), on a **`\n` or `typecommit`** in the tag
 (text.c:938-939, :414-419), **before a `Dump`** (rows.c:364), and when a tag is about to be
 recomposed with uncommitted edits (`setTagCommit`, the wind.c:485-486 entry of
-`winsettag1`). **Divergence:** there is no 500 ms `KTimer` commit (acme.c:470-479; no timer
-in the core) and no commit when the pointer leaves a text (acme.c:583-588) — the
-button-down commit covers the gesture that matters, and a `Put` issued over the served
-`ctl` commits first itself.
+`winsettag1`). **Divergence:** acme's dominant commit site is **every keystroke in a
+tag** — `rowtype` → `wintype` → `winsettag` (rows.c:289, wind.c:401-409) reaches the
+wind.c:485-486 `wincommit`, so in acme ` Undo Put` appears *while* a new name is being
+typed; Snarf retags lazily (the `frameEnd` sweep), so the rename lands only at the next
+commit site above. There is also no 500 ms `KTimer` commit (acme.c:470-479; no timer in the
+core) and no commit when the pointer leaves a text (acme.c:583-588) — the button-down
+commit covers the gesture that matters, and a `Put` issued over the served `ctl` commits
+first itself.
 
 ## 3. The mouse language interpreter
 

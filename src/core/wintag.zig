@@ -16,7 +16,9 @@
 //! from many places: any button press in a tag (acme.c:644-650), a `\n` or a
 //! `typecommit` in the tag (text.c:938-939, :414-419), the 500 ms `KTimer`
 //! (acme.c:470-479), the pointer leaving a text (acme.c:583-588), before a dump
-//! (rows.c:364) and at the top of every `winsettag1` (wind.c:485-486). The port
+//! (rows.c:364) and at the top of every `winsettag1` (wind.c:485-486) — which
+//! `rowtype` → `wintype` → `winsettag` (rows.c:289, wind.c:401-409) reaches on
+//! EVERY tag keystroke, acme's dominant site in practice (S-05 §2). The port
 //! keeps the button-down, `\n`/typecommit and dump sites, and the `winsettag1`
 //! one through `setTagCommit` (the variants of `setTag1` that hold an `Editor`
 //! — `setTag1` itself has no `ed` and so cannot bump `seq`). There is no timer
