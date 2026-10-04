@@ -139,12 +139,7 @@ pub fn start(ed: *Editor, w: *Window, name: []const u8, must_exist: bool) Text.E
 }
 
 pub fn deinit(self: *Put) void {
-    switch (self.job) {
-        .none => {},
-        .stat, .restat => |*j| j.deinit(),
-        .verify => |*j| j.deinit(),
-        .write => |*j| j.deinit(),
-    }
+    self.dropJob();
     self.verify_buf.deinit(self.allocator);
     self.allocator.free(self.bytes);
     self.allocator.free(self.name);
@@ -206,8 +201,7 @@ pub fn step(self: *Put, ed: *Editor) Text.Error!void {
             self.seen = .{ .qid = r.qid, .mtime = r.mtime, .length = r.length };
             self.muid_len = @min(r.muid.len, self.muid.len);
             @memcpy(self.muid[0..self.muid_len], r.muid[0..self.muid_len]);
-            j.deinit();
-            self.job = .none;
+            self.dropJob();
             if (!self.samename or !self.moved()) return self.startWrite(ed); // exec.c:711-713
             if (self.disk_at == null) return self.stale(ed); // nothing to hash against
             // exec.c:713 `checksha1`: the identity moved — maybe only the
@@ -243,8 +237,7 @@ pub fn step(self: *Put, ed: *Editor) Text.Error!void {
             };
             if (st == .pending) return;
             const fallback = Seen{ .qid = j.qid, .mtime = 0, .length = self.bytes.len };
-            j.deinit();
-            self.job = .none;
+            self.dropJob();
             if (!self.samename) { // exec.c:774: a `Put other` writes a copy and changes nothing
                 self.finished = true;
                 return;
@@ -268,12 +261,24 @@ pub fn step(self: *Put, ed: *Editor) Text.Error!void {
 /// `refuse_append` is exec.c:744's `d->length>0 && QTAPPEND` with the length
 /// from the pre-write stat.
 fn startWrite(self: *Put, ed: *Editor) Text.Error!void {
+    self.dropJob(); // the stat (NotFound) or the verify read that led here
     const ns = ed.ns.?;
     const refuse_append = if (self.seen) |s| s.length > 0 else false;
     self.job = .{ .write = nsjob.WriteFileJob.init(ns, self.name, self.bytes, .{
         .must_exist = self.must_exist,
         .refuse_append = refuse_append,
     }) catch |e| return self.finish(ed, "can't create file {s}: {s}\n", .{ self.name, @errorName(e) }) };
+}
+
+/// Release the current job (fire-and-forget, as every job `deinit` is).
+fn dropJob(self: *Put) void {
+    switch (self.job) {
+        .none => {},
+        .stat, .restat => |*j| j.deinit(),
+        .verify => |*j| j.deinit(),
+        .write => |*j| j.deinit(),
+    }
+    self.job = .none;
 }
 
 /// exec.c:712: did the file's identity move since it was last read or written?
@@ -408,7 +413,7 @@ test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the
 
     const col = tree.row.col.items[0];
     const w = try openfile.readFile(&ed, col, "/m/f");
-    for (0..16) |_| {
+    for (0..40) |_| {
         try ed.frameEnd(fx.disp);
         try m.poll();
     }
@@ -423,7 +428,7 @@ test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the
     try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tb), " Put") != null);
 
     try start(&ed, w, "/m/f", false);
-    for (0..16) |_| {
+    for (0..40) |_| {
         try ed.frameEnd(fx.disp);
         try m.poll();
     }
@@ -433,19 +438,44 @@ test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the
     try testing.expectEqual(w.body.file.seq, w.putseq);
     try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tb), " Put") == null);
 
-    // A Put to a NEW name creates the file and leaves the window as it was.
-    try start(&ed, w, "/m/g", false);
-    for (0..16) |_| {
+    // Identity moved, bytes identical ⇒ the sha1 arm accepts (exec.c:689-693);
+    // bytes changed under us ⇒ "modified since last read", nothing written.
+    m.tree.find("f").?.vers += 5;
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "x", true);
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| {
         try ed.frameEnd(fx.disp);
         try m.poll();
     }
-    try testing.expectEqualStrings("new old\n", m.tree.find("g").?.data.items);
+    try testing.expectEqualStrings("xnew old\n", m.tree.find("f").?.data.items);
+    try m.tree.put("f", "theirs\n");
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "y", true);
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| { // step without flushing, so the warning is still pending
+        try stepAll(&ed);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("theirs\n", m.tree.find("f").?.data.items);
+    try testing.expect(std.mem.startsWith(u8, ed.warningText(), "/m/f modified by snarf since last read\n\twas "));
+    try ed.frameEnd(fx.disp); // flush the warning into +Errors
+
+    // A Put to a NEW name creates the file and leaves the window as it was.
+    try start(&ed, w, "/m/g", false);
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("yxnew old\n", m.tree.find("g").?.data.items);
     try testing.expectEqualStrings("/m/f", w.body.file.name.items);
 
     // Dump to the served tree, then Load it back on top (adds windows).
     ed.session.home = "/m";
     try ed.session.startDump(&ed, "");
-    for (0..16) |_| {
+    for (0..40) |_| {
         try ed.frameEnd(fx.disp);
         try m.poll();
     }
@@ -453,7 +483,7 @@ test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the
     try testing.expect(std.mem.startsWith(u8, dumped, "/\nfixed9x18\nfixed9x18\n"));
     const before = col.w.items.len;
     try ed.session.startLoad(&ed, "");
-    for (0..24) |_| {
+    for (0..40) |_| {
         try ed.frameEnd(fx.disp);
         try m.poll();
     }
