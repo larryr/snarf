@@ -14,6 +14,7 @@
 const std = @import("std");
 const Editor = @import("../Editor.zig");
 const Text = @import("../text/Text.zig");
+const wintag = @import("../wintag.zig");
 
 /// `cut` (exec.c:947-1016), Cut (dosnarf=docut=true) and Snarf (dosnarf=true,
 /// docut=false). The et/t redirection (exec.c:957-974): when not a mouse chord
@@ -81,8 +82,12 @@ pub fn paste(
 /// single-window subset (R-P9-10). Undo (isundo=true) / Redo (isundo=false).
 /// Guards on the executing window, checks the seq to reverse (0 ⇒ nothing to do),
 /// applies the file op, then `show`s the reversed range (REQUIRED — the file op
-/// bypasses the frame; `show` refills + selects, wind.c:361). `w.dirty = f.mod`
-/// approximates the C's `v->dirty = (f->seq != v->putseq)` until Put lands.
+/// bypasses the frame; `show` refills + selects, wind.c:361). A transaction
+/// that only renamed the file (a `.filename` delta) yields no range: dot stays
+/// and nothing is shown, as `fileundo`'s Filename arm leaves `*q0p/*q1p` alone
+/// (file.c:259-271). `dirty = (seq != putseq)` (wind.c:366, phase 17) — undoing
+/// past a Put re-dirties, redoing back to it cleans — then the retag
+/// (wind.c:372), which also brings a restored NAME back into the tag.
 ///
 /// FLAG (R-P9-10): the same-seq multi-window walk (exec.c:462-477) is Edit-phase
 /// territory (needs shared-File views); v1 undoes only the executing window.
@@ -95,16 +100,17 @@ pub fn undo(
     _: bool,
     _: []const u8,
 ) Text.Error!void {
-    _ = ed;
     const w = et.w orelse return; // exec.c:451-452
     const f = w.body.file;
     // seqof (exec.c:427-434): undo ⇒ the file's current seq, redo ⇒ its redo seq.
     const seq = if (isundo) f.undoSeq() else f.redoSeq();
     if (seq == 0) return; // exec.c:454-457 nothing to undo/redo
-    const r = (if (isundo) try f.undo() else try f.redo()) orelse return;
-    // winundo wind.c:361: textshow refills the frame + selects the reversed range.
-    try w.body.show(r.q0, r.q1, true);
-    w.dirty = f.mod; // wind.c:365 v1 putseq approx
+    const r = if (isundo) try f.undo() else try f.redo();
+    // winundo wind.c:361: textshow refills the frame + selects the reversed
+    // range — none for a rename-only transaction (file.c:259-271).
+    if (r) |rr| try w.body.show(rr.q0, rr.q1, true);
+    w.dirty = (f.seq != w.putseq); // wind.c:366
+    try wintag.setTagCommit(ed, w); // wind.c:372 winsettag
 }
 
 // ===========================================================================

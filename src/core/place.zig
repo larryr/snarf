@@ -25,6 +25,7 @@ const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Column = @import("Column.zig");
 const Row = @import("Row.zig");
+const wintag = @import("wintag.zig");
 
 /// `t->col` (dat.h): the Column a Text belongs to. A window text ⇒ the window's
 /// column; a columntag ⇒ its own Column (via `@fieldParentPtr`); anything else
@@ -72,8 +73,8 @@ pub fn mintWindow(c: *Column, y: i32, name: []const u8) Text.Error!*Window {
     w.owns_body = true; // the Window now owns and frees this body File
     transferred = true; // f is reachable from the tree; its deinit chain frees it
 
-    try w.body.file.setName(name);
-    try w.setTag1();
+    try wintag.setName(w, name); // winsetname: isscratch for `+Errors` (wind.c:387-391)
+    try w.setTag1(); // setName is a no-op for "" (New): compose regardless
     const nc = w.tag.file.buffer.len();
     try w.tag.setSelect(nc, nc);
     try w.body.fill();

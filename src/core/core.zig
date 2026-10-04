@@ -30,6 +30,13 @@ pub const warp = @import("warp.zig");
 pub const dirwin = @import("dirwin.zig");
 /// One in-flight window load — the asynchronous `textload` (text.c:192-317).
 pub const Load = @import("Load.zig");
+/// The `:addr` tail of a load (look.c:874-897) — pure-moved out of `Load.zig`
+/// in phase 17.
+pub const loadaddr = @import("loadaddr.zig");
+/// `Get`'s line+rune dot/origin bookkeeping (exec.c:623-665) — phase 17.
+pub const getaddr = @import("getaddr.zig");
+/// One in-flight Put — the asynchronous `putfile` (exec.c:697-836), phase 17.
+pub const Put = @import("Put.zig");
 /// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).

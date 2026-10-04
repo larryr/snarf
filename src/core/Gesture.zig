@@ -22,6 +22,7 @@ const Editor = @import("Editor.zig");
 const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const textselect = @import("textselect.zig");
+const wintag = @import("wintag.zig");
 
 const Gesture = @This();
 const Point = draw.Point;
@@ -201,6 +202,16 @@ pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
     // (acme.c:656-657). B2/B3 open the colored execute/look sweep (acme.c:661-668);
     // they are valid in tags, columntags, rowtags AND bodies (no region guard — the
     // scrollbar strip was already routed at step 5).
+    //
+    // acme.c:644-650 first: ANY button press in a window's text runs
+    // `wincommit`, whose tag half (wind.c:606-616) turns a hand-edited name into
+    // a rename — before `textselect`, so a B2 on `Put` sees the committed name
+    // (R-P17-7). A press in a body commits nothing (wind.c:606-607).
+    if (b == B1 or b == B2 or b == B3) {
+        if (t.what == .tag) {
+            if (t.w) |w| try wintag.commit(ed, w);
+        }
+    }
     if (b == B1) {
         ed.focus = t;
         g.gesture_text = t;

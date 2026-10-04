@@ -22,6 +22,7 @@ const ninep = @import("ninep");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const Window = @import("Window.zig");
+const wintag = @import("wintag.zig");
 
 const Stat = ninep.stat;
 
@@ -176,7 +177,7 @@ pub fn applyListing(ed: *Editor, w: *Window, stats: []const Stat) Text.Error!voi
     if (name.len > 0 and name[name.len - 1] != '/') {
         const slashed = try std.fmt.allocPrint(a, "{s}/", .{name});
         defer a.free(slashed);
-        try t.file.setName(slashed);
+        try wintag.setName(w, slashed); // text.c:225 winsetname
     }
 
     // text.c:230-260 `dirread` + Dirlist build. `windirfree` (wind.c:646-660)

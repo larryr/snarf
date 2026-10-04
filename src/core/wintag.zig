@@ -267,7 +267,15 @@ pub fn commit(ed: *Editor, w: *Window) Error!void {
     const p = try parseTag(w, a); // wind.c:608
     defer a.free(p.text);
     const name = p.text[0..runeByteOffset(p.text, p.name_len)];
-    if (std.mem.eql(u8, name, w.body.file.name.items)) return; // wind.c:609
+    if (std.mem.eql(u8, name, w.body.file.name.items)) {
+        // In sync: nothing to rename. acme's next `winsettag1` would clear the
+        // tag's mod (wind.c:565) — and acme runs one after every tag keystroke
+        // (wind.c:401-408 `wintype`). Snarf retags lazily, so clear it here,
+        // or a later `setTagCommit` (say, after an Undo that restored the OLD
+        // name) would read the stale tag text as a fresh rename.
+        w.tag_file.mod = false;
+        return; // wind.c:609
+    }
     ed.seq += 1; // wind.c:610
     w.body.file.mark(ed.seq); // wind.c:611
     w.body.file.mod = true; // wind.c:612

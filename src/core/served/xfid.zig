@@ -22,6 +22,9 @@ const Window = @import("../Window.zig");
 const Text = @import("../text/Text.zig");
 const Buffer = @import("../Buffer.zig");
 const fsys_mod = @import("fsys.zig");
+const wintag = @import("../wintag.zig");
+const cmd_get = @import("../exec/cmd_get.zig");
+const cmd_put = @import("../exec/cmd_put.zig");
 
 const Fsys = fsys_mod.Fsys;
 const Q = fsys_mod.Q;
@@ -210,7 +213,19 @@ const ctltab = [_]CtlCmd{
     .{ .name = "delete", .takes_arg = false, .run = cmdDelete },
     .{ .name = "del", .takes_arg = false, .run = cmdDel },
     .{ .name = "name ", .takes_arg = true, .run = cmdName },
+    .{ .name = "get", .takes_arg = false, .run = cmdGet }, // xfid.c:770-773
+    .{ .name = "put", .takes_arg = false, .run = cmdPut }, // xfid.c:774-777
 };
+
+/// `get` (xfid.c:770-773): `get(&w->body, nil, nil, FALSE, XXX, nil, 0)`.
+fn cmdGet(f: *Fsys, w: *Window, _: []const u8) OpError!void {
+    cmd_get.get(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
+}
+
+/// `put` (xfid.c:774-777): `put(&w->body, nil, nil, XXX, XXX, nil, 0)`.
+fn cmdPut(f: *Fsys, w: *Window, _: []const u8) OpError!void {
+    cmd_put.put(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
+}
 
 fn ctlWrite(f: *Fsys, w: *Window, data: []const u8) OpError!usize {
     var n: usize = 0;
@@ -290,15 +305,16 @@ fn cmdDel(f: *Fsys, w: *Window, arg: []const u8) OpError!void {
 /// `name <s>\n` (xfid.c:678-702): validate no NUL/control chars in the new
 /// name (simplified vs the C's two distinct error strings — R-P10-H's
 /// catch-all is `error.BadCtl`, a documented divergence), bump `ed.seq` +
-/// `File.mark` (the established mark idiom, e.g. `Column.zig:552-553`), set
-/// the name, retag.
+/// `File.mark` (the established mark idiom, e.g. `Column.zig:552-553`), then
+/// `winsetname` — mark FIRST, so the rename is an undoable transaction
+/// (phase 17, file.c:139-148) — and retag.
 fn cmdName(f: *Fsys, w: *Window, arg: []const u8) OpError!void {
     for (arg) |ch| {
         if (ch < ' ') return error.BadCtl; // xfid.c:693-697 (simplified to BadCtl)
     }
     f.ed.seq += 1;
     w.body.file.mark(f.ed.seq); // filemark, xfid.c:700
-    w.body.file.setName(arg) catch return error.IoError;
+    wintag.setName(w, arg) catch return error.IoError; // xfid.c:701 winsetname
     w.setTag() catch return error.IoError;
 }
 
