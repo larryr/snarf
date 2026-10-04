@@ -103,6 +103,77 @@ test "cmd_get: Get on a file window with no namespace warns and keeps the body" 
     try testing.expectEqual(@as(usize, 0), ed.loads.items.len);
 }
 
+test "cmd_get: Get reloads a modified file window, restores dot/origin, cleans it; Get other fills and marks modified while keeping the name; two-strike on dirty; putseq untouched (T13)" {
+    const MemTree = @import("../MemTree.zig");
+    const ninep_ = @import("ninep");
+    const a = testing.allocator;
+    var fx = try Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep_.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("f", "one\ntwo\nthree\n");
+    try m.tree.put("g", "aaaa\n");
+
+    const col = tree.row.col.items[0];
+    const w = try openfile.readFile(&ed, col, "/m/f");
+    for (0..20) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expect(!w.body.file.unread);
+    w.putseq = 7; // a sentinel value Get must not touch (R-P17-8)
+
+    // Dot on line 2 ("two"), then the server changes that SAME line under us
+    // (line count unchanged), then Get (same name): the reload restores dot
+    // by LINE+RUNE (`nlCount`/`nlCountToPos`, exec.c:623-630/:656-665), not a
+    // raw offset, and leaves the window clean.
+    try w.body.setSelect(4, 7); // "two"
+    try m.tree.put("f", "one\nTWO\nthree\n"); // same shape, different bytes
+
+    try get(&ed, &w.body, null, null, true, false, "");
+    for (0..20) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings("one\nTWO\nthree\n", w.body.file.buffer.read(0, w.body.file.buffer.len(), &buf));
+    try testing.expect(!w.body.file.mod);
+    try testing.expect(!w.dirty);
+    const q0 = w.body.q0;
+    const q1 = w.body.q1;
+    try testing.expectEqualStrings("TWO", w.body.file.buffer.read(q0, q1 - q0, &buf));
+    try testing.expectEqual(@as(u32, 7), w.putseq); // untouched by Get (R-P17-8)
+
+    // Get OTHER fills the window with a DIFFERENT file and marks it modified,
+    // but the window keeps its OWN name (exec.c:640-648).
+    try get(&ed, &w.body, null, null, true, false, "/m/g");
+    for (0..20) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("aaaa\n", w.body.file.buffer.read(0, w.body.file.buffer.len(), &buf));
+    try testing.expect(w.body.file.mod);
+    try testing.expect(w.dirty);
+    try testing.expectEqualStrings("/m/f", w.body.file.name.items); // unchanged
+
+    // Two-strike: a dirty, non-empty window refuses the first Get.
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "Y", true);
+    try testing.expect(w.dirty);
+    try get(&ed, &w.body, null, null, true, false, "");
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "modified") != null);
+    try testing.expect(!w.dirty); // the strike itself cleans it (wind.c:666-685)
+    try testing.expectEqualStrings("Yaaaa\n", w.body.file.buffer.read(0, w.body.file.buffer.len(), &buf)); // NOT reloaded
+}
+
 // ===========================================================================
 // Named battery (phase-13b contract §4, T12).
 // ===========================================================================

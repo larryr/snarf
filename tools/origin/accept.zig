@@ -181,6 +181,62 @@ test "origin: 9P over WebSocket — version, fs read/write, bin/echo, listings" 
     wc.transport().close();
 }
 
+test "origin: Tcreate under fs/ makes a real file, exclusive, refuses DMDIR and non-host nodes; a Put-shaped walk-fail→parent-walk→create→write→clunk sequence lands bytes on disk (T19)" {
+    const gpa = testing.allocator;
+    var h = try Harness.start(gpa);
+    defer h.stop(gpa);
+
+    const wc = try WsClient.connect(gpa, testing.io, h.server.port(), origin.ws_path, origin.msize + 4096);
+    defer wc.deinit();
+    var cl = try ninep.Client.init(gpa, wc.transport(), origin.msize);
+    defer cl.deinit();
+    try testing.expectEqual(origin.msize, try cl.version(origin.msize));
+    const root = try cl.attach("larry", "");
+    var buf: [4096]u8 = undefined;
+
+    // A Put-shaped sequence: the file does not exist yet (a walk for it would
+    // fail), so the caller walks the PARENT ("fs/") instead and creates there
+    // — exactly `nswrite.WriteFileJob`'s NotFound⇒parent-walk⇒Tcreate arm.
+    try testing.expectError(error.FileDoesNotExist, cl.walk(root.fid, &.{ "fs", "newfile.txt" }));
+    const parent = try cl.walk(root.fid, &.{"fs"});
+    const created = try cl.create(parent.fid, "newfile.txt", 0o666, msg.OWRITE);
+    try testing.expect(!created.qid.qtype.dir);
+    // Tcreate re-points the SAME fid at the new file (5/open) — write it,
+    // then clunk, exactly the write-loop-then-Tclunk a `WriteFileJob` does.
+    try testing.expectEqual(@as(usize, 10), try cl.write(parent.fid, 0, "hello new\n"));
+    try cl.clunk(parent.fid);
+
+    // The bytes landed on disk: a fresh walk + read confirms it, and so does
+    // the host filesystem directly (bypassing 9P entirely).
+    const reopened = try cl.walk(root.fid, &.{ "fs", "newfile.txt" });
+    _ = try cl.open(reopened.fid, msg.OREAD);
+    try testing.expectEqualStrings("hello new\n", buf[0..try readAll(&cl, reopened.fid, &buf)]);
+    try cl.clunk(reopened.fid);
+    const io = testing.io;
+    const disk_bytes = try h.tmp.dir.readFileAlloc(io, "export/newfile.txt", gpa, .limited(4096));
+    defer gpa.free(disk_bytes);
+    try testing.expectEqualStrings("hello new\n", disk_bytes);
+
+    // Exclusive: creating an EXISTING name fails, and the original is intact.
+    const parent2 = try cl.walk(root.fid, &.{"fs"});
+    try testing.expectError(error.FileExists, cl.create(parent2.fid, "hello.txt", 0o666, msg.OWRITE));
+    try cl.clunk(parent2.fid);
+
+    // A directory create is refused.
+    const parent3 = try cl.walk(root.fid, &.{"fs"});
+    try testing.expectError(error.PermissionDenied, cl.create(parent3.fid, "newdir", Stat.DMDIR | 0o777, 0));
+    try cl.clunk(parent3.fid);
+
+    // Everything outside `fs/` refuses create too (only `.host` nodes allow
+    // it) — `bin/` is a synthetic `.svc_ctl`/`.root`-shaped tree.
+    const bin = try cl.walk(root.fid, &.{"bin"});
+    try testing.expectError(error.PermissionDenied, cl.create(bin.fid, "rm", 0o666, msg.OWRITE));
+    try cl.clunk(bin.fid);
+
+    try cl.clunk(root.fid);
+    wc.transport().close();
+}
+
 test "origin: static HTTP serves www with the wasm-friendly headers" {
     const gpa = testing.allocator;
     const io = testing.io;

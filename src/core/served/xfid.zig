@@ -421,6 +421,75 @@ const Harness = struct {
     }
 };
 
+test "served: ctl put writes the file and clears the tag's Put; ctl get reloads; the index/ctl dirty column follows (T18)" {
+    const MemTree = @import("../MemTree.zig");
+    const ninep_ = @import("ninep");
+    const a = testing.allocator;
+    const h = try Harness.create(a, "/m/f", "old\n");
+    defer h.destroy();
+    var ns = ninep_.mount.Namespace.init(a);
+    defer ns.deinit();
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("f", "old\n");
+    h.ed.ns = &ns;
+    try h.connect();
+
+    const col = h.tree.row.col.items[0];
+    const w = col.w.items[0];
+
+    // The window was NAMED at boot (not Loaded), so it's `unread` — ctl get
+    // first, exactly as a real client would before editing, so Put's stale
+    // check has a real identity to compare against.
+    _ = try h.walk(0, 1, &.{ "1", "ctl" });
+    _ = try h.open(1, msg.ORDWR);
+    for (0..40) |_| {
+        try h.ed.frameEnd(h.fx.disp);
+        try m.poll();
+    }
+    _ = try h.write(1, 0, "get\n");
+    for (0..40) |_| {
+        try h.ed.frameEnd(h.fx.disp);
+        try m.poll();
+    }
+    try testing.expect(!w.body.file.unread);
+
+    h.ed.seq += 1;
+    w.body.file.mark(h.ed.seq);
+    try w.body.insertAt(0, "X", true);
+    try h.ed.frameEnd(h.fx.disp); // the frameEnd tag sweep composes " Put"
+    var tbuf: [256]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tbuf), " Put") != null);
+
+    // ctl put
+    const rc = try h.write(1, 0, "put\n");
+    try testing.expect(rc.body == .rwrite);
+    for (0..40) |_| {
+        try h.ed.frameEnd(h.fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("Xold\n", m.tree.find("f").?.data.items);
+    try testing.expect(!w.dirty);
+    try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tbuf), " Put") == null);
+
+    // the index/ctl dirty column followed: field 5 (0-based 4th) is 0.
+    _ = try h.walk(0, 2, &.{ "1", "ctl" });
+    _ = try h.open(2, msg.OREAD);
+    const rr1 = try h.read(2, 0, 4096);
+    try testing.expect(std.mem.endsWith(u8, std.mem.trimEnd(u8, rr1.body.rread.data, "\n "), "0"));
+
+    // ctl get: the server changed under us; reload picks it up.
+    try m.tree.put("f", "theirs\n");
+    const rg = try h.write(1, 0, "get\n");
+    try testing.expect(rg.body == .rwrite);
+    for (0..40) |_| {
+        try h.ed.frameEnd(h.fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("theirs\n", w.body.file.buffer.read(0, w.body.file.buffer.len(), &tbuf));
+    try testing.expect(!w.dirty);
+}
+
 test "served: index two windows" {
     const h = try Harness.create(testing.allocator, "one", "hello\n");
     defer h.destroy();

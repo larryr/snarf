@@ -218,6 +218,57 @@ test "cmd_edit: paste tobody lands in the body" {
     try testing.expectEqualStrings("aXYb", body);
 }
 
+test "cmd_edit: undo recomputes dirty as (seq != putseq) — undoing past a Put re-dirties, redoing back to it cleans; a Filename-only undo keeps dot and retags (T14)" {
+    const h = try WinHarness.init("");
+    defer h.deinit();
+    const ed = &h.ed;
+    try h.body_file.setName("f");
+
+    // Transaction 1: body edit, then simulate a completed Put at this seq.
+    ed.seq += 1;
+    h.w.body.file.mark(ed.seq);
+    try h.w.body.insertAt(0, "A", true);
+    h.w.putseq = h.w.body.file.seq; // Put.tail's bookkeeping, done by hand
+
+    // Transaction 2: another body edit, past the Put.
+    ed.seq += 1;
+    h.w.body.file.mark(ed.seq);
+    try h.w.body.insertAt(1, "B", true);
+
+    // Undo transaction 2: seq falls back to the Put's own seq ⇒ clean.
+    try undo(ed, &h.w.tag, null, null, true, false, "");
+    try testing.expect(!h.w.dirty);
+
+    // Undo transaction 1 too: seq falls to 0, past the Put ⇒ dirty again.
+    try undo(ed, &h.w.tag, null, null, true, false, "");
+    try testing.expect(h.w.dirty);
+
+    // Redo back to the Put's own seq ⇒ clean again.
+    try undo(ed, &h.w.tag, null, null, false, false, "");
+    try testing.expect(!h.w.dirty);
+
+    // A Filename-only transaction (a rename with no body edit): its undo
+    // returns a null range (file.c:259-271), so dot is left alone, and the
+    // tag is recomposed to show the restored name.
+    ed.seq += 1;
+    h.w.body.file.mark(ed.seq);
+    try h.w.body.setSelect(0, 1);
+    const q0_before = h.w.body.q0;
+    const q1_before = h.w.body.q1;
+    try wintag.setName(&h.w, "g");
+    try testing.expectEqualStrings("g", h.w.body.file.name.items);
+
+    try undo(ed, &h.w.tag, null, null, true, false, "");
+    try testing.expectEqualStrings("f", h.w.body.file.name.items);
+    try testing.expectEqual(q0_before, h.w.body.q0);
+    try testing.expectEqual(q1_before, h.w.body.q1);
+    {
+        const pt = try h.w.parseTag(testing.allocator);
+        defer testing.allocator.free(pt.text);
+        try testing.expect(std.mem.startsWith(u8, pt.text, "f "));
+    }
+}
+
 test "cmd_edit: undo then redo round-trips via the executing window" {
     const h = try WinHarness.init("");
     defer h.deinit();

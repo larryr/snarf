@@ -178,6 +178,55 @@ fn textUtf8(a: std.mem.Allocator, t: *Text) error{OutOfMemory}![]u8 {
 // ==========================================================================
 const testing = std.testing;
 
+test "RowDump: a clean loaded window dumps as f (no body), a dirty/never-Put window dumps as F with its body, a dir window dumps as f regardless (T16)" {
+    const boot = @import("boot.zig");
+    const ninep_ = @import("ninep");
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep_.mount.Namespace.init(testing.allocator);
+    defer ns.deinit();
+    var tree = try boot.boot(testing.allocator, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    const col = tree.row.col.items[0];
+    const w_clean = try @import("place.zig").mintWindow(col, 0, "/a/clean");
+    w_clean.body.file.disk = .{ .qid = .{ .path = 1, .vers = 1 }, .mtime = 1, .length = 0, .sha1 = [_]u8{0} ** 20 };
+    w_clean.dirty = false;
+
+    const w_dirty = try @import("place.zig").mintWindow(col, 0, "/a/dirty");
+    try w_dirty.body.insertAt(0, "unsaved\n", true);
+    w_dirty.dirty = true;
+    w_dirty.body.file.disk = null;
+
+    const w_dir = try @import("place.zig").mintWindow(col, 0, "/a/adir");
+    w_dir.isdir = true;
+    w_dir.dirty = true; // even dirty, a dir window dumps as f (R-P17-4)
+    w_dir.body.file.disk = null;
+
+    const out = try serialize(&ed, tree.row);
+    defer testing.allocator.free(out);
+
+    var it = std.mem.splitScalar(u8, out, '\n');
+    var f_count: usize = 0;
+    var cap_count: usize = 0;
+    while (it.next()) |line| {
+        const rec = dumpfmt.parseWinRec(line) orelse continue;
+        switch (rec.kind) {
+            .f => f_count += 1,
+            .F => cap_count += 1,
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), f_count); // clean + dir
+    // 2, not 1: `boot.boot`'s default "scratch" window is itself never-read
+    // (disk == null, !dirty) ⇒ also an F record (R-P17-4) alongside w_dirty.
+    try testing.expectEqual(@as(usize, 2), cap_count);
+    try testing.expect(std.mem.indexOf(u8, out, "unsaved\n") != null); // F's body inline
+}
+
 test "RowDump: a booted row serializes in acme's shape" {
     const boot = @import("boot.zig");
     var fx = try draw.Frame.TestFixture.init();

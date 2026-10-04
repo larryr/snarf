@@ -261,6 +261,86 @@ fn replaceText(ed: *Editor, t: *Text, bytes: []const u8) Text.Error!void {
 // ==========================================================================
 const testing = std.testing;
 
+test "RowLoad: apply — column percents accepted, w/c tags replaced, an F record inserts its body and dirties the window, an f record starts an asynchronous Load (T16)" {
+    const boot = @import("boot.zig");
+    const ninep_ = @import("ninep");
+    const draw = @import("draw");
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep_.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const w = &aw.writer;
+    try w.print("/\nfixed9x18\nfixed9x18\n", .{});
+    try dumpfmt.writePct(w, 0.0);
+    try w.writeByte('\n');
+    try w.print("w Newcol Kill Putall Dump Exit \n", .{});
+    try w.writeByte('c');
+    try dumpfmt.writeInt(w, 0);
+    try w.print(" New Cut Paste Snarf Sort Zerox Delcol \n", .{});
+
+    // F record: col0, 3 runes dumped inline ("hi\n").
+    try dumpfmt.writeWinRec(w, .{ .kind = .F, .col = 0, .id = 0, .q0 = 0, .q1 = 2, .pct = 10.0, .ndumped = 3, .font = "" });
+    for ([_]usize{ 0, 0, 0, 0, 0 }) |v| {
+        try dumpfmt.writeInt(w, v);
+        try w.writeByte(' ');
+    }
+    try dumpfmt.writeTag(w, "newname Del Snarf Undo | Look ");
+    try w.writeByte('\n');
+    try w.writeAll("hi\n");
+
+    // f record: col0, named "/some/path", no inline body.
+    try dumpfmt.writeWinRec(w, .{ .kind = .f, .col = 0, .id = 1, .q0 = 0, .q1 = 0, .pct = 60.0, .ndumped = null, .font = "" });
+    for ([_]usize{ 0, 1, 0, 0, 0 }) |v| {
+        try dumpfmt.writeInt(w, v);
+        try w.writeByte(' ');
+    }
+    try dumpfmt.writeTag(w, "/some/path Del Snarf | Look ");
+    try w.writeByte('\n');
+
+    const dump = aw.writer.buffered();
+    var p = Parser{ .data = dump };
+    const loads_before = ed.loads.items.len;
+    try apply(&ed, &p);
+
+    // The column's own tag was replaced.
+    {
+        var tbuf: [256]u8 = undefined;
+        const col = tree.row.col.items[0];
+        try testing.expect(std.mem.indexOf(
+            u8,
+            col.tag.file.buffer.read(0, col.tag.file.buffer.len(), &tbuf),
+            "New Cut Paste",
+        ) != null);
+    }
+
+    // The F window: named, dirty, body inserted verbatim.
+    var newwin: ?*Window = null;
+    var fwin: ?*Window = null;
+    for (tree.row.col.items[0].w.items) |win| {
+        if (std.mem.eql(u8, win.body.file.name.items, "newname")) newwin = win;
+        if (std.mem.eql(u8, win.body.file.name.items, "/some/path")) fwin = win;
+    }
+    const nw = newwin.?;
+    try testing.expect(nw.dirty);
+    try testing.expect(nw.body.file.mod);
+    var bbuf: [16]u8 = undefined;
+    try testing.expectEqualStrings("hi\n", nw.body.file.buffer.read(0, nw.body.file.buffer.len(), &bbuf));
+
+    // The f window: an asynchronous Load was started for it (rows.c:826-827 —
+    // the C's synchronous `get`, ported as always).
+    try testing.expect(fwin != null);
+    try testing.expect(ed.loads.items.len > loads_before);
+}
+
 test "RowLoad: scratchName follows the last component" {
     try testing.expect(scratchName("+Errors"));
     try testing.expect(scratchName("/a/b/+Errors"));

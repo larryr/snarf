@@ -549,6 +549,55 @@ test "file: reset clears stacks and seq, keeps text and mod" {
     try testing.expectEqual(@as(?Range, null), try f.undo());
 }
 
+test "file: setName records a filename delta under seq>0; undo restores the old name and mod_before with a null range; redo re-applies; seq==0 records nothing; reset keeps disk/unread (T4)" {
+    const a = testing.allocator;
+    var f = File.init(a, Buffer.initEmpty(a));
+    defer f.deinit();
+
+    // seq == 0: setName records nothing — no delta, straight rename.
+    try f.setName("first");
+    try testing.expectEqualStrings("first", f.name.items);
+    try testing.expectEqual(@as(usize, 0), f.delta.items.len);
+    try testing.expect(f.unread); // file.c:163 — set either way
+
+    // A body edit (its own transaction), then a SEPARATE rename transaction:
+    // the rename pushes a `.filename` delta carrying the OLD name and the mod
+    // bit as of the rename — alone in its own seq, so undoing it reverses
+    // nothing else.
+    f.mark(1);
+    try f.insert(0, "hi");
+    try testing.expect(f.mod);
+    f.mark(2);
+    const mod_at_rename = f.mod;
+    try f.setName("second");
+    try testing.expectEqualStrings("second", f.name.items);
+    const top = f.delta.items[f.delta.items.len - 1];
+    try testing.expect(top == .filename);
+    try testing.expectEqualStrings("first", top.filename.name);
+    try testing.expectEqual(@as(u32, 2), top.filename.seq);
+
+    // Undo: restores "first", restores mod_before, leaves dot untouched
+    // (returns null, not a text range — file.c:259-271), pushes the inverse
+    // (the current name "second") onto epsilon.
+    const r = try f.undo();
+    try testing.expectEqual(@as(?Range, null), r);
+    try testing.expectEqualStrings("first", f.name.items);
+    try testing.expectEqual(mod_at_rename, f.mod);
+    try testing.expectEqual(@as(u32, 2), f.redoSeq());
+
+    // Redo: re-applies the rename to "second".
+    const r2 = try f.redo();
+    try testing.expectEqual(@as(?Range, null), r2);
+    try testing.expectEqualStrings("second", f.name.items);
+
+    // disk/unread survive a reset (file.c:281-287 — filereset leaves them).
+    f.disk = .{ .qid = .{ .path = 1, .vers = 1 }, .mtime = 1, .length = 2, .sha1 = [_]u8{0} ** 20 };
+    f.unread = false;
+    f.reset();
+    try testing.expect(f.disk != null);
+    try testing.expect(!f.unread);
+}
+
 test "file: randomized edit/undo/redo storm matches snapshots (seed 0xf11e)" {
     const a = testing.allocator;
     var f = File.init(a, Buffer.initEmpty(a));

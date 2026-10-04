@@ -29,10 +29,21 @@ pub const File = struct {
     name: []u8,
     data: std.ArrayList(u8) = .empty,
     vers: u32 = 1,
+    /// Fault injection for Put's failure-path tests (T10): when true, `open`
+    /// reports this qid QTAPPEND — `WriteFileJob`'s `refuse_append` then
+    /// refuses it if the caller also says the file already has bytes.
+    qtype_append: bool = false,
+    /// One-shot fault: the next `write` on this file acknowledges one byte
+    /// fewer than it was asked to — `WriteFileJob` sees that as a short
+    /// `Rwrite.count` (`error.ShortWrite`, exec.c:757). Cleared after firing.
+    short_once: bool = false,
 };
 
 alloc: std.mem.Allocator,
 files: std.ArrayList(File) = .empty,
+/// Fault injection: every `create` fails (simulates a refused Tcreate — the
+/// "can't create file" path, exec.c:729).
+fail_create: bool = false,
 
 pub fn init(alloc: std.mem.Allocator) MemTree {
     return .{ .alloc = alloc };
@@ -95,7 +106,7 @@ fn open(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) OpError!
         f.data.clearRetainingCapacity();
         f.vers += 1;
     }
-    return .{ .path = fid.qid.path, .vers = f.vers };
+    return .{ .path = fid.qid.path, .vers = f.vers, .qtype = .{ .append = f.qtype_append } };
 }
 
 fn read(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, offset: u64, buf: []u8) server.ReadError!usize {
@@ -123,6 +134,10 @@ fn write(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, offset: u64, data
     if (off + data.len > f.data.items.len) f.data.resize(self.alloc, off + data.len) catch return error.IoError;
     @memcpy(f.data.items[off..][0..data.len], data);
     f.vers += 1;
+    if (f.short_once and data.len > 0) {
+        f.short_once = false;
+        return data.len - 1;
+    }
     return data.len;
 }
 
@@ -136,6 +151,7 @@ fn statOp(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) OpError!Stat {
 
 fn create(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, name: []const u8, perm: u32, _: u8) server.OpBlockError!server.CreateResult {
     const self: *MemTree = @ptrCast(@alignCast(ctx));
+    if (self.fail_create) return error.PermissionDenied;
     if (fid.qid.path != 1 or perm & Stat.DMDIR != 0) return error.PermissionDenied;
     if (self.find(name) != null) return error.FileExists;
     const copy = self.alloc.dupe(u8, name) catch return error.IoError;

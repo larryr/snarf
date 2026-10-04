@@ -208,6 +208,141 @@ pub fn runeBytes(bytes: []const u8, n: usize) ?usize {
 // ==========================================================================
 const testing = std.testing;
 
+test "dumpfmt: field codecs — %11d, %11.7f, the 0xff tag newline both ways, F rune count, and a hand-written acme-shaped dump (T15)" {
+    // %11d / %11.7f exact widths.
+    {
+        var buf: [32]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try writeInt(&w, 42);
+        try testing.expectEqualStrings("         42", w.buffered());
+    }
+    {
+        var buf: [32]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try writePct(&w, 0.5);
+        try testing.expectEqualStrings("  0.5000000", w.buffered());
+    }
+
+    // The tag's '\n' <-> 0xff round trip, both directions.
+    {
+        var buf: [32]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try writeTag(&w, "line one\nline two");
+        try testing.expectEqualStrings("line one\xffline two", w.buffered());
+    }
+    {
+        const a = testing.allocator;
+        const line = ("x" ** ctl_len) ++ "a\xffb";
+        const tag = try tagOf(a, line);
+        defer a.free(tag);
+        try testing.expectEqualStrings("a\nb", tag);
+    }
+    try testing.expectEqualStrings("", try tagOf(testing.allocator, "short"));
+
+    // atoi/atof: leading blanks, a stopping point, negative clamps to 0.
+    try testing.expectEqual(@as(usize, 0), atoi("   -5"));
+    try testing.expectEqual(@as(usize, 12), atoi("  12abc"));
+    try testing.expectEqual(@as(f64, 1.5), atof("  1.5xyz"));
+    try testing.expectEqual(@as(f64, 0), atof("  junk"));
+
+    // parsePcts: rejects an out-of-range percent and more than 10 fields.
+    {
+        var out: [10]f64 = undefined;
+        var buf: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try writePct(&w, 25.0);
+        try w.writeByte(' ');
+        try writePct(&w, 75.0);
+        try w.writeByte(' ');
+        const ok = parsePcts(w.buffered(), &out).?;
+        try testing.expectEqual(@as(usize, 2), ok.len);
+        try testing.expectEqual(@as(f64, 25.0), ok[0]);
+        try testing.expectEqual(@as(f64, 75.0), ok[1]);
+
+        var w2: std.Io.Writer = .fixed(&buf);
+        try writePct(&w2, 100.0);
+        try w2.writeByte(' ');
+        try testing.expect(parsePcts(w2.buffered(), &out) == null); // p >= 100
+
+        var w3: std.Io.Writer = .fixed(&buf);
+        for (0..11) |_| {
+            try writePct(&w3, 1.0);
+            try w3.writeByte(' ');
+        }
+        try testing.expect(parsePcts(w3.buffered(), &out) == null); // > 10 fields
+    }
+
+    // An 'f' record (no rune count field).
+    {
+        var buf: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try writeWinRec(&w, .{ .kind = .f, .col = 0, .id = 3, .q0 = 0, .q1 = 5, .pct = 10.0, .ndumped = null, .font = "fixed9x18" });
+        const line = w.buffered();
+        const r = parseWinRec(line[0 .. line.len - 1]).?;
+        try testing.expectEqual(Kind.f, r.kind);
+        try testing.expectEqual(@as(usize, 3), r.id);
+        try testing.expectEqual(@as(?usize, null), r.ndumped);
+        try testing.expectEqualStrings("fixed9x18", r.font);
+    }
+
+    // A hand-written acme-shaped dump (contract §1 / rows.c:317-462): wdir,
+    // two font lines, one column at 0%, row tag, one column tag, one `f`
+    // window record with a ctl+tag line. The fixed-width records are built
+    // through the real codecs (hand-typing 11-wide fields byte-for-byte is
+    // too fragile); the surrounding structural lines are literal.
+    var fbuf: [256]u8 = undefined;
+    var fw: std.Io.Writer = .fixed(&fbuf);
+    try writeWinRec(&fw, .{ .kind = .f, .col = 0, .id = 0, .q0 = 0, .q1 = 0, .pct = 0.0, .ndumped = null, .font = "fixed9x18" });
+    const f_rec_line = fw.buffered(); // includes its own trailing '\n'
+
+    var cbuf: [256]u8 = undefined;
+    var cw: std.Io.Writer = .fixed(&cbuf);
+    try writeInt(&cw, 3);
+    try cw.writeByte(' ');
+    try writeInt(&cw, 15);
+    try cw.writeByte(' ');
+    try writeInt(&cw, 12);
+    try cw.writeByte(' ');
+    try writeInt(&cw, 0);
+    try cw.writeByte(' ');
+    try writeInt(&cw, 0);
+    try cw.writeByte(' ');
+    try writeTag(&cw, "one Del Snarf | Look "); // tag text, no trailing newline
+    try cw.writeByte('\n'); // the LINE's own terminator (real newline)
+    const ctl_tag_line = cw.buffered(); // ctl_len bytes + the tag, 0xff-encoded
+
+    const dump = try std.fmt.allocPrint(testing.allocator,
+        \\/
+        \\fixed9x18
+        \\fixed9x18
+        \\  0.0000000
+        \\w Newcol Kill Putall Dump Exit
+        \\c          0 New Cut Paste Snarf Sort Zerox Delcol
+        \\{s}{s}
+    , .{ f_rec_line, ctl_tag_line });
+    defer testing.allocator.free(dump);
+    var it = std.mem.splitScalar(u8, dump, '\n');
+    try testing.expectEqualStrings("/", it.next().?); // wdir
+    try testing.expectEqualStrings("fixed9x18", it.next().?);
+    try testing.expectEqualStrings("fixed9x18", it.next().?);
+    var pcts: [10]f64 = undefined;
+    const p = parsePcts(it.next().?, &pcts).?;
+    try testing.expectEqual(@as(usize, 1), p.len);
+    try testing.expectEqual(@as(f64, 0.0), p[0]);
+    const w_line = it.next().?;
+    try testing.expect(std.mem.startsWith(u8, w_line, "w "));
+    const c_line = it.next().?;
+    try testing.expect(std.mem.startsWith(u8, c_line, "c"));
+    const f_line = it.next().?;
+    const rec = parseWinRec(f_line).?;
+    try testing.expectEqual(Kind.f, rec.kind);
+    try testing.expectEqualStrings("fixed9x18", rec.font);
+    const ctltag = it.next().?;
+    const tag = try tagOf(testing.allocator, ctltag);
+    defer testing.allocator.free(tag);
+    try testing.expectEqualStrings("one Del Snarf | Look ", tag);
+}
+
 test "dumpfmt: a window record round-trips through its codec" {
     var buf: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);

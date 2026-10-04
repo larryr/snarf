@@ -155,4 +155,104 @@ test "cmd_put: getName — own name, relative arg, absolute arg" {
     const abs = (try getName(&ed, &w.body, null, "/x/y", true)).?;
     defer a.free(abs);
     try testing.expectEqualStrings("/x/y", abs);
+
+    // A 2-1 chord argument with a '/' wins verbatim, regardless of `t`.
+    const w2 = try tree.addWindow("/e/argwin", "bar here\n");
+    try w2.body.setSelect(0, 3); // "bar" (no slash — promoted, relative to w2)
+    const chord_noslash = (try getName(&ed, &w.body, &w2.body, "", true)).?;
+    defer a.free(chord_noslash);
+    try testing.expectEqualStrings("/e/bar", chord_noslash);
+
+    try w2.body.setSelect(4, 8); // "here" — still no slash
+    const chord_noslash2 = (try getName(&ed, &w.body, &w2.body, "", true)).?;
+    defer a.free(chord_noslash2);
+    try testing.expectEqualStrings("/e/here", chord_noslash2);
+
+    try w2.body.insertAt(w2.body.file.buffer.len(), " /q/r", true); // "bar here\n /q/r"
+    try w2.body.setSelect(10, 14); // "/q/r" (byte 9 is the leading space)
+    const chord_slash = (try getName(&ed, &w.body, &w2.body, "", true)).?;
+    defer a.free(chord_slash);
+    try testing.expectEqualStrings("/q/r", chord_slash);
+}
+
+test "cmd_put: put — unnamed warns 'no file name', a dir window is silent, isscratch/missing are excluded from Putall (T11/T12)" {
+    const a = testing.allocator;
+    const place = @import("../place.zig");
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .win_name = "/d/named",
+        .body = "x\n",
+    });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const col = tree.row.col.items[0];
+
+    // Unnamed window ⇒ "no file name".
+    const unnamed = try place.mintWindow(col, 0, "");
+    try put(&ed, &unnamed.body, null, null, false, false, "");
+    try testing.expectEqualStrings("no file name\n", ed.warningText());
+    try ed.frameEnd(fx.disp); // drain
+
+    // A directory window ⇒ silent return (no warning, nothing started).
+    const dirw = tree.row.col.items[0].w.items[0];
+    dirw.isdir = true;
+    try put(&ed, &dirw.body, null, null, false, false, "");
+    try testing.expectEqual(@as(usize, 0), ed.puts.items.len);
+    try testing.expect(!ed.warningsPending());
+    dirw.isdir = false;
+}
+
+test "cmd_put: putall writes only the eligible dirty/named/non-scratch windows whose file exists, in column/window order; Putall never creates (T12)" {
+    const draw_ = draw;
+    const ninep = @import("ninep");
+    const place = @import("../place.zig");
+    const MemTree = @import("../MemTree.zig");
+    const Window = @import("../Window.zig");
+    const a = testing.allocator;
+    var fx = try draw_.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw_.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("a", "A\n");
+
+    const col = tree.row.col.items[0];
+    // Properly LOADED (unread=false, disk recorded) so Putall's write goes
+    // straight through instead of tripping the "not written; file already
+    // exists" stale check — that is `Get`'s job, tested elsewhere (T9).
+    const w_existing = try openfile.readFile(&ed, col, "/m/a");
+    const w_unnamed = try place.mintWindow(col, 0, ""); // unnamed ⇒ skipped
+    const w_errors = try place.mintWindow(col, 0, "+Errors"); // isscratch ⇒ skipped
+    const w_missing = try place.mintWindow(col, 0, "/m/b"); // dirty, missing ⇒ "no auto-Put"
+    for (0..10) |_| { // let w_existing's Load finish before marking it dirty
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+
+    for ([_]*Window{ w_existing, w_unnamed, w_errors, w_missing }) |w| {
+        ed.seq += 1;
+        w.body.file.mark(ed.seq);
+        try w.body.insertAt(0, "X", true);
+    }
+    try testing.expect(w_errors.isscratch); // wintag.setName's suffix rule
+
+    try putall(&ed, &w_existing.body, null, null, false, false, "");
+    for (0..40) |_| {
+        try Put.stepAll(&ed);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("XA\n", m.tree.find("a").?.data.items);
+    try testing.expect(std.mem.indexOf(u8, ed.warningText(), "no auto-Put of /m/b: file does not exist") != null);
+    try testing.expect(w_unnamed.dirty); // never attempted
+    try testing.expect(w_errors.dirty); // isscratch skipped — stays dirty
+    try testing.expect(m.tree.find("b") == null); // Putall never creates
 }

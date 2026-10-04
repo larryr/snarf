@@ -392,6 +392,309 @@ test "Put: with no namespace a Put warns instead of trapping" {
     try testing.expectEqualStrings("can't create file /a/file: no namespace\n", ed.warningText());
 }
 
+test "Put: typing during the put writes the snapshot, keeps the window dirty and Put shown; a second Put while pending warns (T8)" {
+    const draw = @import("draw");
+    const boot = @import("boot.zig");
+    const openfile = @import("openfile.zig");
+    const MemTree = @import("MemTree.zig");
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("f", "old\n");
+
+    const col = tree.row.col.items[0];
+    const w = try openfile.readFile(&ed, col, "/m/f");
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "A", true); // "Aold\n"
+    try ed.frameEnd(fx.disp);
+    const seq_at_put = w.body.file.seq;
+
+    try start(&ed, w, "/m/f", false);
+    try testing.expectEqual(@as(usize, 1), ed.puts.items.len);
+
+    // A second Put on the SAME window while the first is pending warns and
+    // does not queue a second job (R-P17-1).
+    try start(&ed, w, "/m/f", false);
+    try testing.expectEqual(@as(usize, 1), ed.puts.items.len);
+    try testing.expectEqualStrings("/m/f: Put already in progress\n", ed.warningText());
+    try ed.frameEnd(fx.disp);
+
+    // Step the Put partway, then type more BEFORE it finishes. The bytes it
+    // writes must be the snapshot taken at `start` ("Aold\n"), not what is in
+    // the buffer now.
+    try stepAll(&ed);
+    try m.poll();
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "B", true); // "BAold\n" in the live buffer
+
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqual(@as(usize, 0), ed.puts.items.len);
+    try testing.expectEqualStrings("Aold\n", m.tree.find("f").?.data.items);
+    try testing.expectEqualStrings("BAold\n", blk: {
+        var buf: [32]u8 = undefined;
+        break :blk w.body.file.buffer.read(0, w.body.file.buffer.len(), &buf);
+    });
+
+    // Typed meanwhile (seq != seq_at_put, and now != putseq either): the
+    // window stays dirty and the tag keeps " Put" (R-P17-1 tail, wind.c:514).
+    _ = seq_at_put;
+    try testing.expect(w.dirty);
+    try testing.expect(w.body.file.mod);
+    try testing.expect(w.body.file.seq != w.putseq);
+    var tb: [128]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tb), " Put") != null);
+}
+
+test "Put: failure paths warn acme's own text and leave the window dirty; a window deleted mid-put finishes the write with no bookkeeping (T10)" {
+    const draw = @import("draw");
+    const boot = @import("boot.zig");
+    const openfile = @import("openfile.zig");
+    const MemTree = @import("MemTree.zig");
+    const a = testing.allocator;
+
+    // --- can't create file: Tcreate refused. ---
+    {
+        var fx = try draw.Frame.TestFixture.init();
+        defer fx.deinit();
+        var ns = ninep.mount.Namespace.init(a);
+        defer ns.deinit();
+        var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+        defer tree.deinit();
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        tree.bind(&ed);
+        const m = try MemTree.Harness.create(a, &ns, "/m");
+        defer m.destroy(a);
+        m.tree.fail_create = true;
+
+        const col = tree.row.col.items[0];
+        const w = try openfile.readFile(&ed, col, "/m/new"); // does not exist yet
+        for (0..10) |_| {
+            try ed.frameEnd(fx.disp);
+            try m.poll();
+        }
+        ed.seq += 1;
+        w.body.file.mark(ed.seq);
+        try w.body.insertAt(0, "x", true);
+        try ed.frameEnd(fx.disp);
+
+        try start(&ed, w, "/m/new", false);
+        for (0..40) |_| { // stepAll, not frameEnd: inspect the warning before it drains
+            try stepAll(&ed);
+            try m.poll();
+        }
+        try testing.expect(std.mem.startsWith(u8, ed.warningText(), "can't create file /m/new: "));
+        try testing.expect(w.dirty);
+        try ed.frameEnd(fx.disp); // flush into +Errors
+    }
+
+    // --- can't write file: a short Twrite. ---
+    {
+        var fx = try draw.Frame.TestFixture.init();
+        defer fx.deinit();
+        var ns = ninep.mount.Namespace.init(a);
+        defer ns.deinit();
+        var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+        defer tree.deinit();
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        tree.bind(&ed);
+        const m = try MemTree.Harness.create(a, &ns, "/m");
+        defer m.destroy(a);
+        try m.tree.put("f", "old\n");
+        m.tree.find("f").?.short_once = true;
+
+        const col = tree.row.col.items[0];
+        const w = try openfile.readFile(&ed, col, "/m/f");
+        for (0..10) |_| {
+            try ed.frameEnd(fx.disp);
+            try m.poll();
+        }
+        ed.seq += 1;
+        w.body.file.mark(ed.seq);
+        try w.body.insertAt(0, "x", true);
+        try ed.frameEnd(fx.disp);
+
+        try start(&ed, w, "/m/f", false);
+        for (0..40) |_| {
+            try stepAll(&ed);
+            try m.poll();
+        }
+        try testing.expect(std.mem.startsWith(u8, ed.warningText(), "can't write file /m/f: "));
+        try testing.expect(w.dirty);
+        try ed.frameEnd(fx.disp);
+    }
+
+    // --- append-only refusal. ---
+    {
+        var fx = try draw.Frame.TestFixture.init();
+        defer fx.deinit();
+        var ns = ninep.mount.Namespace.init(a);
+        defer ns.deinit();
+        var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+        defer tree.deinit();
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        tree.bind(&ed);
+        const m = try MemTree.Harness.create(a, &ns, "/m");
+        defer m.destroy(a);
+        try m.tree.put("f", "old\n");
+        m.tree.find("f").?.qtype_append = true;
+
+        const col = tree.row.col.items[0];
+        const w = try openfile.readFile(&ed, col, "/m/f");
+        for (0..10) |_| {
+            try ed.frameEnd(fx.disp);
+            try m.poll();
+        }
+        ed.seq += 1;
+        w.body.file.mark(ed.seq);
+        try w.body.insertAt(0, "x", true);
+        try ed.frameEnd(fx.disp);
+
+        try start(&ed, w, "/m/f", false);
+        for (0..40) |_| {
+            try stepAll(&ed);
+            try m.poll();
+        }
+        try testing.expectEqualStrings("/m/f not written; file is append only\n", ed.warningText());
+        try testing.expect(w.dirty);
+        try ed.frameEnd(fx.disp);
+    }
+
+    // --- window deleted mid-put: the write completes, no trap, no
+    // bookkeeping on the (gone) window. ---
+    {
+        var fx = try draw.Frame.TestFixture.init();
+        defer fx.deinit();
+        var ns = ninep.mount.Namespace.init(a);
+        defer ns.deinit();
+        var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+        defer tree.deinit();
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        tree.bind(&ed);
+        const m = try MemTree.Harness.create(a, &ns, "/m");
+        defer m.destroy(a);
+        try m.tree.put("f", "old\n");
+
+        const col = tree.row.col.items[0];
+        const w = try openfile.readFile(&ed, col, "/m/f");
+        for (0..10) |_| {
+            try ed.frameEnd(fx.disp);
+            try m.poll();
+        }
+        ed.seq += 1;
+        w.body.file.mark(ed.seq);
+        try w.body.insertAt(0, "x", true);
+        try ed.frameEnd(fx.disp);
+
+        try start(&ed, w, "/m/f", false);
+        try testing.expectEqual(@as(usize, 1), ed.puts.items.len);
+        // The window dies mid-put — the real teardown path, which wires
+        // `Editor.dropTextRefs` -> `Put.dropWindow` (R-P17-1).
+        try col.close(&ed, w, true);
+
+        for (0..40) |_| {
+            try ed.frameEnd(fx.disp);
+            try m.poll();
+        }
+        try testing.expectEqual(@as(usize, 0), ed.puts.items.len); // reaped, no trap
+        try testing.expectEqualStrings("xold\n", m.tree.find("f").?.data.items);
+    }
+}
+
+test "Put: an unread name warns 'not written; file already exists' on the first Put, then a second Put (same unchanged file) succeeds, as does a retry after a modified-since-last-read warning (T9 gap)" {
+    const draw = @import("draw");
+    const boot = @import("boot.zig");
+    const place = @import("place.zig");
+    const MemTree = @import("MemTree.zig");
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("f", "old\n");
+
+    // A freshly minted window, never Loaded, whose name is typed directly
+    // (`unread` goes true, `disk` stays null) — not a Get.
+    const col = tree.row.col.items[0];
+    const w = try place.mintWindow(col, 0, "");
+    try wintag.setName(w, "/m/f");
+    try testing.expect(w.body.file.unread);
+    try testing.expect(w.body.file.disk == null);
+
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| {
+        try stepAll(&ed);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("/m/f not written; file already exists\n", ed.warningText());
+    try testing.expectEqualStrings("old\n", m.tree.find("f").?.data.items); // nothing written
+    try testing.expect(w.body.file.disk != null); // the identity was recorded
+    try ed.frameEnd(fx.disp); // flush into +Errors
+
+    // A second Put, nothing changed server-side meanwhile: the recorded
+    // identity now matches, so it goes straight through.
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("", m.tree.find("f").?.data.items); // the (empty) window body, written
+    try testing.expect(!w.body.file.unread);
+    try testing.expect(!ed.warningsPending());
+
+    // --- modified-since-last-read: a retry (nothing further changed) also
+    // goes straight through, for the same reason. ---
+    try m.tree.put("f", "theirs\n"); // bumps vers, changes content under us
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "y", true);
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| {
+        try stepAll(&ed);
+        try m.poll();
+    }
+    try testing.expect(std.mem.startsWith(u8, ed.warningText(), "/m/f modified"));
+    try testing.expectEqualStrings("theirs\n", m.tree.find("f").?.data.items);
+    try ed.frameEnd(fx.disp); // flush into +Errors
+
+    try start(&ed, w, "/m/f", false);
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("y", m.tree.find("f").?.data.items);
+    try testing.expect(!w.dirty);
+}
+
 test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the layout" {
     const draw = @import("draw");
     const boot = @import("boot.zig");

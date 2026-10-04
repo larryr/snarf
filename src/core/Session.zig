@@ -109,6 +109,62 @@ pub fn deinit(self: *Session, a: std.mem.Allocator) void {
 // ==========================================================================
 const testing = std.testing;
 
+test "Session: home==null warns '$home not defined' for both Dump and Load; a second Dump while one runs warns; a bad load file warns with its line and keeps whatever was built (T17)" {
+    const draw = @import("draw");
+    const boot = @import("boot.zig");
+    const MemTree = @import("MemTree.zig");
+    const ninep = @import("ninep");
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+
+    // home == null: both of acme's own warnings, verbatim (rows.c:477, :574).
+    try ed.session.startDump(&ed, "");
+    try testing.expectEqualStrings("can't find file for dump: $home not defined\n", ed.warningText());
+    try ed.frameEnd(fx.disp);
+    try ed.session.startLoad(&ed, "");
+    try testing.expectEqualStrings("can't find file for load: $home not defined\n", ed.warningText());
+    try ed.frameEnd(fx.disp);
+
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    ed.session.home = "/m";
+
+    // A second Dump while one is already running warns and does not replace it.
+    try ed.session.startDump(&ed, "");
+    try testing.expect(ed.session.dump != null);
+    try ed.session.startDump(&ed, "");
+    try testing.expectEqualStrings("Dump: already in progress\n", ed.warningText());
+    for (0..40) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expect(ed.session.dump == null); // finished and reaped
+    try testing.expect(m.tree.find("acme.dump") != null);
+
+    // A bad load file: malformed at a known line, reports that line, and
+    // stops without trapping (rows.c:839-842).
+    // Line 4 (the percent line) is EMPTY — too short for even one field
+    // (`parsePcts` needs `len+1 >= 12`) — a clean, unambiguous malformed line
+    // ("NOT A PERCENT LINE" would actually parse: `atof` falls back to 0.0
+    // on no numeric prefix, which is a VALID percent).
+    try m.tree.put("acme.dump", "/\nfixed9x18\nfixed9x18\n\n");
+    try ed.session.startLoad(&ed, "");
+    for (0..40) |_| { // step, not frameEnd: inspect the warning before it drains
+        try ed.session.step(&ed);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("bad load file /m/acme.dump:4\n", ed.warningText());
+    try testing.expect(ed.session.load == null);
+}
+
 test "Session: dumpPath defaults to home/acme.dump and resolves relatives" {
     const a = testing.allocator;
     var s = Session{};

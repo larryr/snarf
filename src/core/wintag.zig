@@ -395,6 +395,144 @@ test "window: parsetag finds the name end" {
     }
 }
 
+test "window: putShown — named+edited is true, putseq==seq/unnamed/dir are false (T5)" {
+    const h = try WinHarness.init("hello\n", win_rect);
+    defer h.deinit();
+    const w = &h.w;
+    try h.body_file.setName("f");
+
+    // Fresh: seq==0==putseq ⇒ false (even though named).
+    try testing.expect(!putShown(w));
+
+    // Named + a recorded edit (seq != putseq) ⇒ true.
+    h.body_file.mark(1);
+    try w.body.insertAt(0, "X", true);
+    try testing.expect(putShown(w));
+
+    // putseq caught up to seq (a completed Put) ⇒ false again.
+    w.putseq = h.body_file.seq;
+    try testing.expect(!putShown(w));
+    w.putseq = 0; // restore for the cases below
+
+    // Unnamed (empty name) ⇒ false regardless of seq/putseq.
+    try h.body_file.setName("");
+    try testing.expect(!putShown(w));
+    try h.body_file.setName("f");
+
+    // A directory window never shows Put, named or not.
+    w.isdir = true;
+    try testing.expect(!putShown(w));
+    w.isdir = false;
+
+    // filemenu==false (the `+Errors`/`guide` shape) never shows Put either —
+    // guarded at the `setTag1` call site, not inside `putShown` itself, so
+    // exercise it there.
+    w.filemenu = false;
+    try w.setTag1();
+    {
+        const pt = try w.parseTag(testing.allocator);
+        defer testing.allocator.free(pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Put") == null);
+    }
+}
+
+test "window: sweep recomposes the tag when putseq changes alone, with no new edit/undo/redo (T5)" {
+    const h = try Editor.TwoWin.init();
+    defer h.deinit();
+
+    try h.w1.body.file.setName("one"); // TwoWin already names it "one"; explicit for clarity
+    h.ed.seq += 1;
+    h.w1.body.file.mark(h.ed.seq);
+    try h.w1.body.insertAt(0, "X", true);
+
+    try sweep(&h.ed);
+    try testing.expect(h.w1.tag_state.put);
+    {
+        const pt = try h.w1.parseTag(testing.allocator);
+        defer testing.allocator.free(pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Put") != null);
+    }
+
+    // Nothing else changes (no new mark, no undo/redo) — only putseq catching
+    // up to the file's seq, as `Put`'s own completion does (R-P17-1 tail).
+    h.w1.putseq = h.w1.body.file.seq;
+    try sweep(&h.ed);
+    try testing.expect(!h.w1.tag_state.put);
+    {
+        const pt = try h.w1.parseTag(testing.allocator);
+        defer testing.allocator.free(pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, " Put") == null);
+    }
+}
+
+test "window: commit — a hand-edited tag name is adopted on button-down, undoably; the suffix past '|' never renames (T6)" {
+    const a = testing.allocator;
+    const h = try WinHarness.init("hello\n", win_rect);
+    defer h.deinit();
+    const w = &h.w;
+    try h.body_file.setName("f");
+    try w.setTag1(); // "f Del Snarf | Look "
+
+    var ed = Editor.init(a);
+    defer ed.deinit();
+
+    // Edit the tag's NAME half: "f" -> "g" (simulates typing, then B2/B1
+    // button-down landing in the tag before textselect.run — acme.c:644-650).
+    try w.tag.deleteRange(0, 1, true);
+    try w.tag.insertAt(0, "g", true);
+    try testing.expect(w.tag_file.mod);
+
+    try commit(&ed, w);
+    try testing.expectEqualStrings("g", w.body.file.name.items);
+    try testing.expectEqual(@as(u32, 1), ed.seq);
+    try testing.expectEqual(@as(u32, 1), w.body.file.seq);
+    try testing.expect(w.body.file.mod);
+    try testing.expect(w.dirty);
+    try testing.expect(!w.tag_file.mod); // cleared by the setTag1 tail
+    {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expect(std.mem.indexOf(u8, pt.text, "Undo") != null);
+        try testing.expect(std.mem.indexOf(u8, pt.text, "Put") != null);
+        try testing.expect(std.mem.startsWith(u8, pt.text, "g "));
+    }
+
+    // Undo restores the OLD name — in the File immediately, and in the tag
+    // once recomposed.
+    _ = try h.body_file.undo();
+    try testing.expectEqualStrings("f", w.body.file.name.items);
+    try w.setTag1();
+    {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        try testing.expect(std.mem.startsWith(u8, pt.text, "f "));
+    }
+
+    // A rename to an isscratch-shaped name (+Errors suffix) sets isscratch.
+    try w.tag.deleteRange(0, 1, true);
+    try w.tag.insertAt(0, "+Errors", true);
+    try testing.expect(!w.isscratch);
+    try commit(&ed, w);
+    try testing.expect(w.isscratch);
+
+    // Editing the SUFFIX (right of '|') is not a rename: the name half is
+    // unchanged, so commit is a no-op on seq/name, and it still clears mod.
+    const seq_before = ed.seq;
+    const file_seq_before = w.body.file.seq;
+    const bar = blk: {
+        const pt = try w.parseTag(a);
+        defer a.free(pt.text);
+        break :blk std.mem.indexOfScalar(u8, pt.text, '|').?;
+    };
+    try w.tag.insertAt(bar + 2, "xyz", true); // past "| "
+    try testing.expect(w.tag_file.mod);
+    try commit(&ed, w);
+    try testing.expectEqual(seq_before, ed.seq);
+    try testing.expectEqual(file_seq_before, w.body.file.seq);
+    try testing.expectEqualStrings("+Errors", w.body.file.name.items);
+    try testing.expect(!w.tag_file.mod);
+}
+
 test "window: setTag1 recomposition" {
     const a = testing.allocator;
     const h = try WinHarness.init("hello\n", win_rect);
