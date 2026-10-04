@@ -11,8 +11,14 @@
 //! One `mark` per user action stamps the seq and discards the redo stack
 //! (file.c:305-311). The stored `mod_before` is what survives a Put: undoing
 //! past a save restores the modify bit the buffer had at each edit (file.c:93,
-//! 117,233,244). Put-seq bookkeeping itself is deferred (R-P4-7); mod is set/
+//! 117,233,244). The Put-seq comparison itself (`putseq`) is per WINDOW
+//! (`Window.putseq`, dat.h:260) and lives there since phase 17; mod is set/
 //! cleared here and restored on undo/redo.
+//!
+//! Name changes are undoable since phase 17 (the R-P4-7 deferral closed):
+//! `setName` with `seq > 0` records a `.filename` delta carrying the OLD name
+//! (`filesetname`/`fileunsetname`, file.c:139-164), and undo restores it
+//! without touching the returned range (file.c:259-271).
 //!
 //! Delta variant names describe the ORIGINAL operation recorded (not the
 //! reverse action): `.insert` (nrunes, no text) reverses by deleting; `.delete`
@@ -29,6 +35,7 @@
 //! `undo`/`redo`, the stacks may be left partially unwound. This is treated as
 //! fatal — callers are not expected to recover editor state from it.
 const std = @import("std");
+const ninep = @import("ninep");
 const Buffer = @import("Buffer.zig");
 
 const File = @This();
@@ -40,6 +47,9 @@ pub const Delta = union(enum) {
     insert: struct { seq: u32, mod_before: bool, p0: usize, nrunes: usize },
     /// A delete at `p0` was recorded (owned decoded UTF-8); reverse by inserting.
     delete: struct { seq: u32, mod_before: bool, p0: usize, text: []u8 },
+    /// A rename was recorded (file.c:150-164 `fileunsetname`): `name` is the
+    /// OLD name (owned); reverse by restoring it. Touches no text.
+    filename: struct { seq: u32, mod_before: bool, name: []u8 },
 
     fn seqOf(self: Delta) u32 {
         return switch (self) {
@@ -60,6 +70,25 @@ mod: bool = false,
 /// Read by `Window.setTag1` to compose the tag's left (name) half (wind.c:490,
 /// :500-502); set via `setName`.
 name: std.ArrayList(u8) = .empty,
+/// `File.unread` (dat.h): the name was set but the file it names has not been
+/// read (or written) since. Set by `setName` (file.c:163), cleared by a
+/// successful Load (look.c:858-859, exec.c:652) and Put (exec.c:805). Read by
+/// `Put`'s stale check ("not written; file already exists", exec.c:717).
+unread: bool = false,
+/// What the file on disk looked like when last read or written — acme's
+/// `qidpath`/`dev`/`mtime`/`sha1` (dat.h). Null until a Load (`setqid`,
+/// text.c:277-284) or a Put (exec.c:790-799) records it. Read by `Put`'s stale
+/// check and by `RowDump`'s existence test (R-P17-4). `reset` leaves it alone.
+disk: ?Disk = null,
+
+/// The disk identity of a file (dat.h `File.qidpath/dev/mtime/sha1`). `dev`
+/// has no 9P analog — the qid carries the server's identity.
+pub const Disk = struct {
+    qid: ninep.Qid,
+    mtime: u32,
+    length: u64,
+    sha1: [20]u8,
+};
 
 pub fn init(allocator: std.mem.Allocator, buffer: Buffer) File {
     return .{ .allocator = allocator, .buffer = buffer };
@@ -75,9 +104,23 @@ pub fn deinit(self: *File) void {
     self.* = undefined;
 }
 
-/// `filesetname` (file.c) minus the undo record (v1): replace the file's name.
-/// The C records a name-change `Undo`; that is deferred with Put-seq bookkeeping.
+/// `filesetname` (file.c:139-148): replace the file's name. With `seq > 0` the
+/// OLD name is first recorded as a `.filename` delta (`fileunsetname`,
+/// file.c:150-164) so `Undo` can restore it; `unread` goes true either way.
+/// Window-level callers go through `wintag.setName` (`winsetname`), which adds
+/// the equality short-circuit, `isscratch` and the retag.
 pub fn setName(f: *File, new_name: []const u8) error{OutOfMemory}!void {
+    if (f.seq > 0) {
+        const old = try f.allocator.dupe(u8, f.name.items);
+        errdefer f.allocator.free(old);
+        try f.delta.append(f.allocator, .{ .filename = .{ .seq = f.seq, .mod_before = f.mod, .name = old } });
+    }
+    try f.replaceName(new_name);
+    f.unread = true; // file.c:163
+}
+
+/// Overwrite `name` with no undo record (the undo arm and `setName`'s tail).
+fn replaceName(f: *File, new_name: []const u8) error{OutOfMemory}!void {
     f.name.clearRetainingCapacity();
     try f.name.appendSlice(f.allocator, new_name);
 }
@@ -86,6 +129,7 @@ pub fn setName(f: *File, new_name: []const u8) error{OutOfMemory}!void {
 fn freeTexts(self: *File, stack: *std.ArrayList(Delta)) void {
     for (stack.items) |d| switch (d) {
         .delete => |x| self.allocator.free(x.text),
+        .filename => |x| self.allocator.free(x.name),
         .insert => {},
     };
 }
@@ -229,6 +273,23 @@ fn unwind(
                 self.allocator.free(r.text); // consumed off the src stack
                 result = .{ .q0 = r.p0, .q1 = r.p0 + nrunes };
             },
+            .filename => |r| {
+                // file.c:259-271: restore the old name, pushing the current one
+                // as the inverse; the range result is left untouched.
+                self.seq = r.seq;
+                const cur = try self.allocator.dupe(u8, self.name.items);
+                {
+                    errdefer self.allocator.free(cur);
+                    try dst.append(self.allocator, .{ .filename = .{
+                        .seq = r.seq,
+                        .mod_before = self.mod,
+                        .name = cur,
+                    } });
+                }
+                self.mod = r.mod_before;
+                defer self.allocator.free(r.name); // consumed off the src stack
+                try self.replaceName(r.name);
+            },
         }
     }
     if (isundo) self.seq = 0; // drained the whole undo stack (file.c:275-276)
@@ -249,7 +310,8 @@ pub fn redoSeq(self: *const File) u32 {
 }
 
 /// Drop both stacks and reset seq to 0, keeping the text and the mod flag
-/// (file.c:281-287).
+/// (file.c:281-287) — and the name, `unread` and `disk`, which `filereset`
+/// does not touch either.
 pub fn reset(self: *File) void {
     self.discard(&self.delta);
     self.discard(&self.epsilon);
