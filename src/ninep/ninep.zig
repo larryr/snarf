@@ -30,6 +30,8 @@ pub const nsdir = @import("nsdir.zig");
 pub const nsjob = @import("nsjob.zig");
 /// The reading half of `nsjob` (S-07 size seam); its jobs are re-exported there.
 pub const nsio = @import("nsio.zig");
+/// The writing half of `nsjob` (phase 17): `WriteFileJob`, re-exported there.
+pub const nswrite = @import("nswrite.zig");
 
 test {
     std.testing.refAllDecls(@This());
