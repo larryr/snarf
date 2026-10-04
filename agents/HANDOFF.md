@@ -6,11 +6,25 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-10-03 — phase 16 merged `f51e4a0`; the planned queue is EMPTY — see
-  `agents/NEXT-PHASES.md` and ask Larry before starting anything)*
+- **Phase 17 CLAIMED (2026-10-04, local session)** — Put/Get/Putall + Dump/Load
+  (`NEXT-PHASES.md` Tier 1 item 1, R-EDIT-15/16). Pipeline running autonomously (Fable spec
+  → Opus build → Sonnet tests → Sonnet gate → Fable review → merge) per standing
+  authorization. Worktree + branch name recorded here once the build stage starts. Files:
+  namespace Put/Get paths, `core` Undo/putseq tag bookkeeping, OPFS one-writable-per-fid
+  (16b item 4), `/mnt/opfs/acme.dump`.
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
 ## Current state (update in place)
+
+- **NEXT-PHASES.md revised (2026-10-03/04, `bdbac1f`)** after the rhun spike: Tier 1/2/3
+  unchanged (continue the existing queue — none of the spike's ideas are architecturally
+  significant), a loopback-trust hedge added to the allow-list ADR item, a headless-driver
+  CI sub-item, a stale Kdown/`/dev/snarf` correction, and a new "Parked" section (Pointer
+  Lock, devdraw-in-tree, webview shell, native frame) each with its own gating decision.
+  Full discussion + two Fable review passes: `agents/reports/phase-review-2026-10-03.md`.
+  Pointer Lock's Esc conflict is resolved **in principle** (don't rebind Esc; treat
+  unrequested Pointer-Lock-loss, guarded by `document.hasFocus()`, as the Esc signal; don't
+  forward Esc as `Kesc` while locked) — still parked, not queued, until Larry picks it up.
 
 - **Spike landed (2026-10-03) — rhun self-drawn frame vs. plan9port `devdraw`**: see
   `agents/reports/spike-rhun-self-drawn-frame.md`. Written by a remote session (GitHub
