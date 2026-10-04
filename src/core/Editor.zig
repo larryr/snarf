@@ -159,6 +159,8 @@ loads: std.ArrayList(*Load) = .empty,
 pending_look: ?*pendinglook.PendingLook = null,
 /// In-flight Puts (phase 17, `Put.zig`; heap-pinned like `loads`).
 puts: std.ArrayList(*Put) = .empty,
+/// `$home` and the in-flight Dump/Load (phase 17, `Session.zig`).
+session: @import("Session.zig") = .{},
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
@@ -174,6 +176,7 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 pub fn deinit(self: *Editor) void {
     Load.deinitAll(self); // abandon every in-flight window load (phase 13b)
     Put.deinitAll(self);
+    self.session.deinit(self.allocator);
     self.snarf.deinit(self.allocator);
     self.edit_lastpat.deinit(self.allocator);
     for (self.warnings.items) |*wn| wn.deinit(self.allocator);
@@ -297,6 +300,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     // live tag composed by the sweep below, in this same frame (util.c:211-258).
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try Put.stepAll(ed); // and per in-flight Put (phase 17)
+    try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
     if (!ed.needs_flush) return;

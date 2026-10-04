@@ -37,6 +37,14 @@ pub const loadaddr = @import("loadaddr.zig");
 pub const getaddr = @import("getaddr.zig");
 /// One in-flight Put — the asynchronous `putfile` (exec.c:697-836), phase 17.
 pub const Put = @import("Put.zig");
+/// `$home` + the in-flight Dump/Load (rows.c:465-844) — phase 17.
+pub const Session = @import("Session.zig");
+/// `rowdump`/`rowdump1` (rows.c:317-512) — phase 17.
+pub const RowDump = @import("RowDump.zig");
+/// `rowload` (rows.c:559-844) — phase 17.
+pub const RowLoad = @import("RowLoad.zig");
+/// The dump file's line codecs, shared by RowDump/RowLoad — phase 17.
+pub const dumpfmt = @import("dumpfmt.zig");
 /// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).

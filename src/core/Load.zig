@@ -350,8 +350,9 @@ pub const applyAddress = loadaddr.applyAddress;
 
 /// UTF-8 sanitation for loaded bytes (S-05 §1): every invalid sequence becomes
 /// one U+FFFD. `Text.insertAt` documents its input as valid UTF-8, so this runs
-/// on EVERY loaded file, not only suspicious ones.
-fn sanitize(a: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!struct { bytes: []u8, replaced: bool } {
+/// on EVERY loaded file, not only suspicious ones. `pub` for `RowLoad` (an `F`
+/// record's body and the dumped tags go through it too).
+pub fn sanitize(a: std.mem.Allocator, bytes: []const u8) error{OutOfMemory}!struct { bytes: []u8, replaced: bool } {
     if (std.unicode.utf8ValidateSlice(bytes)) return .{ .bytes = try a.dupe(u8, bytes), .replaced = false };
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
