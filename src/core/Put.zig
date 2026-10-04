@@ -353,8 +353,8 @@ fn fmtTime(buf: *[24]u8, t: u32) []const u8 {
     const md = yd.calculateMonthDay();
     const ds = es.getDaySeconds();
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-        yd.year,                 md.month.numeric(),       md.day_index + 1,
-        ds.getHoursIntoDay(),    ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
+        yd.year,              md.month.numeric(),      md.day_index + 1,
+        ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute(),
     }) catch buf[0..0];
 }
 
@@ -385,4 +385,80 @@ test "Put: with no namespace a Put warns instead of trapping" {
     try start(&ed, w, "/a/file", false);
     try testing.expectEqual(@as(usize, 0), ed.puts.items.len);
     try testing.expectEqualStrings("can't create file /a/file: no namespace\n", ed.warningText());
+}
+
+test "Put: load, edit, Put round-trips through a served tree; then Dump/Load the layout" {
+    const draw = @import("draw");
+    const boot = @import("boot.zig");
+    const openfile = @import("openfile.zig");
+    const MemTree = @import("MemTree.zig");
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var ns = ninep.mount.Namespace.init(a);
+    defer ns.deinit();
+    var tree = try boot.boot(a, fx.disp, fx.font, draw.proto.Rect.make(0, 0, 640, 480), .{ .ns = &ns });
+    defer tree.deinit();
+    var ed = Editor.init(a);
+    defer ed.deinit();
+    tree.bind(&ed);
+    const m = try MemTree.Harness.create(a, &ns, "/m");
+    defer m.destroy(a);
+    try m.tree.put("f", "old\n");
+
+    const col = tree.row.col.items[0];
+    const w = try openfile.readFile(&ed, col, "/m/f");
+    for (0..16) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqual(@as(usize, 4), w.body.file.buffer.len());
+    try testing.expect(w.body.file.disk != null and !w.body.file.unread);
+
+    ed.seq += 1;
+    w.body.file.mark(ed.seq);
+    try w.body.insertAt(0, "new ", true);
+    try ed.frameEnd(fx.disp);
+    var tb: [512]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tb), " Put") != null);
+
+    try start(&ed, w, "/m/f", false);
+    for (0..16) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqual(@as(usize, 0), ed.puts.items.len);
+    try testing.expectEqualStrings("new old\n", m.tree.find("f").?.data.items);
+    try testing.expect(!w.body.file.mod and !w.dirty);
+    try testing.expectEqual(w.body.file.seq, w.putseq);
+    try testing.expect(std.mem.indexOf(u8, w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tb), " Put") == null);
+
+    // A Put to a NEW name creates the file and leaves the window as it was.
+    try start(&ed, w, "/m/g", false);
+    for (0..16) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expectEqualStrings("new old\n", m.tree.find("g").?.data.items);
+    try testing.expectEqualStrings("/m/f", w.body.file.name.items);
+
+    // Dump to the served tree, then Load it back on top (adds windows).
+    ed.session.home = "/m";
+    try ed.session.startDump(&ed, "");
+    for (0..16) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    const dumped = m.tree.find("acme.dump").?.data.items;
+    try testing.expect(std.mem.startsWith(u8, dumped, "/\nfixed9x18\nfixed9x18\n"));
+    const before = col.w.items.len;
+    try ed.session.startLoad(&ed, "");
+    for (0..24) |_| {
+        try ed.frameEnd(fx.disp);
+        try m.poll();
+    }
+    try testing.expect(!ed.warningsPending());
+    var total: usize = 0;
+    for (tree.row.col.items) |c| total += c.w.items.len;
+    try testing.expect(total > before);
 }

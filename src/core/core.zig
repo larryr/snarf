@@ -45,6 +45,8 @@ pub const RowDump = @import("RowDump.zig");
 pub const RowLoad = @import("RowLoad.zig");
 /// The dump file's line codecs, shared by RowDump/RowLoad — phase 17.
 pub const dumpfmt = @import("dumpfmt.zig");
+/// TEST FIXTURE: a writable in-memory 9P tree (phase 17) — test-only.
+pub const MemTree = @import("MemTree.zig");
 /// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).
