@@ -33,7 +33,11 @@ const wintag = @import("wintag.zig");
 pub fn colOf(et: *Text) ?*Column {
     if (et.w) |w| return w.col;
     if (et.what == .columntag) {
-        const c: *Column = @fieldParentPtr("tag", et);
+        // `@alignCast`: since phase 17 `File` carries a `u64` (`File.Disk`), so
+        // on wasm32 a Column (which embeds its tag `File`) is 8-aligned while
+        // a bare `*Text` promises 4. Every Column is heap-created at its own
+        // alignment, so the cast holds.
+        const c: *Column = @alignCast(@fieldParentPtr("tag", et));
         return c;
     }
     return null;
@@ -43,7 +47,7 @@ pub fn colOf(et: *Text) ?*Column {
 /// `@fieldParentPtr`); otherwise the row of `colOf(et)`.
 pub fn rowOf(et: *Text) ?*Row {
     if (et.what == .rowtag) {
-        const r: *Row = @fieldParentPtr("tag", et);
+        const r: *Row = @alignCast(@fieldParentPtr("tag", et)); // see colOf
         return r;
     }
     const c = colOf(et) orelse return null;

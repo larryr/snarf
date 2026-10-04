@@ -105,6 +105,10 @@ pub fn main(init: std.process.Init) !void {
     try boot(gpa, a);
     defer a.tree.deinit();
     defer a.editor.deinit();
+    // R-P17-5: the native `$home` is the real `$HOME` (acme.c:136), null when
+    // unset. Nothing is mounted there until the host file server mounts at
+    // `/`, so a `Dump` warns NotMounted until then — honestly, at the right path.
+    a.editor.session.home = init.environ_map.get("HOME");
 
     // The two long polls, armed once and re-armed by `Conn.poll` from here on
     // (drawclient.c keeps exactly one of each outstanding).

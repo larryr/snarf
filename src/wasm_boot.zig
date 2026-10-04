@@ -166,6 +166,9 @@ pub fn boot(width: u32, height: u32, hooks: Hooks) !*App {
     // falls back to f.col(.high) when these are null (R-P9-12).
     a.editor.but2col = a.tree.chrome.but2col;
     a.editor.but3col = a.tree.chrome.but3col;
+    // R-P17-5: the browser's `$home` is the always-available private area
+    // (R-9P-09) — `Dump`/`Load` default to `/mnt/opfs/acme.dump`.
+    a.editor.session.home = "/mnt/opfs";
 
     // ---- input stack: devinput ← server ← client (the devdraw pattern) ----
     a.devinput = DevInput.init(alloc);
