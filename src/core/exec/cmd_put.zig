@@ -104,7 +104,14 @@ pub fn put(
 /// The `nopen[QWevent]` skip (exec.c:1181-1182) is n/a until `event` is served.
 /// `wincommit(w, &w->body)` (exec.c:1190) commits the BODY's cache only — its
 /// `t->what == Body` early return (wind.c:606-607) means no tag rename — and
-/// Snarf has no body cache, so it has no port here.
+/// Snarf has no body cache, so that call has no port here. But acme reaches
+/// Putall with every tag already committed, because it runs `wincommit` after
+/// *every* tag keystroke (wind.c:401-408 `wintype`) — a site Snarf has no
+/// per-keystroke equivalent for (R-P17-7). Without a stand-in, Putall would
+/// write under a stale name while an uncommitted tag edit sits unapplied.
+/// `wintag.commit` here is that stand-in: it's a no-op when the tag already
+/// matches the file name (the common case), and applies a pending rename —
+/// which acme's keystroke-time commit would already have done — otherwise.
 pub fn putall(
     ed: *Editor,
     _: *Text,
@@ -119,6 +126,7 @@ pub fn putall(
         for (c.w.items) |w| {
             const f = w.body.file;
             if (w.isscratch or w.isdir or f.name.items.len == 0) continue; // exec.c:1179-1180
+            try wintag.commit(ed, w); // stand-in for wind.c:401-408's per-keystroke commit
             if (!f.mod) continue; // exec.c:1185 (no ncache)
             try Put.start(ed, w, f.name.items, true); // exec.c:1190-1191
         }
