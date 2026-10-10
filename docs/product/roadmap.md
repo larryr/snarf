@@ -48,7 +48,7 @@ mobile-first users (R-NG-05), people who want syntax highlighting or LSP inside 
 
 | # | Milestone | Outcome for Larry | Headline features |
 |---|-----------|-------------------|-------------------|
-| **M0** | Ground truth *(Now)* | Know it works and which host to bet on | **Pointer Lock warp spike**, phase 17 status, guided manual walkthrough, CI |
+| **M0** | Ground truth *(Now)* | Know it works and which host to bet on | **Pointer Lock warp spike**, ~~phase 17 status~~ (done, see below), guided manual walkthrough, CI |
 | **M1** | Edit real files *(Now)* | Open, edit, **save** real files, copy/paste with the OS, readable text | Put/Get/Putall, origin create/remove, system clipboard, Dump/Load, Retina, small builtins |
 | **M2** | Run real commands *(Next)* | `mk`, `zig build`, `grep -n`, `git` from B2, output in `+Errors`, B3 to jump | Allow-list ADR, external commands via `/bin`, pipes `\| < >` |
 | **M3** | Daily-driver host & polish *(Next)* | snarf is good enough that Larry stops opening acme/other editors | Native file + process servers *or* browser polish (Larry's host choice), devdraw-in-tree, keyboard/IME |
@@ -66,7 +66,7 @@ like phases 12b–16) · **L** = several phases or needs an ADR first.
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
 | **Pointer Lock warp spike** (first) | Opt-in mode where snarf draws its own cursor and acme's warps (search hit, opened file, return after `Del`) work in the browser | Settles whether the browser can be Larry's daily host (Decision 1), and the paper's one known browser divergence | R-EDIT-25, ADR-0005, S-04 §1/§3, R-GFX-08, phase-review 2026-10-03 Decision 2. Brief: [`spikes/pointer-lock-warp.md`](spikes/pointer-lock-warp.md) | M (timeboxed) | None. Ports acme `restoremouse` (dropped in phase 8) |
-| Phase 17 status check | Find out whether Put/Get/Dump/Load work started | Claimed in HANDOFF 2026-10-04, but nothing has been pushed. Avoid double work | `agents/HANDOFF.md` claims | S | Larry |
+| ~~Phase 17 status check~~ **DONE 2026-10-10** | ~~Find out whether Put/Get/Dump/Load work started~~ It shipped — see M1's first two rows below | Was: claimed in HANDOFF 2026-10-04, nothing pushed as of this doc's writing (2026-10-07/09) | `agents/reports/phase17-put-get-dump-load.md`, merge `e734e3f` | S | — |
 | Guided manual walkthrough | A 15-minute checklist Larry runs in Safari/Chrome: chords, B3 sweeps, Del two-strike, Delcol, Edit, undo grouping | These have **never been tried by a human** (HANDOFF "Manual browser verification"). A daily driver can't have untested gestures | R-EDIT-05..12 | S | — |
 | CI on push (Linux + macOS) | Every push runs `zig build`, `zig build test`, fmt, smoke | Daily-driver reliability. Also the future eval harness for agents | R-BLD-03, S-06 §5, NEXT-PHASES Tier 4 #11 | S | Larry OK to add a workflow file. Smoke needs Node ≥ 22 |
 
@@ -74,10 +74,10 @@ like phases 12b–16) · **L** = several phases or needs an ADR first.
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Put / Get / Putall for files** | B2 `Put` saves the window. `Get` reloads it. `Putall` saves everything. Tags show `Put` only when dirty | Without save it isn't an editor. #1 blocker | R-EDIT-15, R-EDIT-11 (undo survives Put), NEXT-PHASES Tier 1 #1 | M | OPFS one-writable (done in 16b item 4) |
-| **Create/remove on the origin export** | Saving a *new* file (or `Put` to a new name) under `/n/origin/fs/` works | Today `tools/origin/hostfs.zig` can't create files, so new files fail on the most likely daily path (browser + local `snarf-origin`) | R-EDIT-15, S-02 §5, R-9P-01 | S | 14a framework (done) |
+| **Put / Get / Putall for files** — **SHIPPED 2026-10-10 (phase 17)** | B2 `Put` saves the window. `Get` reloads it. `Putall` saves everything. Tags show `Put` only when dirty | Without save it isn't an editor. #1 blocker | R-EDIT-15, R-EDIT-11 (undo survives Put), NEXT-PHASES Tier 1 #1 | M | OPFS one-writable (done in 16b item 4) — **done**, `agents/reports/phase17-put-get-dump-load.md` |
+| **Create on the origin export** — **SHIPPED 2026-10-10 (phase 17)** | Saving a *new* file (or `Put` to a new name) under `/n/origin/fs/` works | Today `tools/origin/hostfs.zig` can't create files, so new files fail on the most likely daily path (browser + local `snarf-origin`) | R-EDIT-15, S-02 §5, R-9P-01 | S | 14a framework (done) — **done**: files only, exclusive, logged (`tools/origin/tree.zig`/`hostfs.zig`). `remove` still unbuilt |
 | **System clipboard (`/dev/snarf`)** | Snarf/Cut/Paste exchange text with other macOS apps | Daily editing constantly crosses apps. Today the snarf buffer is internal only (`src/core/snarf.zig`, R-P7-5 deferred) | R-EDIT-14, R-9P-07 | M | Browser Clipboard API permissions; native already has `Trdsnarf/Twrsnarf` |
-| **Dump / Load** | Close the tab or quit, come back, and the columns and windows are restored | Daily use = long-lived sessions | R-EDIT-16; `$home` decision: `/mnt/opfs` in browser, `$HOME` native (NEXT-PHASES) | M | Put/Get |
+| **Dump / Load** — **SHIPPED 2026-10-10 (phase 17)** | Close the tab or quit, come back, and the columns and windows are restored | Daily use = long-lived sessions | R-EDIT-16; `$home` decision: `/mnt/opfs` in browser, `$HOME` native (NEXT-PHASES) | M | Put/Get — **done**: `$home` resolved as specified; native is honestly `NotMounted` until Tier 2's native file server lands, not silent |
 | **Retina text (2× font)** | Text is crisp on a Retina display | "Top user-felt gap" (HANDOFF backlog). Larry uses a Mac | R-GFX-05, OQ-GFX-2 (font choice/licensing) | M | Font asset decision |
 | **Small builtins: Sort, Zerox, Kill, Exit** | The root/column tag commands that are printed but do nothing start working | Root and column tags advertise them (R-EDIT-02). Dead tag words erode trust | R-EDIT-02, NEXT-PHASES Tier 1 #3 | S–M | Exit needs Dump. Zerox needs multi-Text-per-File |
 
@@ -217,9 +217,16 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
    browser as the zero-install showcase.)*
 2. **Host-command allow-list policy:** which commands (`mk`, `zig`, `go`, `grep`, `git`…),
    in which directories, and is a loopback origin "fully trusted"? This is the gate for M2.
-3. **Is Phase 17 (Put/Get/Dump/Load) running, and should the autonomous pipeline continue
-   under this roadmap?** Does this roadmap supersede `agents/NEXT-PHASES.md` as the plan of
-   record? (It mostly agrees with it, re-ordered around daily-driver value.)
+3. ~~Is Phase 17 (Put/Get/Dump/Load) running~~ **Answered 2026-10-10: shipped and merged**
+   (`e734e3f`, `agents/reports/phase17-put-get-dump-load.md`) — the autonomous pipeline did
+   continue and finished it while this roadmap was being drafted. **Still open: does this
+   roadmap supersede `agents/NEXT-PHASES.md` as the plan of record, or do the two coexist**
+   (roadmap = product prioritization, NEXT-PHASES = the execution queue, refreshed from the
+   roadmap's calls)? See `agents/reports/roadmap-review-2026-10-10.md` for a fuller review —
+   recommendation there is **coexist**, not supersede. Also unresolved from that review:
+   whether the Pointer Lock spike (M0) runs now, concurrent with the rest of Tier 1 (external
+   commands, remaining builtins), or after — this roadmap and the 2026-10-03 phase-planning
+   decision disagree on that ordering.
 4. **AI harness scope change:** OK to amend the requirements (R-01 v4 + a new
    requirements doc) to make agents first-class namespace clients? This touches non-goals
    R-NG-03 ("no shell / arbitrary command execution") and R-NG-02 ("no server-side session

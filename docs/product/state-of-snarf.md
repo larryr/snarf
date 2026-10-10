@@ -11,13 +11,17 @@ ACME editing model works in the browser end to end** (mouse language, chords, li
 undo, the Edit language, Look, `+Errors`, window placement, directory windows), the 9P
 namespace is real (unions, synthetic root, async ops everywhere), and a **native host** runs
 the same core in a plan9port `devdraw` window with real pointer warping. What is missing is
-what makes it a *daily editor*: **saving files (Put), running real commands, the system
-clipboard, and crisp Retina text.** For the AI-harness ambition, the matching gap is that the
-editor's own file interface (`/mnt/snarf-self`) only serves a small subset of acme's files
-and is not reachable from outside the process.
+what makes it a *daily editor*: ~~saving files (Put)~~ **saving files shipped 2026-10-10
+(phase 17)** — **running real commands, the system clipboard, and crisp Retina text remain.**
+For the AI-harness ambition, the matching gap is that the editor's own file interface
+(`/mnt/snarf-self`) only serves a small subset of acme's files and is not reachable from
+outside the process.
 
 Sources: `agents/NEXT-PHASES.md` §intro ("What is missing is *files in and out* and
-*commands*"), `agents/HANDOFF.md` "Current state".
+*commands*"), `agents/HANDOFF.md` "Current state". **Update 2026-10-10**: Put/Get/Putall/
+Dump-Load shipped — `agents/reports/phase17-put-get-dump-load.md`; see
+`agents/reports/roadmap-review-2026-10-10.md` for the fuller reconciliation against this
+doc set and `agents/NEXT-PHASES.md`.
 
 ## 2. Verified on this box (2026-10-07)
 
@@ -28,7 +32,7 @@ Sources: `agents/NEXT-PHASES.md` §intro ("What is missing is *files in and out*
 | `zig fmt --check src build.zig` | clean |
 | `node tools/smoke_wasm.mjs` | **Did not run here**: box has Node 20, which lacks a global `WebSocket` (`smoke_wasm.mjs:387`). HANDOFF reports 40/40 on Larry's machine. Needs Node ≥ 22 — undocumented prerequisite (small doc fix). |
 | CI | **None.** No `.github/` directory; S-06 §5 is labeled "CI (sketch)". |
-| Open branches / PRs / issues | Remote has only `main` (`git ls-remote`). Phase 17 is *claimed* in HANDOFF (2026-10-04) but no branch or contract file is pushed — status unknown. |
+| Open branches / PRs / issues | Remote has only `main` (`git ls-remote`). ~~Phase 17 is *claimed* in HANDOFF (2026-10-04) but no branch or contract file is pushed — status unknown.~~ **Update 2026-10-10: shipped and merged**, `e734e3f`, `agents/reports/phase17-put-get-dump-load.md`. |
 
 Scale: ~50k lines of Zig in `src/` + `tools/`, 347 commits, 83 merges, 16 numbered phases
 (+ 12b–e, 13a/b, 14a/b) since 2026-07-06.
@@ -47,7 +51,7 @@ Requirement IDs are the project's own (`docs/requirements/*.md`, stable `R-XX-nn
 | B1 select/double-click, B2 execute, B3 look (file-or-search, `:addr`) | R-EDIT-05/06/07 | phases 6, 9, 13b; `src/core/{look,expand,openfile}.zig`; B3 file check is async (R-02 v5 note) |
 | Chords (cut/paste, 2-1 argument) | R-EDIT-08 | phase 7 `src/core/textselect.zig`; *not yet manually exercised by Larry* (HANDOFF "Manual browser verification") |
 | UTF-8 / rune-addressed piece buffer | R-EDIT-10 | `src/core/{Buffer,RuneIndex}.zig` |
-| Undo/redo with run grouping | R-EDIT-11 (part) | `src/core/File.zig`; "surviving Put" untestable until Put exists |
+| Undo/redo with run grouping | R-EDIT-11 (part) | `src/core/File.zig`; ~~"surviving Put" untestable until Put exists~~ **now tested (phase 17 T14)**: `dirty = seq != putseq`, undo past a Put re-dirties, redo back to it cleans |
 | Edit language (structural regexps, x/s/g/v/m/t…) | R-EDIT-12 | phase 10, `src/core/edit/*` (own regexp engine, ADR-0002) |
 | Plumbing subset: `path:line`, `path:/re/`; URL *recognized* in expansion | R-EDIT-13 (part) | `src/core/expand.zig:36,86`; opening URLs in the browser **not verified** |
 | Directory context, `+Errors` windows, point-to-type, placement heuristics, click expansion | R-EDIT-20..24 | phase 12b `96d7cb5`, `src/core/{errors,place,colgrow}.zig` |
@@ -81,8 +85,8 @@ Requirement IDs are the project's own (`docs/requirements/*.md`, stable `R-XX-nn
 
 | Item | Req / spec | Status evidence |
 |---|---|---|
-| **`Put`, `Putall`, `Get` for files** | R-EDIT-15 | `builtins.zig:68-71` comment; NEXT-PHASES Tier 1 #1; phase 17 claimed, nothing pushed |
-| **`Dump` / `Load` session** | R-EDIT-16 | same; target `/mnt/opfs/acme.dump` proposed |
+| ~~**`Put`, `Putall`, `Get` for files**~~ **SHIPPED 2026-10-10** | R-EDIT-15 | `agents/reports/phase17-put-get-dump-load.md`, merge `e734e3f` |
+| ~~**`Dump` / `Load` session**~~ **SHIPPED 2026-10-10** | R-EDIT-16 | same; `$home` = `/mnt/opfs` (browser) / real `$HOME` (native, unmounted until Tier 2 — honest `NotMounted`) |
 | **External commands** (non-builtin B2 → `/bin/<cmd>/ctl`, output to `+Errors`, `\|` `<` `>`) | R-EDIT-06/18/21, OQ-EDIT-1 | NEXT-PHASES Tier 1 #2; blocked on a **host-command allow-list ADR** (not written) |
 | Remaining builtins: `Zerox Sort Exit Kill Font Tab Indent Id Incl Local Send Abort` | R-EDIT-02 (root/column tags list `Kill Putall Dump Exit Sort Zerox`) | absent from `builtins.zig` exectab |
 | **System clipboard** `/dev/snarf` in the browser | R-9P-07, R-EDIT-14 | "/dev/snarf sync (`acmeputsnarf`) is deferred (R-P7-5)" — `src/core/snarf.zig` header; no Clipboard API in `web/shim.js` |
@@ -97,7 +101,7 @@ Requirement IDs are the project's own (`docs/requirements/*.md`, stable `R-XX-nn
 | IME composition | R-IN-11 | S-04 §3 design; no composition handling in `web/shim.js` |
 | Settable cursor image | R-GFX-08 | no cursor handling found in `web/shim.js` (inferred not built) |
 | Web Worker + SharedArrayBuffer transport | R-PLAT-03 | `web/shim.js:467` "reserved for the future Worker"; module runs on the main thread by ruling R-P6-1 |
-| Create/remove of files on the origin's `fs/` export | R-EDIT-15 (via `/n/origin`) | `tools/origin/hostfs.zig` has read/write/truncate/readDir only — no create/remove (S-02 §5 phase-11 note; the 9P framework gained them in 14a, the origin's tree did not). `Put` of a *new* file through `/n/origin/fs/` will need it. |
+| ~~Create/remove of files on the origin's `fs/` export~~ **`create` SHIPPED 2026-10-10, `remove` still not built** | R-EDIT-15 (via `/n/origin`) | `tools/origin/{tree,hostfs}.zig` gained `create` in phase 17 (files only, exclusive, logged) — S-02 §5 phase-11 note's gap is half-closed. `remove` remains unbuilt. |
 | Native file server + native process service | ADR-0005 phase 2 | NEXT-PHASES Tier 2 #4–5 (`tools/origin/hostfs.zig` is reusable) |
 | CI on Linux + macOS | R-BLD-03, S-06 §5 | no `.github/` |
 | `Tauth` for `/n/origin` | OQ-9P-3 | optional, not built |
@@ -105,8 +109,11 @@ Requirement IDs are the project's own (`docs/requirements/*.md`, stable `R-XX-nn
 
 ## 5. Known gaps, bugs, debt
 
-- **Phase 17 (Put/Get/Dump/Load) claimed 2026-10-04, no visible progress** — no remote branch,
-  no `agents/contracts/phase17*.md`. Ask Larry whether it's running locally.
+- ~~Phase 17 (Put/Get/Dump/Load) claimed 2026-10-04, no visible progress~~ **Resolved
+  2026-10-10: shipped and merged** (`e734e3f`). New debt from that phase: one named test
+  (T21, a browser smoke-test click on the live "Put" tag word) not landed — a geometry issue,
+  not a correctness one, fix recipe is in the phase report; `xfid.zig` (424 lines) and
+  `Window.zig` (405 lines) nudged just over the ~400-line soft cap.
 - **Manual verification gap** (HANDOFF "Manual browser verification", 2026-09-05): chords,
   B3 look sweeps, Del two-strike, Delcol regrow, Edit language and undo grouping have never
   been exercised by a human in a browser; one unreproduced tag-corruption anomaly
