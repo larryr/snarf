@@ -27,6 +27,7 @@ const Text = @import("text/Text.zig");
 const Window = @import("Window.zig");
 const errors = @import("errors.zig");
 const place = @import("place.zig");
+const wintag = @import("wintag.zig");
 
 /// acme's `wdir` (acme.c:36) for a port with no process working directory
 /// (R-P13b-3). Every unrooted name openfile sees is resolved against it.
@@ -92,12 +93,12 @@ pub fn openFile(ed: *Editor, t: ?*Text, e: Expand) Text.Error!*Window {
     }
 
     const w = try place.makeNewWindow(ed, t); // look.c:854
-    try w.body.file.setName(abs); // look.c:856 winsetname
+    try wintag.setName(w, abs); // look.c:856 winsetname
     try w.setTag1();
     const tnc = w.tag.file.buffer.len();
     try w.tag.setSelect(tnc, tnc);
     ed.seltext = &w.body; // look.c:896, brought forward: the window IS the target
-    try Load.start(ed, w, abs, e.addr, e.jump); // look.c:857 textload(t, 0, bname, 1)
+    _ = try Load.start(ed, w, abs, e.addr, e.jump); // look.c:857 textload(t, 0, bname, 1)
     ed.needs_flush = true;
     return w;
 }
@@ -110,7 +111,7 @@ pub fn readFile(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window {
     const abs = try absName(a, name); // acme.c:291-294 + cleanrname
     defer a.free(abs);
     const w = try place.mintWindow(c, -1, abs); // acme.c:290 + :295 winsetname
-    try Load.start(ed, w, abs, null, false); // acme.c:296 textload
+    _ = try Load.start(ed, w, abs, null, false); // acme.c:296 textload
     ed.needs_flush = true;
     return w;
 }

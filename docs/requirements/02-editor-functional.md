@@ -43,7 +43,7 @@ rather than staying silent (R-EDIT-25).
 | ID | Requirement |
 |----|-------------|
 | R-EDIT-15 | `Get`, `Put`, `Putall` SHALL read/write through the namespace (any mount: host FS, origin, DOM). A window's name is a namespace path. |
-| R-EDIT-16 | `Dump`/`Load` session state SHALL serialize to a namespace file so a session can be resumed (target: `/mnt/host` or `/dev/storage`). |
+| R-EDIT-16 | `Dump`/`Load` session state SHALL serialize to a namespace file so a session can be resumed (target: `$home/acme.dump` — `/mnt/opfs` in the browser, `$HOME` natively; v7). |
 
 ## 5. Programmability
 
@@ -102,6 +102,16 @@ rather than staying silent (R-EDIT-25).
   (R-EDIT-22), placement heuristics (R-EDIT-23), single-click expansion (R-EDIT-24), and
   the recorded no-warp divergence (R-EDIT-25). Noted the in-memory-buffer divergence on
   R-EDIT-10. Implementation gaps found in the same pass are in `agents/HANDOFF.md`.
+- **v7** (2026-10-04, phase 17 — Put/Get/Dump/Load) — no IDs added, changed or
+  renumbered. **R-EDIT-15 delivered**: `Get`/`Put`/`Putall` read and write through the
+  namespace (any mount that writes: `/mnt/opfs`, `/n/origin/fs/` — which gained `create`
+  so a `Put` can make a new file there); a window's name is a namespace path, and editing
+  it in the tag renames the window, undoably. **R-EDIT-16's target note revised**: the
+  default dump file is `$home/acme.dump` in acme's own format, where `$home` is
+  `/mnt/opfs` in the browser and the real `$HOME` natively (spec S-05 §8, S-02 §4) —
+  superseding the earlier "`/mnt/host` or `/dev/storage`" target and the
+  `/dev/storage/snarf.dump` versioned-format plan. Put is asynchronous (ruling R-P17-1,
+  S-05 §4).
 - **v6** (2026-09-14, phase 15 — the ADR-0005 native-host spike) — no IDs added,
   changed or renumbered; **R-EDIT-25 AMENDED** from "no mouse warping — recorded
   divergence" to "warping is requested by the core and honoured per host". The

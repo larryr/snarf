@@ -174,6 +174,9 @@ test {
     _ = @import("cmd_edit.zig");
     _ = @import("cmd_look.zig");
     _ = @import("cmd_window.zig");
+    _ = @import("cmd_get.zig");
+    _ = @import("cmd_put.zig");
+    _ = @import("cmd_dump.zig");
 }
 
 fn genLines(a: std.mem.Allocator, count: usize) ![]u8 {

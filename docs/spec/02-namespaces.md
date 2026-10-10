@@ -178,6 +178,8 @@ the escape hatch that keeps tree-walking cheap.
 - Browsers without the API (R-9P-09 fallback): `/mnt/host/ctl` accepts `import` (file picker
   → read-only snapshot files) and `export <path>` (download). 
 - `/mnt/opfs`: the Origin-Private File System, always available, fully writable, no prompts.
+  It is also the browser's **`$home`** (phase 17, R-P17-5): `Dump`/`Load` default to
+  `/mnt/opfs/acme.dump`. The native host's `$home` is the real `$HOME`.
 
 > Revision log: 2026-09-14 (phase 14b) — **`/mnt/opfs` AS BUILT** (`src/dev/opfs.zig`,
 > contract `agents/contracts/phase14b-opfs.md`). Mounted UNCONDITIONALLY at boot, so
@@ -302,6 +304,14 @@ motions, OQ-EDIT-4) from being pure namespace clients. Snarf completes the symme
 
 Rationale, motion→address mapping, and the dot-transformer principle: R-EDIT-19 and
 OQ-EDIT-4 in [R-02](../requirements/02-editor-functional.md).
+
+
+**`ctl` `get` and `put` (phase 17).** A window's `ctl` accepts `get` and `put`
+(xfid.c:770-777): `get(&w->body, nil, nil, FALSE, …)` and `put(&w->body, nil, nil, …)` —
+the same `Get`/`Put` the builtins run, with no argument (the window's own name). Both are
+asynchronous like their builtins: the write returns at once and the file operation
+completes over the following frames; its outcome is visible in the tag (` Put` gone) and
+in `index`/`ctl`'s dirty column, and failures land in `+Errors`.
 
 ## 7. Input & graphics devices — Host: **both**
 

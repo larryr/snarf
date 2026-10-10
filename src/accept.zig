@@ -563,16 +563,22 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     // the point-to-type edit and recomposed its tag with the live " Undo" word.
     // (w2 shares the SAME global typing run started in w1, so only w1's File was
     // filemark'd — R-P6-8 — leaving w2 undirtied and its tag unchanged.)
-    var tgbuf: [128]u8 = undefined;
+    // 256: w1's tag now reads "scratch Del Snarf Undo Put | Look " (34 runes;
+    // `Buffer.read` requires dest.len >= max_bytes_per_rune * nrunes = 136).
+    var tgbuf: [256]u8 = undefined;
     try testing.expect(std.mem.indexOf(u8, w1.tag.file.buffer.read(0, w1.tag.file.buffer.len(), &tgbuf), " Undo") != null);
     try testing.expect(std.mem.indexOf(u8, win2.tag.file.buffer.read(0, win2.tag.file.buffer.len(), &tgbuf), " Undo") == null);
 
     // FROZEN-ACCEPT-8: full acme chrome — row tag, column tag+button, two
     // windows with tags/buttons/scrollbars, point-to-type edits in both.
-    // Re-frozen 2026-07-20 (phase 9d): the frameEnd tag sweep (R-P9-4) now adds
-    // the live " Undo" word to each edited window's tag, changing the write
-    // stream from the phase-8 freeze. Spot-checks above still hold (R-P2-7).
-    try testing.expectEqual(@as(u64, 0x9816211a7aca91d7), hb.hash());
+    // Re-frozen 2026-10-04 (phase 17): the frameEnd tag sweep now adds the
+    // live " Put" word to w1's tag (named window, recorded edit, putseq
+    // unset — R-P17-9). Spot-check (R-P2-7, see phase17 test report): with
+    // `putShown` suppressed (`putseq = seq`), the re-rendered frame differs
+    // from this one in exactly 212 pixels, all within rows [40,57] — w1's
+    // tag band (y=[40,58)) — and nowhere else. Re-frozen 2026-07-20 (phase
+    // 9d) before that for " Undo". Spot-checks above still hold (R-P2-7).
+    try testing.expectEqual(@as(u64, 0xfd8b232d77d1f0bd), hb.hash());
 }
 
 test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows" {
@@ -851,8 +857,13 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     // window in column 0, drained by frameEnd into a `+Errors` window minted
     // in the rightmost column (column 1) — name/body/dirty/filemenu/placement
     // all pinned by the spot-checks immediately above. Frozen 2026-09-13;
-    // re-freeze only with orchestrator sign-off (R-P2-7).
-    try testing.expectEqual(@as(u64, 0xa4af36d064fbd9c9), hb.hash());
+    // re-frozen 2026-10-04 (phase 17, T22): w1 is named ("one") with a
+    // recorded edit (file.seq bumped) but was never Put, so `putShown` now
+    // fires even though the two-strike Del left it !dirty — its tag gains
+    // " Put". Spot-check (R-P2-7, see phase17 test report): with `putShown`
+    // suppressed, the re-rendered frame differs in exactly 212 pixels, all
+    // within rows [40,57] — w1's tag band (y=[40,58)) — and nowhere else.
+    try testing.expectEqual(@as(u64, 0x86a3f4679b1b8d21), hb.hash());
 }
 
 test "phase-10: served tree scene (T15)" {

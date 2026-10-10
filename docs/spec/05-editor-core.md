@@ -48,6 +48,23 @@ mount reached over the network takes as long as its round trips). A failed load 
 the window in place, empty and named, with `can't open <name>: …` in `+Errors`
 (text.c:216).
 
+**Renaming a window by editing its tag (phase 17, R-P17-7).** The tag's name half is
+committed into the body file's name by `wintag.commit` (`wincommit`'s tag half,
+wind.c:594-618): `seq++`, mark, `mod`/`dirty` set, `winsetname` — whose `filesetname`
+records the old name, so `Undo` restores it (file.c:139-164, :259-271). acme commits from
+many places; Snarf commits on a **button press in the tag** (acme.c:644-650 — before
+`textselect`, so a B2 on `Put` sees the new name), on a **`\n` or `typecommit`** in the tag
+(text.c:938-939, :414-419), **before a `Dump`** (rows.c:364), and when a tag is about to be
+recomposed with uncommitted edits (`setTagCommit`, the wind.c:485-486 entry of
+`winsettag1`). **Divergence:** acme's dominant commit site is **every keystroke in a
+tag** — `rowtype` → `wintype` → `winsettag` (rows.c:289, wind.c:401-409) reaches the
+wind.c:485-486 `wincommit`, so in acme ` Undo Put` appears *while* a new name is being
+typed; Snarf retags lazily (the `frameEnd` sweep), so the rename lands only at the next
+commit site above. There is also no 500 ms `KTimer` commit (acme.c:470-479; no timer in the
+core) and no commit when the pointer leaves a text (acme.c:583-588) — the button-down
+commit covers the gesture that matters, and a `Put` issued over the served `ctl` commits
+first itself.
+
 ## 3. The mouse language interpreter
 
 Consumes `/dev/mouse` records (S-04). Implements ACME rules: click vs sweep threshold,
@@ -69,6 +86,25 @@ this module is identical in spirit to `acme/text.c` — no emulation awareness (
 
 I/O prefixes `<`, `>`, `|` are supported against origin commands only (no local shell,
 R-NG-03).
+
+**Files (phase 17, R-EDIT-15).** `Get`, `Put`, `Putall`, `Dump` and `Load` are real
+builtins (exec.c:105/:109/:114/:120/:121). `Put`/`Get` name a file per `getname`
+(exec.c:476-539: own name, `Put foo` relative to the window's directory, or a 2-1 chord —
+a slash-less chord argument is promoted for `Put`). The tag shows ` Put` while a named,
+non-directory window's `seq != putseq` (wind.c:514-518). `Get` of the window's own name
+restores dot and origin by line+rune (`getaddr.zig`); `Get` of another name fills the
+window and leaves it modified, and `Get` leaves `putseq` alone (R-P17-8).
+
+**The asynchronous Put (R-P17-1).** acme's `putfile` blocks; Snarf's (`src/core/Put.zig`)
+is a chain of `nsjob` jobs — stat, (re-read + SHA-1 when the identity moved), write
+(open-truncate or create; Twrites back to back on one fid; clunk), restat — one 9P state
+per frame. The body is **snapshot** when `Put` runs, with its `seq`; the window is marked
+clean on completion only if nothing was typed meanwhile, else ` Put` stays (that is
+wind.c:514's own rule). One Put per window at a time (a second warns `… Put already in
+progress`); a Put outlives its window. A `Put other` writes a copy and changes nothing on
+the window (exec.c:774). `Putall` never creates a file: its `access()` check becomes the
+write job's `must_exist` (R-P17-3, `no auto-Put of …`). Every failure is acme's own
+warning text in `+Errors`.
 
 ## 5. Edit language (R-EDIT-12)
 
@@ -111,9 +147,24 @@ with one-time warning. (This synchronization is the feature the project is named
 
 ## 8. Session persistence (R-EDIT-16)
 
-`Dump` serializes rows/cols/windows/names/unsaved bodies to a versioned text format at
-`/dev/storage/snarf.dump` by default (arg overrides, e.g. `/mnt/host/proj/snarf.dump`);
-`Load` restores. Auto-dump on `visibilitychange`-hidden is a `ctl`-settable option.
+`Dump` writes the row — column positions, column and row tags, every window's name, tag,
+dot and position, and the bodies of windows that are dirty or never read — in **acme's own
+`rowdump1` format** (rows.c:317-462; R-P17-6, `src/core/dumpfmt.zig`), so a Snarf dump
+reads like an acme one; `Load` rebuilds it (rows.c:559-844) on top of the existing windows,
+re-reading `f`-record files through ordinary asynchronous loads. With no argument the
+file is **`$home/acme.dump`**, where `$home` is set by the host (R-P17-5): **`/mnt/opfs`
+in the browser** (the always-available private area, R-9P-09) and the **real `$HOME`
+natively** (unmounted until the native host file server mounts at `/`, so a native `Dump`
+today warns `NotMounted` at the right path). No `$home` ⇒ acme's `can't find file for
+dump: $home not defined`. An argument (or 2-1 chord) names another file, relative names
+resolving against `wdir`.
+
+Divergences: the dump is written **in place** (truncate + write) instead of to a temp
+file renamed over the old one — `/mnt/opfs` has no rename (R-P14b-4); `access()` in the
+`f`-vs-`F` choice is "the file has a disk identity" (R-P17-4); `x`/`e` records are never
+written and are skipped with a warning on load; the two font lines carry the one font.
+This supersedes the earlier `/dev/storage/snarf.dump` + "versioned text format" plan
+(R-02 v7). Auto-dump on `visibilitychange` stays deferred.
 
 ## 9. Served interface (R-EDIT-17)
 

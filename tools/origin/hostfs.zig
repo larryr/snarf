@@ -68,6 +68,15 @@ pub const HostFs = struct {
         return data.len;
     }
 
+    /// Tcreate of a plain file (phase 17, so `Put` can make a NEW file under
+    /// `fs/`): exclusive — an existing name is `file already exists`, never
+    /// truncated (9P's create fails on an existing file; the client's
+    /// open-truncate path handles that case).
+    pub fn createFile(self: *HostFs, rel: []const u8) OpError!void {
+        var f = self.root.createFile(self.io, rel, .{ .exclusive = true }) catch |e| return mapErr(e);
+        f.close(self.io);
+    }
+
     /// OTRUNC on open (S-01 §2.1).
     pub fn truncate(self: *HostFs, rel: []const u8) OpError!void {
         var f = self.root.openFile(self.io, rel, .{ .mode = .read_write }) catch |e| return mapErr(e);
@@ -105,6 +114,7 @@ pub const HostFs = struct {
     fn mapErr(e: anyerror) OpError {
         return switch (e) {
             error.FileNotFound => error.FileDoesNotExist,
+            error.PathAlreadyExists => error.FileExists,
             error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
             error.IsDir => error.FileIsDirectory,
             error.NotDir => error.WalkNoDir,

@@ -30,6 +30,23 @@ pub const warp = @import("warp.zig");
 pub const dirwin = @import("dirwin.zig");
 /// One in-flight window load — the asynchronous `textload` (text.c:192-317).
 pub const Load = @import("Load.zig");
+/// The `:addr` tail of a load (look.c:874-897) — pure-moved out of `Load.zig`
+/// in phase 17.
+pub const loadaddr = @import("loadaddr.zig");
+/// `Get`'s line+rune dot/origin bookkeeping (exec.c:623-665) — phase 17.
+pub const getaddr = @import("getaddr.zig");
+/// One in-flight Put — the asynchronous `putfile` (exec.c:697-836), phase 17.
+pub const Put = @import("Put.zig");
+/// `$home` + the in-flight Dump/Load (rows.c:465-844) — phase 17.
+pub const Session = @import("Session.zig");
+/// `rowdump`/`rowdump1` (rows.c:317-512) — phase 17.
+pub const RowDump = @import("RowDump.zig");
+/// `rowload` (rows.c:559-844) — phase 17.
+pub const RowLoad = @import("RowLoad.zig");
+/// The dump file's line codecs, shared by RowDump/RowLoad — phase 17.
+pub const dumpfmt = @import("dumpfmt.zig");
+/// TEST FIXTURE: a writable in-memory 9P tree (phase 17) — test-only.
+pub const MemTree = @import("MemTree.zig");
 /// `openfile` (look.c:810-905) + `readfile` (acme.c:285-300) — phase 13b.
 pub const openfile = @import("openfile.zig");
 /// `expandfile` (look.c:592-729) + the asynchronous existence check (R-P13b-2).

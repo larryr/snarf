@@ -24,12 +24,15 @@
 //!   * ^F / Kins                                   autocomplete          :828-835
 //!   * Kesc                                        select-typed-text     :836-846
 //!   * ^U / ^W                                     erase line / word     :847-889
-//!   * '\n' autoindent + wincommit                 (F-8, no window)      :890-939
+//!   * '\n' autoindent                             (F-8)                 :890-937
+//! (A '\n' or a `typecommit` in a window TAG commits a hand-edited name —
+//! `wintag.commit`, text.c:938-939 / :414-419, phase 17.)
 //! Kbs erases one char; printable/'\t'/'\n' insert; scroll/line-motion above.
 const std = @import("std");
 const draw = @import("draw");
 const Text = @import("Text.zig");
 const Editor = @import("../Editor.zig");
+const wintag = @import("../wintag.zig");
 
 // Plan 9 key runes. THE VALUES ARE THE 4e TREE'S (larryr/plan9@ed1a9c2
 // sys/include/keyboard.h:22-46), which R-P6-7 makes the device contract for
@@ -93,6 +96,15 @@ fn insertable(r: u21) bool {
     return r >= 0x20 and r != Kdel and r < KF;
 }
 
+/// `typecommit` (text.c:414-419): end the typing run — and, in a window TAG,
+/// `wincommit`'s tag half, so a hand-edited name becomes a rename (R-P17-7).
+fn typecommit(t: *Text, ed: *Editor) Text.Error!void {
+    ed.in_typing_run = false;
+    if (t.what == .tag) {
+        if (t.w) |w| try wintag.commit(ed, w);
+    }
+}
+
 /// `texttype` (text.c:668-942) subset — feed one key rune `r` to `t`.
 pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
     switch (r) {
@@ -100,12 +112,12 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
         // q0-1 / q1+1 regardless of any selection (text.c:684-693); typecommit
         // there == ending our run here.
         Kleft => {
-            ed.in_typing_run = false; // typecommit (text.c:685)
+            try typecommit(t, ed); // text.c:685
             if (t.q0 > 0) try t.show(t.q0 - 1, t.q0 - 1, true); // text.c:686-687
             return;
         },
         Kright => {
-            ed.in_typing_run = false; // typecommit (text.c:690)
+            try typecommit(t, ed); // text.c:690
             if (t.q1 < t.file.buffer.len()) try t.show(t.q1 + 1, t.q1 + 1, true); // text.c:691-692
             return;
         },
@@ -125,7 +137,7 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
 
         // --- line motion (text.c:728-762): commit the run, then jump. ---
         Khome => {
-            ed.in_typing_run = false; // typecommit (text.c:729)
+            try typecommit(t, ed); // text.c:729
             if (t.org > t.iq1) {
                 try t.setOrigin(t.backNL(t.iq1, 1), true); // text.c:730-732
             } else {
@@ -134,7 +146,7 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
             return;
         },
         Kend => {
-            ed.in_typing_run = false; // typecommit (text.c:737)
+            try typecommit(t, ed); // text.c:737
             if (t.iq1 > t.org + t.fr.nchars) { // text.c:738
                 // should not happen, but does; clamp so backNL can't crash
                 // (text.c:739-742).
@@ -147,7 +159,7 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
             return;
         },
         0x01 => { // ^A: beginning of line (text.c:748-755)
-            ed.in_typing_run = false; // typecommit (text.c:749)
+            try typecommit(t, ed); // text.c:749
             // go to where ^U would erase, if not already at BOL.
             var nnb: usize = 0;
             if (t.q0 > 0 and t.file.buffer.runeAt(t.q0 - 1) != '\n') nnb = t.bsWidth(0x15); // text.c:752-753
@@ -155,7 +167,7 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
             return;
         },
         0x05 => { // ^E: end of line (text.c:756-762)
-            ed.in_typing_run = false; // typecommit (text.c:757)
+            try typecommit(t, ed); // text.c:757
             var q0 = t.q0; // text.c:758
             const nc = t.file.buffer.len();
             while (q0 < nc and t.file.buffer.runeAt(q0) != '\n') q0 += 1; // text.c:759-760
@@ -206,6 +218,11 @@ pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
     const q0 = t.q0;
     try t.insertAt(q0, buf[0..nbytes], true); // text.c:925 textinsert
     try t.setSelect(q0 + 1, q0 + 1); // text.c:937
+    // text.c:938-939: a newline in a window's text commits it — for a TAG,
+    // that is the rename (R-P17-7).
+    if (r == '\n' and t.what == .tag) {
+        if (t.w) |w| try wintag.commit(ed, w);
+    }
     t.iq1 = t.q0; // text.c:940
 }
 

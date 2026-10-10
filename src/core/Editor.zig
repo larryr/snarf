@@ -32,6 +32,7 @@ const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Load = @import("Load.zig");
+const Put = @import("Put.zig");
 const pendinglook = @import("pendinglook.zig");
 const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
@@ -156,6 +157,8 @@ loads: std.ArrayList(*Load) = .empty,
 /// B3 cancels the older. Owned; stepped by `Load.stepAll`, freed by
 /// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
 pending_look: ?*pendinglook.PendingLook = null,
+puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
+session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
 needs_flush: bool = false,
@@ -170,6 +173,8 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 
 pub fn deinit(self: *Editor) void {
     Load.deinitAll(self); // abandon every in-flight window load (phase 13b)
+    Put.deinitAll(self);
+    self.session.deinit(self.allocator);
     self.snarf.deinit(self.allocator);
     self.edit_lastpat.deinit(self.allocator);
     for (self.warnings.items) |*wn| wn.deinit(self.allocator);
@@ -221,6 +226,7 @@ pub fn dropTextRefs(ed: *Editor, w: *Window) void {
     }
     ed.gesture.dropTextRefs(tag, body); // `gesture_text` moved to Gesture.zig
     Load.dropWindow(ed, w); // and any load still filling this window (13b)
+    Put.dropWindow(ed, w); // a Put outlives its window (R-P17-1)
 }
 
 /// `cut` (exec.c:947-1016) — forwarder into `snarf.cut`; see there for the
@@ -291,6 +297,8 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     // running the flush FIRST means a freshly minted `+Errors` window has its
     // live tag composed by the sweep below, in this same frame (util.c:211-258).
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
+    try Put.stepAll(ed); // and per in-flight Put (phase 17)
+    try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
     if (!ed.needs_flush) return;

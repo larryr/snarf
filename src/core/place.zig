@@ -25,6 +25,7 @@ const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Column = @import("Column.zig");
 const Row = @import("Row.zig");
+const wintag = @import("wintag.zig");
 
 /// `t->col` (dat.h): the Column a Text belongs to. A window text ⇒ the window's
 /// column; a columntag ⇒ its own Column (via `@fieldParentPtr`); anything else
@@ -32,7 +33,11 @@ const Row = @import("Row.zig");
 pub fn colOf(et: *Text) ?*Column {
     if (et.w) |w| return w.col;
     if (et.what == .columntag) {
-        const c: *Column = @fieldParentPtr("tag", et);
+        // `@alignCast`: since phase 17 `File` carries a `u64` (`File.Disk`), so
+        // on wasm32 a Column (which embeds its tag `File`) is 8-aligned while
+        // a bare `*Text` promises 4. Every Column is heap-created at its own
+        // alignment, so the cast holds.
+        const c: *Column = @alignCast(@fieldParentPtr("tag", et));
         return c;
     }
     return null;
@@ -42,7 +47,7 @@ pub fn colOf(et: *Text) ?*Column {
 /// `@fieldParentPtr`); otherwise the row of `colOf(et)`.
 pub fn rowOf(et: *Text) ?*Row {
     if (et.what == .rowtag) {
-        const r: *Row = @fieldParentPtr("tag", et);
+        const r: *Row = @alignCast(@fieldParentPtr("tag", et)); // see colOf
         return r;
     }
     const c = colOf(et) orelse return null;
@@ -72,8 +77,8 @@ pub fn mintWindow(c: *Column, y: i32, name: []const u8) Text.Error!*Window {
     w.owns_body = true; // the Window now owns and frees this body File
     transferred = true; // f is reachable from the tree; its deinit chain frees it
 
-    try w.body.file.setName(name);
-    try w.setTag1();
+    try wintag.setName(w, name); // winsetname: isscratch for `+Errors` (wind.c:387-391)
+    try w.setTag1(); // setName is a no-op for "" (New): compose regardless
     const nc = w.tag.file.buffer.len();
     try w.tag.setSelect(nc, nc);
     try w.body.fill();

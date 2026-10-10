@@ -67,6 +67,7 @@ pub const Tree = struct {
         .write = write,
         .clunk = clunk,
         .stat = statOp,
+        .create = create,
     };
 
     // -- fid ↔ node -----------------------------------------------------------
@@ -254,6 +255,37 @@ pub const Tree = struct {
             });
         }
         return qid;
+    }
+
+    /// Tcreate (phase 17): a plain FILE in a `fs/` directory, so `Put` can
+    /// write a new file into the export. Exclusive (`file already exists`);
+    /// directories (`DMDIR`) and everything outside `fs/` are refused. The fid
+    /// is re-pointed at the new file (`5/open`); the framework marks it open.
+    fn create(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, name: []const u8, perm: u32, _: u8) server.OpBlockError!server.CreateResult {
+        const self: *Tree = @ptrCast(@alignCast(ctx));
+        const node = nodeOf(fid);
+        const rel = switch (node.*) {
+            .host => |r| r,
+            else => {
+                self.logDenied("create", node.*);
+                return error.PermissionDenied;
+            },
+        };
+        if (perm & Stat.DMDIR != 0) {
+            self.logDenied("create[dir]", node.*);
+            return error.PermissionDenied;
+        }
+        const child = try self.hostPath(rel, name);
+        errdefer self.gpa.free(child);
+        try self.host.createFile(child);
+        const qid = try self.host.qidOf(child);
+        self.gpa.free(rel);
+        node.* = .{ .host = child };
+        if (self.log != null) {
+            var pb: [640]u8 = undefined;
+            self.logOp("create {s}", .{pathOf(node.*, &pb)});
+        }
+        return .{ .qid = qid };
     }
 
     fn read(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, offset: u64, buf: []u8) server.ReadError!usize {

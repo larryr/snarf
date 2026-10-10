@@ -66,9 +66,18 @@ dirnames: std.ArrayList([]const u21) = .empty,
 /// written by an external client (xfid.c:121/810).
 filemenu: bool = true,
 /// Cached tag-presence tuple for the `frameEnd` sweep (R-P9-4/§3f): the last
-/// `{undoSeq()!=0, redoSeq()!=0, file.mod}` `setTag1` was called for. The field
-/// only — the sweep that reads/updates it is wave 9d.
-tag_state: struct { undo: bool = false, redo: bool = false, mod: bool = false } = .{},
+/// `{undoSeq()!=0, redoSeq()!=0, file.mod, Put-shown}` `setTag1` was called
+/// for. `put` (phase 17) is wind.c:514's `dirty` term, so a Put completing or a
+/// Get zeroing `seq` recomposes the tag within the frame.
+tag_state: struct { undo: bool = false, redo: bool = false, mod: bool = false, put: bool = false } = .{},
+/// `w->putseq` (dat.h:260): the body file's `seq` at the last successful Put
+/// (exec.c:807). The tag shows ` Put` while `file.seq != putseq` (wind.c:514)
+/// and `Undo` recomputes `dirty` from it (wind.c:366).
+putseq: u32 = 0,
+/// `w->isscratch` (dat.h:240): the name ends in `/guide` or `+Errors`
+/// (wind.c:385-389, set by `wintag.setName`). A scratch window never
+/// two-strikes (wind.c:669) and `Putall` skips it (exec.c:1179).
+isscratch: bool = false,
 /// True when this Window owns its body `File` and must free it in `deinit`
 /// (R-P9-5). Set by the creator (`boot.addWinTo`, and later New/Newcol). When
 /// false the body `File` is borrowed (caller-owned), as in the wave-1 harnesses.
@@ -125,6 +134,12 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     w.isdir = false; // same reason: a raw heap Window has no defaults applied
     w.dirnames = .empty;
     w.maxlines = w.body.fr.maxlines; // wind.c:82
+    // Phase 17: the C's window is calloc'd (wind.c:24 `emalloc`), so these
+    // start zero there; a raw heap Window must be told.
+    w.dirty = false;
+    w.putseq = 0;
+    w.isscratch = false;
+    w.tag_state = .{};
 }
 
 /// Free the two Texts and the tag's File. The body's File is freed here only when
@@ -254,14 +269,14 @@ pub fn setTag(w: *Window) Error!void {
 /// `winclean` (wind.c:666-685) — THE TWO-STRIKE. The `isdir` half of
 /// wind.c:667-668 is LIVE since phase 13b ("don't whine if it's a guide file,
 /// error window, etc." — a directory listing is machine-generated, so `Del`
-/// never two-strikes on it); `isscratch`/`nopen` stay n/a (`conservative`
-/// unused). A dirty window warns ONCE and clears
+/// never two-strikes on it); `isscratch` is live since phase 17 (`+Errors`,
+/// `/guide`); `nopen` stays n/a (`conservative` unused). A dirty window warns ONCE and clears
 /// `dirty` (while `file.mod` stays true so the mod dot remains), returning false;
 /// the second call sees `dirty==false` and returns true. A later body edit
 /// re-arms `dirty` (Text.insertAt/deleteRange). Small unnamed files pass silently.
 pub fn clean(w: *Window, ed: *Editor, conservative: bool) bool {
     _ = conservative;
-    if (w.isdir) return true; // wind.c:667-668
+    if (w.isscratch or w.isdir) return true; // wind.c:667-668
     if (w.dirty) {
         if (w.body.file.name.items.len != 0) {
             ed.warning("{s} modified\n", .{w.body.file.name.items}); // wind.c:675

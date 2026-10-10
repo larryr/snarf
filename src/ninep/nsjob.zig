@@ -35,12 +35,10 @@
 //!
 //! Imports: std + sibling ninep files (S-07 §6). Nothing here touches `core`,
 //! `dev` or `shim`.
-//! SEAM (phase 14a): there is deliberately NO CreateJob/RemoveJob/WriteJob
-//! here. `ninep.server` and `ninep.Client` gained create/remove/wstat in phase
-//! 14a, and the ticket path carries them for free (`tickets.begin` takes any
-//! T-message), but the namespace-level jobs that Put/Dump need belong to the
-//! Put/Get wave, which owns the "which mount, which mode, truncate-or-create"
-//! policy. Build them there, on `tickets.begin`, exactly as `nsio.zig` does.
+//! WRITING (phase 17): the 14a SEAM that stood here — "no CreateJob/WriteJob
+//! yet; the Put/Get wave owns the which-mount/which-mode/truncate-or-create
+//! policy" — is closed by `nswrite.zig`'s `WriteFileJob`, built on
+//! `tickets.begin` exactly as `nsio.zig` is and re-exported below.
 //!
 const std = @import("std");
 const Client = @import("client.zig").Client;
@@ -85,7 +83,7 @@ pub const max_file_bytes: usize = 64 << 20;
 /// tests and for pumped in-process transports only: with no pump and no frames
 /// this spins forever, which is exactly why the browser calls `step` from its
 /// own tick instead.
-pub fn runSync(job: anytype, pump: ?Client.Pump) Error!void {
+pub fn runSync(job: anytype, pump: ?Client.Pump) !void {
     while (true) {
         if (try job.step() == .done) return;
         if (pump) |p| p.run(p.ctx) catch return error.IoError;
@@ -334,6 +332,9 @@ pub const ReadFileJob = @import("nsio.zig").ReadFileJob;
 pub const StatJob = @import("nsio.zig").StatJob;
 /// List a directory the way `unionread` does (sysfile.c:323-367).
 pub const ListDirJob = @import("nsio.zig").ListDirJob;
+/// Write a whole file through the namespace (open-truncate or create, Twrite
+/// loop, clunk) — acme `putfile`'s I/O half (phase 17).
+pub const WriteFileJob = @import("nswrite.zig").WriteFileJob;
 
 // ==========================================================================
 // Smoke tests (§T-nsjob). The named battery T5-T9 is the test writer's; these
