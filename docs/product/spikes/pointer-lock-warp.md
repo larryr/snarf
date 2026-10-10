@@ -19,7 +19,7 @@ write with `permission denied` (`src/dev/input.zig` `writeOp`). Under lock it wo
 it and move the virtual pointer. The drawn cursor is already allowed by the spec:
 R-GFX-08 says the cursor may be "mapped to CSS cursors **or a drawn cursor** as the backend
 chooses". The Esc conflict was settled in principle on 2026-10-03
-(`agents/reports/phase-review-2026-10-03.md` Decision 2: lock loss counts as Esc, with a
+(`notes/claude/phase-review-2026-10-03.md` Decision 2: lock loss counts as Esc, with a
 `document.hasFocus()` guard, and Esc is not forwarded as `Kesc` while locked). That review
 said **no ADR is needed** because the change is host-local.
 

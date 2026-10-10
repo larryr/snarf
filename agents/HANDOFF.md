@@ -66,7 +66,7 @@ allow-list ADR the roadmap's M2 also names, so this isn't just a formality.
   significant), a loopback-trust hedge added to the allow-list ADR item, a headless-driver
   CI sub-item, a stale Kdown/`/dev/snarf` correction, and a new "Parked" section (Pointer
   Lock, devdraw-in-tree, webview shell, native frame) each with its own gating decision.
-  Full discussion + two Fable review passes: `agents/reports/phase-review-2026-10-03.md`.
+  Full discussion + two Fable review passes: `notes/claude/phase-review-2026-10-03.md`.
   Pointer Lock's Esc conflict is resolved **in principle** (don't rebind Esc; treat
   unrequested Pointer-Lock-loss, guarded by `document.hasFocus()`, as the Esc signal; don't
   forward Esc as `Kesc` while locked) — still parked, not queued, until Larry picks it up.

@@ -222,7 +222,7 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
    continue and finished it while this roadmap was being drafted. **Still open: does this
    roadmap supersede `agents/NEXT-PHASES.md` as the plan of record, or do the two coexist**
    (roadmap = product prioritization, NEXT-PHASES = the execution queue, refreshed from the
-   roadmap's calls)? See `agents/reports/roadmap-review-2026-10-10.md` for a fuller review —
+   roadmap's calls)? See `notes/claude/roadmap-review-2026-10-10.md` for a fuller review —
    recommendation there is **coexist**, not supersede. Also unresolved from that review:
    whether the Pointer Lock spike (M0) runs now, concurrent with the rest of Tier 1 (external
    commands, remaining builtins), or after — this roadmap and the 2026-10-03 phase-planning

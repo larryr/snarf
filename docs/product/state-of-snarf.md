@@ -20,7 +20,7 @@ outside the process.
 Sources: `agents/NEXT-PHASES.md` §intro ("What is missing is *files in and out* and
 *commands*"), `agents/HANDOFF.md` "Current state". **Update 2026-10-10**: Put/Get/Putall/
 Dump-Load shipped — `agents/reports/phase17-put-get-dump-load.md`; see
-`agents/reports/roadmap-review-2026-10-10.md` for the fuller reconciliation against this
+`notes/claude/roadmap-review-2026-10-10.md` for the fuller reconciliation against this
 doc set and `agents/NEXT-PHASES.md`.
 
 ## 2. Verified on this box (2026-10-07)

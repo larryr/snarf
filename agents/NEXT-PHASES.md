@@ -82,7 +82,7 @@ decision, not a re-read of the spike report.
 - **Pointer Lock spike** (browser-host mouse warping, R-EDIT-25/R-IN-10). Gated on: nothing
   further — the Esc/Pointer-Lock conflict is resolved in principle (don't rebind Esc; treat
   unrequested Pointer-Lock-loss, guarded by `document.hasFocus()`, as the Esc signal; don't
-  forward Esc as `Kesc` while locked — see `agents/reports/phase-review-2026-10-03.md`
+  forward Esc as `Kesc` while locked — see `notes/claude/phase-review-2026-10-03.md`
   Decision 2). Still needs: a timeboxed prototype in both Safari and Chromium before
   promising anything (Safari has no Keyboard Lock fallback and its Pointer Lock banner/
   re-lock behavior differs from Chromium's).
