@@ -11,6 +11,43 @@ Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 na
 
 ---
 
+## Phase 17 — Put, Get, Putall, Dump/Load (merged `e734e3f`, 2026-10-10)
+
+**For you — try it:** B2 `Put` on a dirty named window saves it through the namespace (works
+against `/n/origin/fs/` — the repo itself — and `/mnt/opfs`); the tag shows `Put` only while
+dirty, matching acme. `Putall` saves every dirty named window at once. `Dump` writes your row
+layout to `$home/acme.dump` (`/mnt/opfs/acme.dump` in the browser); `Load` restores it. Undo
+survives a Put (the dirty indicator tracks whether you've undone past the last save, not just
+whether you've edited since boot).
+
+**What changed:** the full Put/Get/Putall/Dump/Load path (R-EDIT-15/16), ported from acme's
+`wind.c`/`exec.c` with citations throughout; the origin server's `fs/` export can now create
+new files (previously read/write/truncate of existing files only — new files would have
+silently failed); OPFS's one-writable-per-fid rule (from 16b) is what makes a `Put` a clean
+single write burst rather than quadratic.
+
+**Decisions made for you:** `$home` is `/mnt/opfs` in the browser and real `$HOME` natively
+(honestly unmounted — a native `Dump` warns rather than silently failing, until Tier 2's
+native file server exists). The dump format is acme's own `rowdump1` text format, not a new
+one. `Putall` now re-commits each window's pending tag-rename before saving — a small gap the
+review caught: acme never needs this because it commits on every tag keystroke, which Snarf
+doesn't have (yet) an equivalent of.
+
+**Still open:** one named test (T21, a real B2-click-on-Put browser smoke scenario) wasn't
+landed — the fix needs a shorter test file name so the click lands inside the display, recipe
+is in the phase report; two files nudged just over the 400-line soft cap (`xfid.zig`,
+`Window.zig` — fine to fold into whichever next phase touches them); a system clipboard still
+isn't wired (that's Tier 1's *next* un-picked item per the roadmap below, not this phase).
+
+**Heads up — a second planning document now exists.** While this phase was running, you (via
+a separate "SnarfProdd" PM session) landed `docs/product/{roadmap,state-of-snarf,spikes/
+pointer-lock-warp,research/touchpad-interaction}.md` straight to `main`. The roadmap proposes
+a different near-term order (Pointer Lock spike concurrent with Put/Get, not after it) and the
+Pointer Lock spike brief has real new research our 2026-10-03 review didn't have (the W3C spec
+detail that unlocking snaps the cursor back to where lock began, not to snarf's tracked
+position — relevant to the edge-exit design). I haven't picked the next phase pending your
+call on whether the roadmap supersedes `NEXT-PHASES.md` — see HANDOFF's new section.
+
 ## Phase 16 — debt-collection pass (merged `f51e4a0`, 2026-09-14)
 
 **For you — try it:** reload the browser — **ArrowDown works now** (it never did: the core

@@ -6,15 +6,60 @@ authorization for this file only). Prune freely — git keeps history.
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Phase 17 CLAIMED (2026-10-04, local session)** — Put/Get/Putall + Dump/Load
-  (`NEXT-PHASES.md` Tier 1 item 1, R-EDIT-15/16). Pipeline running autonomously (Fable spec
-  → Opus build → Sonnet tests → Sonnet gate → Fable review → merge) per standing
-  authorization. Worktree + branch name recorded here once the build stage starts. Files:
-  namespace Put/Get paths, `core` Undo/putseq tag bookkeeping, OPFS one-writable-per-fid
-  (16b item 4), `/mnt/opfs/acme.dump`.
+- *(none as of 2026-10-10 — phase 17 merged `e734e3f`; next phase NOT yet picked — see
+  "Roadmap reconciliation needed" below before starting Tier 1 item 2 or anything else)*
 - *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
 
+## ⚠ Roadmap reconciliation needed (2026-10-10, before picking the next phase)
+
+While phase 17 was running, Larry's separate **"SnarfProdd" PM workstream** landed three
+docs directly to `main` (commits `646504e`, `98768fb`, authored `larryrau@mac.com`, not from
+this pipeline): `docs/product/{README,state-of-snarf,roadmap,spikes/pointer-lock-warp,
+research/touchpad-interaction}.md`. These are explicitly labeled "PM proposals, not agreed
+requirements," but they:
+
+1. **Propose a different near-term sequence**: `roadmap.md`'s M0 ("Ground truth, Now") lists
+   a **Pointer Lock warp spike as its first item**, concurrent with M1 (Put/Get, also "Now").
+   This is a *different* call than the 2026-10-03 decision in this session (finish Tier 1,
+   park Pointer Lock) — not necessarily wrong, but it's Larry's call to reconcile, not mine
+   to silently override either direction.
+2. **Add real new research the 2026-10-03 Fable reviews didn't have**: `spikes/pointer-lock-
+   warp.md` cites the W3C Pointer Lock spec directly and finds a risk neither review surfaced
+   — **unlocking resets the real cursor to the lock-ENTRY point, not snarf's current virtual
+   position** (spec "Exit Pointer Lock" step 1), which affects the edge-exit/re-lock design
+   (A8/A9 in its acceptance table). Also: Safari's unlock banner may **swallow the first Esc**
+   before it reaches the page. Any future Pointer Lock work should start from this doc, not
+   just `phase-review-2026-10-03.md`.
+3. **Explicitly ask Larry** (roadmap.md "Top decisions for Larry", #3): "Is Phase 17 running,
+   and should the autonomous pipeline continue under this roadmap? Does this roadmap
+   supersede `agents/NEXT-PHASES.md`?" — **answerable now**: phase 17 is done (merged
+   `e734e3f`, this session, 2026-10-10), but the supersession question is still open.
+4. Raises decisions above "architecturally significant y/n" — daily-driver host choice
+   (browser vs. native), an identity-aware allow-list policy shape (not just a command list),
+   and an **M5 AI-harness scope change** that would touch non-goals R-NG-02/03 and un-defer
+   `kbd hold` (OQ-EDIT-4, previously "don't build unprompted"). These need Larry directly, not
+   another Fable pass.
+
+**Do not pick Tier 1 item 2 (external commands) or anything else as the next phase without
+Larry reconciling `NEXT-PHASES.md` vs. `roadmap.md` first** — item 2 is gated on the same
+allow-list ADR the roadmap's M2 also names, so this isn't just a formality.
+
 ## Current state (update in place)
+
+- **Phase 17 MERGED (`e734e3f`, 2026-10-10)** — Put/Get/Putall, name-change Undo, Dump/Load.
+  See `agents/reports/phase17-put-get-dump-load.md` and `agents/contracts/phase17-put-get-
+  dump-load.md`. Satisfies **R-EDIT-15/16**. Pipeline: Fable spec → Opus build → Sonnet
+  tests+gate → Fable review (APPROVE WITH NITS, one fix applied: `Putall` now commits each
+  window's tag before checking `mod`, the stand-in for acme's per-keystroke `wincommit`) →
+  this merge. 743/743 tests, `zig build`/`native`/`fmt` clean, two sanctioned golden moves
+  (FROZEN-ACCEPT-8, FROZEN-ACCEPT-12B) with pixel-level evidence (212 pixels, confined to the
+  tag row, both scenes). `$home` closed: `/mnt/opfs` (browser), real `$HOME` (native,
+  unmounted until Tier 2 — honest `NotMounted`, not silent). Origin `fs/` export gained
+  `create` (files only, exclusive). **Debt**: T21 (wasm smoke B2-click-on-Put) not landed —
+  geometry issue, fix recipe recorded in the report; `xfid.zig` (424) and `Window.zig` (405)
+  pretest lines now over the ~400 cap, next wave touching either should carry a split;
+  `Load.finishTail` doesn't set the new tag `.put` field (idempotent extra retag, low
+  priority).
 
 - **NEXT-PHASES.md revised (2026-10-03/04, `bdbac1f`)** after the rhun spike: Tier 1/2/3
   unchanged (continue the existing queue — none of the spike's ideas are architecturally
