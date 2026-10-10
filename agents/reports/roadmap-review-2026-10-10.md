@@ -39,27 +39,75 @@ Three items move earlier or get added relative to `NEXT-PHASES.md`:
 
 ## Finding 3 — M4/M5 are scope the execution plan doesn't cover at all
 
-`NEXT-PHASES.md` has no tier for the full acme(4) served tree (`addr`/`data`/`xdata`/
-`event`/etc. — M4), external 9P attach + `Tauth` (M4), or the AI-harness primitives (M5:
-agent-as-namespace-client, per-agent namespaces, `kbd hold` un-deferred, audit log). This
-isn't a conflict — `NEXT-PHASES.md` simply never had this horizon — but it means the two
-docs aren't fully reconcilable by just re-ordering; M4/M5 would need **new Tier(s)** added
-to `NEXT-PHASES.md`, and M5 explicitly needs new requirements (R-01 v4, a new R-08) before
-any of it is buildable. The roadmap itself says this; flagging that it's a real "stop and
-ask" item, correctly self-identified.
+**REFINED by Fable sync, 2026-10-10** — my original framing lumped M4 and M5 together as
+"stop and ask." That's wrong for M4.
+
+**M4 (full acme(4) served tree, external attach, `Tauth`, headless driver) is overwhelmingly
+"specified-but-unscheduled," not new product direction.** R-EDIT-17 already SHALLs the full
+served tree ("tooling can be written against Snarf just as against ACME"); R-9P-12 already
+mandates `/mnt/snarf-self` with "the same file API shape as ACME's"; S-02 §6 already lists
+every file (`addr body data tag event ctl xdata`) and already labels external attach "a v2
+item." None of this is new — it's existing SHALLs that were simply never pulled into a
+`NEXT-PHASES.md` tier (the HANDOFF backlog already half-carries two of these items). The
+**one** genuinely new decision inside M4 is making `Tauth` + an external-attach transport
+*mandatory* (today optional per OQ-9P-3) — that's one ADR-sized decision, not a requirements
+rewrite, and Larry has already signaled the shape of it once (HANDOFF: "`Tauth` first" for
+the OPFS-export idea). So: **most of M4 could get its own `NEXT-PHASES.md` tier right now,
+under existing requirements, no stop needed** — only the auth/transport piece is gated.
+
+**M5 (AI harness) is still correctly a stop-and-ask — but for a sharper reason than "violates
+the stated non-goals."** Checked against the actual text: R-NG-03's "no shell / arbitrary
+command execution" doesn't apply — an agent running commands through the same
+allow-listed R-EDIT-18 table the human uses (M2, already in `NEXT-PHASES.md` Tier 1 #2) is
+not "arbitrary." R-NG-02's "no server-side session state" is only at risk under one specific
+*design option* for where the agent's model runs (a stateful origin-side broker), not
+inherent to M5 as described. **The non-goal M5 actually brushes against is R-NG-04** ("no
+collaborative/multi-user editing") — human + agent sharing one served tree is a multi-client
+scenario, something the roadmap's own "architectural choices" section already flags (citing
+the single-client fid-recycling assumption from REVIEW-NOTES 13a). The real reason to stop:
+**M5 proposes a new actor class (an agent as a namespace client) with no requirement at all**
+— R-01 v4 + a new R-08 + a model-connection ADR, exactly what the roadmap's own Decision 4
+asks for. `docs/requirements/07-constraints-non-goals.md` is itself stale (still "Draft v1,"
+no revision-log entries, even though ADR-0005 already relaxed part of R-NG-03 for the native
+host's process service) — worth a clarifying pass regardless of whether M5 proceeds.
 
 ## Finding 4 — a core change hiding inside what we called "host-local"
 
-The Pointer Lock spike brief (`spikes/pointer-lock-warp.md` §Scope, item 3) proposes
-porting acme's dropped `savemouse`/`restoremouse` (return-after-popup warp; dropped phase 8,
-ruling **R-P8-7**) as "the spike's only core change." Our 2026-10-03 review concluded
-Pointer Lock work was host-local shim behavior needing no ADR — that conclusion was about
-the Esc/lock-loss handling specifically, and still holds for that part, but a core change
-reversing a phase-8 ruling is a different thing and wasn't in scope of what we blessed.
-Not necessarily a problem (small, well-cited, benefits the native host too, doesn't touch
-`draw`/`ninep`), but the spike brief's own open question #6 asks exactly this: "acceptable
-under the stop-and-ask rule, or its own micro-phase?" — a real question for Fable/Larry, not
-something to wave through by inertia.
+**RESOLVED by Fable sync, 2026-10-10 — verdict: its own small micro-phase, no stop, no ADR,
+land BEFORE (and independent of) any Pointer Lock work.**
+
+The Pointer Lock spike brief proposes porting acme's dropped `savemouse`/`restoremouse`
+(return-after-popup warp) as "the spike's only core change," citing phase-8 ruling
+**R-P8-7**. My original framing of this as "reversing a phase-8 ruling" was **overstated**:
+R-P8-7's premise ("mouse warping PERMANENTLY divergent — browsers can't warp") was already
+overturned in **phase 15** (ruling R-P15-3, R-EDIT-25 v6 — warping is host-scoped, not an
+editor-level divergence). The current R-EDIT-25 text already lists `savemouse`/
+`restoremouse`'s call sites (`util.c:384-408`, `cols.c:150/178`) under "not ported yet on any
+host" — porting them is simply **the next R-EDIT-25 site**, the same category of work phase
+15 already did for `look.c:219`/`:897` with no special process.
+
+**Decisive point I missed**: this is headless-testable *today*, via the `MouseSink` stand-in
+`/dev/mouse` (`src/core/warp.zig:132`, already used by `look.zig`/`openfile.zig`'s warp
+tests) — directly contradicting the spike brief's own claim that "the third warp can't be
+tested on any host." The spike brief's own pass/fail table also says the port "ships
+regardless" either way — a change that ships on both branches of a spike doesn't belong
+inside the spike. Landing it first (and separately) also keeps the eventual Pointer Lock
+phase's honesty check (`git diff -- src/core` empty) auditable, same shape as phase 15's.
+
+Real shape, per Fable's read of the C source: ~40 lines on `Editor` (two fields replacing
+acme's `prevmouse`/`mousew` globals — no-globals rule), cleared via the existing
+`dropTextRefs` hook on window destruction, called from `Column.add`/`Column.close`
+(`cols.c:150/178`), one headless `MouseSink` test, one R-EDIT-25 revision-log line. One
+real wrinkle: B3 look is async (R-P13b-2), so the saved pointer position is the latest
+sample, not the exact click point — same in practice, worth a sentence in whatever contract
+builds it. Also: several code comments (`Column.zig:8`, `Window.zig:7`, `Row.zig:10`,
+`colgrow.zig:22-26`, `text/scroll.zig:13-14`) still cite the pre-ADR-0005 "permanently
+impossible" rationale and should be re-cited when this lands — doc hygiene, not a blocker.
+
+**Candidate addition to NEXT-PHASES.md**: a small, independent item — "port
+`savemouse`/`restoremouse` (return-after-`Del` warp), R-EDIT-25's last unported site,
+host-agnostic, headless-tested" — schedulable now, no gating decision needed, could even
+piggyback on whatever wave next touches `Column.add`/`close` (Tier 1 #3 Zerox is adjacent).
 
 ## Finding 5 — a real, cheap, low-risk correction worth taking regardless of sequencing
 
@@ -97,17 +145,29 @@ Pointer Lock timing) rather than retired in favor of it, and M4/M5 get their own
 once/if Larry authorizes that horizon. The roadmap document itself says "it mostly agrees
 with it, re-ordered around daily-driver value" — this framing fits that.
 
-## Open, not yet resolved
+## Side note (Fable sync) — a process rule already in effect, worth naming explicitly
+
+Roadmap's M1 "harness-friendly choice" #1 ("no feature is UI-only; every builtin also gets
+its served-tree `ctl` verb") reads as a "Later" aspiration in the doc, but **phase 17 already
+did this** (ctl `get`/`put` landed alongside the builtins). Worth stating as a standing
+pipeline/contract rule now, not scoped to M4/M5.
+
+## Open, not yet resolved (Larry's calls, not Fable's)
 
 - Sequencing: Pointer Lock now (concurrent) vs. after remaining Tier 1 (external commands,
-  builtins)?
-- Should I refresh `state-of-snarf.md`/`roadmap.md`'s stale "not built" claims myself, or
-  leave that to the SnarfProdd workstream next time it runs (risk: double-work or
-  conflicting edits to docs I don't fully own)?
-- M4/M5: treat as validated future direction to plan toward now, or set aside as unvetted
-  PM speculation until Larry explicitly greenlights the requirements work?
+  builtins)? The `restoremouse` micro-phase (Finding 4) is independent of this either way and
+  could land regardless of which way this goes.
+- Should the stale `state-of-snarf.md`/`roadmap.md` claims be refreshed by this session or
+  left to the SnarfProdd workstream? — **done**: refreshed directly (see `docs/product/`
+  diff, branch `docs-product-phase17-refresh`), since they were simple factual-currency
+  fixes, not product judgment calls.
+- M4: per Fable, most of it is schedulable now under existing requirements (R-EDIT-17,
+  R-9P-12) — only the `Tauth`/external-attach-transport piece is ADR-gated. Does Larry want
+  a new `NEXT-PHASES.md` tier for it now, or hold until after Tier 1/2?
+- M5: confirmed stop-and-ask (new actor class, no requirement) — does Larry want to greenlight
+  the R-01 v4 / new R-08 / model-connection-ADR work to start, or is this further out?
 - Daily-driver host choice (browser vs. native) — roadmap's Decision 1, unresolved.
 
-**Status: syncing with Fable now on Findings 3 and 4 specifically** (scope-reconciliation
-and the restoremouse core-change question) — those are the two with real architectural
-weight; the rest are Larry's calls to make, not Fable's to judge.
+**Status: Fable sync complete on Findings 3 and 4.** Both corrected/sharpened above. Ready
+to fold the `restoremouse` micro-phase and the M4-is-mostly-backlog reframing into
+`NEXT-PHASES.md` once Larry confirms; everything else above needs his direct answer.
