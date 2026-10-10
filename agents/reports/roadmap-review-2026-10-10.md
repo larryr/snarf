@@ -171,3 +171,71 @@ pipeline/contract rule now, not scoped to M4/M5.
 **Status: Fable sync complete on Findings 3 and 4.** Both corrected/sharpened above. Ready
 to fold the `restoremouse` micro-phase and the M4-is-mostly-backlog reframing into
 `NEXT-PHASES.md` once Larry confirms; everything else above needs his direct answer.
+
+---
+
+## Product sync, 2026-10-10 (Larry ↔ SnarfProdd) — native confirmed as primary host
+
+Relayed to this session as a pasted transcript, not yet in `docs/product/`. Key decisions:
+
+1. **Native is the primary host.** Reasoning given: the browser can't reach ACME-level
+   usability, and avoiding an install was its only real advantage — moot now that Put/Get
+   works and the native host already has real warp. Snarf's job (editing documents, text
+   services) happens mostly on the local machine; remote work goes through dedicated
+   headless 9P servers (new concept, not yet in any tier).
+2. **Browser/WASM is now a frozen secondary target**: must keep building and passing tests,
+   gets **no new features**, no WASM-VM wrapping. Core stays host-neutral (changes nothing
+   about the R-OV-03 boundary — both hosts still exist, one just stops growing).
+3. **Pointer Lock moves out of M0 entirely** — "only matters if the browser host comes
+   back." This resolves the open sequencing question from the first Fable sync (concurrent
+   vs. after Tier 1) by removing the question: it's not scheduled at all right now. The
+   `restoremouse` micro-phase (Finding 4 above) is unaffected — it's host-agnostic and
+   benefits native directly regardless of the browser's status.
+4. **The host-command allow-list ADR's scope narrows**: "the command policy only applies to
+   remote 9P servers." Read plainly, this means the **native process service** (Tier 2 #5,
+   `std.process.Child` running Larry's own local commands) is **not** gated on that ADR —
+   the allow-list only matters for the origin server when something reaches it from outside
+   (remote/external attach, M4 territory). This potentially decouples Tier 2 #5 from the
+   ADR that was blocking Tier 1 #2 — worth confirming explicitly with Larry before acting on
+   it, since it's a real re-scoping of a decision `NEXT-PHASES.md` currently treats as one
+   blocking ADR for both.
+5. **New work, not in any tier today**: a **headless 9P server** for remote document editing
+   (snarf-native with no window, reachable over 9P) — this is the natural target for M4's
+   external-attach work, now motivated by remote human access rather than AI agents first.
+   Worth noting M4/M5's infrastructure (served tree, external attach, `Tauth`) is largely
+   shared regardless of which motivation drives it.
+6. **The devdraw-vs-self-drawn-frame decision is now live**, not parked. With native
+   confirmed primary, "choosing between plan9port's devdraw and a self-drawn native window"
+   is explicitly named as next work — this is exactly the rhun spike's own question
+   (`agents/reports/spike-rhun-self-drawn-frame.md`), previously filed under "Parked" because
+   nothing forced the choice. It's forced now.
+7. **Trackpad**: hold-and-tap chords + modifier+click (touchpad research's **D1**), since
+   Larry uses 3-finger drag. D5 (dual trackpad) stays parked unless multitouch clearly wins.
+   Answers that research doc's open question #1 directly (native, not browser).
+8. **Still open** (Larry's own list): his top 3 blockers to daily use; phase 17 status
+   (**already answered from this side**: shipped, `e734e3f`); roadmap approval; **when to
+   bring in "the architect"** — plausibly this session, given the technical depth already
+   exchanged on this exact pivot.
+
+### What this changes about the execution plan (my read, not yet actioned)
+
+- **Tier 2 (native host becomes daily editor) should become the near-term priority**, not a
+  later tier behind Tier 1's remainder. Items 4 (native file server) and 5 (native process
+  service) are now the real next work.
+- **Tier 3 (browser host polish: HiDPI, touch profile, Worker+SAB) should be marked frozen**,
+  not deleted — "only matters if the browser host comes back" means hold, not cancel.
+- **Tier 1 #2 (external commands)** may partially unblock independently of the allow-list ADR
+  if item 4 above is confirmed — needs Larry's explicit confirmation before I act on that
+  reading, since it reinterprets an existing gate rather than just reordering work.
+- **The Parked section's "devdraw built in-tree" and "native frame" items need to stop being
+  parked** — this is the one place I think Fable's technical input is worth another pass:
+  the rhun spike already did real analysis here (borrow-the-model verdict, ~30-35% frame
+  probability, devdraw-in-tree's ADR-0002 amendment), so the question now is whether that
+  analysis still holds given native-primary changes the stakes, not starting over.
+- **New tier/items needed**: headless 9P server (remote access); trackpad D1 (devdraw patch
+  in Larry's own plan9port fork, per the touchpad research's own M2 sizing).
+
+**Not yet done**: no `NEXT-PHASES.md` edits made for this pivot — flagging the scale of the
+change and the one technical decision (devdraw vs. frame) worth a fresh look before writing
+anything, rather than silently reinterpreting the allow-list ADR's scope or re-tiering
+everything without Larry's explicit confirmation.
