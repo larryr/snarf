@@ -1,7 +1,7 @@
 # R-01 — Overview & Vision
 
-Status: **Draft v3** (iterated: /dev/draw, mouse-emulation, and two-hosts decisions folded
-back in — see revision log)
+Status: **Draft v4** (iterated: /dev/draw, mouse-emulation, two-hosts, and native-primary
+decisions folded back in — see revision log)
 
 ## 1. What Snarf is
 
@@ -27,6 +27,14 @@ program scripted against it — can use.
 > export. No install, no server-side session state, no JavaScript framework — one `.wasm`
 > module, one small JS shim, one HTML page.
 
+**v4 note:** this founding vision describes the **zero-install showcase host** (browser),
+kept exactly as written for history and because the core (R-OV-03) stays host-neutral by
+design. It is no longer the **daily-driver** vision: per ADR-0005's amendment (2026-10-11,
+native primary + browser freeze), the native host — real ACME semantics, real mouse warping,
+real local processes, via `devdraw` — is where day-to-day editing happens. The browser
+remains this vision statement's host: it keeps building and passing tests, but gets no new
+features (ADR-0005 amendment §2).
+
 ## 3. Top-level requirements
 
 | ID | Requirement |
@@ -39,7 +47,7 @@ program scripted against it — can use.
 | R-OV-06 | The full three-button mouse language, **including chords**, SHALL be usable on hardware without three physical buttons (trackpads, touch screens) via the emulation model in [05-input.md](05-input.md) (decision ADR-0004). |
 | R-OV-07 | Snarf SHALL be buildable on macOS and Linux with the Zig toolchain alone (decision ADR-0001; requirements in [06-platform-and-build.md](06-platform-and-build.md)). |
 | R-OV-08 | External dependencies are biased strongly toward **Zig standard library only** (decision ADR-0002; constraints in [07-constraints-non-goals.md](07-constraints-non-goals.md)). |
-| R-OV-09 | **Two hosts, one core** (decision ADR-0005): Snarf SHALL run on the browser host (R-OV-04 namespaces, zero install) AND on a **native host** whose display and input server is **plan9port `devdraw` or a `drawfcall.h`-compatible server**, both beneath the same unchanged editor core. ACME behaviors a host cannot honour (mouse warping, process execution, uncapturable keys) are recorded *per host*; the native host is expected to honour the paper where the browser cannot. The native host is a backlog commitment, not an option. |
+| R-OV-09 | **Two hosts, one core** (decision ADR-0005, amended 2026-10-11): Snarf SHALL run on a **native host** — the **primary**, daily-driver target — whose display and input server is **plan9port `devdraw`** (indefinitely, per the amendment; not a provisional choice), AND on the browser host (R-OV-04 namespaces, zero install), now a **frozen secondary**: it keeps building and passing tests but receives no new features. Both run beneath the same unchanged, host-neutral editor core. ACME behaviors a host cannot honour (mouse warping, process execution, uncapturable keys) are recorded *per host*; the native host honours the paper where the browser cannot. |
 
 ## 4. Glossary
 
@@ -80,3 +88,8 @@ Requirements (this directory) say **what** and **why**; specifications
   plan9port `devdraw` or compatible). Prompted by the R-02 v4 paper re-verification
   showing which paper behaviors the browser sandbox can never honour (R-EDIT-25 warping,
   processes, key capture). The browser host and its vision statement (§2) stand.
+- **v4** (2026-10-11) — ADR-0005 amendment (native primary, browser frozen; `devdraw`
+  indefinite), confirmed by Larry: reworded R-OV-09 to make native the primary/daily-driver
+  host and the browser a frozen secondary; added a §2 note distinguishing the founding
+  zero-install *showcase* vision (unchanged, browser) from the *daily-driver* target (native).
+  No change to R-OV-03/04 (core stays host-neutral; browser namespaces are unaffected).

@@ -1,8 +1,8 @@
 # ADR-0005 — Two hosts, one core: the browser stays; a native host speaks plan9port `devdraw`
 
 Status: **Accepted (2026-09-14) · SPIKE DONE (2026-09-14) — findings below ·
-AMENDMENT PROPOSED (2026-10-10), pending Larry's sign-off — see "Amendment: native becomes
-primary" below** ·
+AMENDMENT ACCEPTED (2026-10-11) — native primary + browser freeze, and `devdraw` indefinitely,
+both confirmed by Larry — see "Amendment: native becomes primary" below** ·
 Satisfies: R-OV-03, R-OV-09 (new) · Fed back into
 requirements [R-01](../../requirements/01-overview.md) (v3 revision is this decision) ·
 Related: ADR-0001 (target), ADR-0002 (dependencies), ADR-0003 (/dev/draw), ADR-0004 (input)
@@ -191,17 +191,16 @@ Host file system as a real 9P server, a process service (`+Errors` with real out
 buffer, and CI for a host that needs a window. The layout/scroll `moveto` sites
 (`cols.c`, `scrl.c`, `wind.c`, `util.c`) are still unported on both hosts.
 
-## Amendment: native becomes primary, browser freezes (PROPOSED, 2026-10-10)
+## Amendment: native becomes primary, browser freezes (ACCEPTED, 2026-10-11)
 
-**Status: proposed — this section records a decision relayed from a Larry ↔ SnarfProdd
-product sync; it is not yet accepted. Treat the rest of this ADR as current until Larry
-confirms.** Discussion and reasoning: `notes/claude/roadmap-review-2026-10-10.md`.
+**Status: accepted 2026-10-11 — Larry confirmed both sign-off points below.** Discussion and
+reasoning: `notes/claude/roadmap-review-2026-10-10.md`.
 
-**Two separate sign-offs are asked for here** (SnarfProdd review, 2026-10-11): (1) decision
-items 1–2, native-primary + browser-freeze — this is what the sync actually settled; and
-(2) decision item 3, `devdraw` indefinitely — a new decision this amendment proposes on top
-of the sync, which only left `devdraw`-vs-self-drawn-frame as open. Accepting (1) does not
-imply accepting (2); Larry can confirm them independently.
+**Two separate sign-offs were asked for here** (SnarfProdd review, 2026-10-11), **both
+confirmed by Larry (2026-10-11)**: (1) decision items 1–2, native-primary + browser-freeze —
+what the sync actually settled; and (2) decision item 3, `devdraw` indefinitely — a new
+decision this amendment proposed on top of the sync, which had only left
+`devdraw`-vs-self-drawn-frame as open.
 
 ### Context
 
@@ -224,7 +223,7 @@ network. This is also what anchors decision item 4 below: the local-vs-remote di
 the host-command allow-list only makes sense once "remote" has its own answer (a headless
 server) instead of "the browser, today's only remote-reachable surface."
 
-### Decision (proposed)
+### Decision (accepted)
 
 1. **The native host becomes the primary target.** New feature work is built native-first.
    Tier 2 of `agents/NEXT-PHASES.md` (native file server, native process service) is
@@ -285,9 +284,11 @@ server) instead of "the browser, today's only remote-reachable surface."
   change — exactly the silent bitrot this risk names. CI is a precondition of the freeze
   holding, not a nice-to-have alongside it (SnarfProdd review, Finding 2).
 
-### Feedback into requirements (on acceptance)
+### Feedback into requirements
 
-- R-01: v4 revision-log entry as drafted above.
-- `docs/requirements/07-constraints-non-goals.md` (R-NG-03): revision-log entry distinguishing
-  local (native, trusted-by-user) command execution from remote-reachable execution, once the
-  host-command allow-list ADR is drafted — cross-referenced from here, not duplicated.
+- **Done**: R-01 v4 — `01-overview.md` §2 (vision note) and R-OV-09 reworded, revision log
+  updated, 2026-10-11.
+- **Still pending**: `docs/requirements/07-constraints-non-goals.md` (R-NG-03) revision-log
+  entry distinguishing local (native, trusted-by-user) command execution from
+  remote-reachable execution — deferred until the host-command allow-list ADR itself is
+  drafted (Tier 1 item 2), cross-referenced from here, not duplicated.
