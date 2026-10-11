@@ -121,9 +121,10 @@ New directory **`build/`** — build-time helpers, imported only by `build.zig`,
    - `else`: `devdraw_step.dependOn(&b.addFail("devdraw is built in-tree on macOS only (ADR-0006, phase 18); on this OS set $PLAN9 or $DEVDRAW to an installed devdraw").step);`
 4. **`native`** keeps installing `snarf-native` and additionally `dependOn(devdraw_step)` **when
    `on_macos`**. On other OSes `native` behaves exactly as today.
-5. `zig build` (install) and `zig build test`: **no new dependencies, no new steps** — diff of
-   those two subgraphs is nil except that `snarf-native`'s module gains nothing either (the
-   resolution code is in `host`, already a dependency).
+5. `zig build` (install) and `zig build test`: **no new dependencies** — neither subgraph
+   touches `plan9port`; `snarf-native`'s module gains nothing either (the resolution code is
+   in `host`, already a dependency). The one addition to `test` is the pure-std
+   `build/devdraw_files.zig` test exe (its count tests, §3h.1) — it reads no dependency.
 6. `build/devdraw.zig add(b, dep)` builds, all with `.target = b.graph.host`, `.optimize =
    .ReleaseFast` (9c uses `-O2`; **never Debug/ReleaseSafe for this C** — UBSan traps on
    plan9port's pointer games), `.link_libc = true`, `.sanitize_c = .off`:
@@ -363,7 +364,11 @@ pass; nothing in this phase may reference it.
    `*.c|*.m|*.h|*.s` file is added anywhere in the repo; `build.zig.zon`'s hash equals a fresh
    `zig fetch <url>` (run once by Sonnet).
 6. `zig fmt --check build.zig build/ src/host src/main_native.zig` clean; `build/devdraw.zig`,
-   `DevdrawPath.zig` under cap; `Conn.zig` shorter than before.
+   `DevdrawPath.zig` under cap; `Conn.zig` shorter than before. *(Review ruling 2026-10-11:
+   the non-test body did shrink, 466 → 461; the file ends at 473 because the gate added a
+   12-line regression test for a real double-`kill` bug found by T5. Accepted — the bullet's
+   intent was "policy leaves `Conn`", which it did. `Conn.zig`'s pre-existing excess over the
+   ~400 cap is a separate split, not this phase.)*
 
 ## 4. Named tests (sonnet)
 
@@ -390,8 +395,11 @@ pass; nothing in this phase may reference it.
   `snarf-native: devdraw: /usr/bin/true ($DEVDRAW)`; exit status non-zero. (Shell step in the
   gate script, not a `zig test`.)
 - **T6 unmodified source**: `git diff --stat main -- '*.c' '*.m' '*.h' '*.s'` empty;
-  `grep -rn "\-D" build/devdraw.zig` shows only `PLAN9PORT` and `PLAN9_TARGET`; `zig fetch
-  <url>` prints the manifest's hash.
+  `grep -o -- '-D[A-Za-z][A-Za-z0-9_]*' build/devdraw.zig | sort -u` prints exactly
+  `-DPLAN9PORT`, `-DPLAN9_TARGET`, and the build-option names that appear in the nested
+  command/comments (`-Ddevdraw`, `-Doptimize`, `-Dtarget` — lowercase, not C defines). The
+  character class MUST include digits: `[A-Z][A-Z_]*` matches `-DPLAN` and silently
+  undercounts (review finding, 2026-10-11). `zig fetch <url>` prints the manifest's hash.
 - **T7 counts**: `build/devdraw_files.zig` tests assert lib9 top = 93 (incl. `get9root.c`), fmt =
   34, utf = 20, libdraw = 57, libmemdraw = 24, libmemlayer = 12, libthread = 10, libbio = 17,
   devdraw = 7; every entry ends in `.c` except exactly one `.m`.

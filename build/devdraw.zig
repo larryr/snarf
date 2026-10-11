@@ -108,7 +108,7 @@ pub fn add(b: *std.Build, dep: *std.Build.Dependency) *std.Build.Step.InstallArt
     // ---- devdraw itself: seven objects (install.log:2868) ----
     const exe = b.addExecutable(.{ .name = "devdraw", .root_module = cModule(b, include) });
     const m = exe.root_module;
-    m.addIncludePath(latin1_h.dirname()); // latin1.c:14 `#include "latin1.h"`
+    m.addIncludePath(latin1_h.dirname()); // latin1.c:15 `#include "latin1.h"`
     addFiles(exe, dep.path("src/cmd/devdraw"), &files.devdraw_c, &cflags);
     addFiles(exe, dep.path("src/cmd/devdraw"), &files.devdraw_objc, &objc_flags);
     // 9l's order (`liborder`): memdraw memlayer draw thread 9. Not linked:

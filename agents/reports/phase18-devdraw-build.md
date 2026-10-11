@@ -1,7 +1,8 @@
 # Phase 18 report — ADR-0006: `devdraw` built in-tree from the fetched, pinned plan9port
 
 **Branch:** `phase18-devdraw-build` (not yet merged) · **Tests:** 749/749 (743 + 3
-`devdraw_files` + 3 `DevdrawPath`; the §4 named tests are the gate's) · `zig build native` OK
+`devdraw_files` + 2 `DevdrawPath` + 1 `Conn` double-kill regression; the §4 named tests are
+the gate's) · `zig build native` OK
 on macOS arm64, cold and warm · `zig fmt` clean · **Contract:**
 `agents/contracts/phase18-devdraw-build.md` (rulings R-P18-1..9).
 
@@ -29,7 +30,8 @@ unless `$DEVDRAW` says otherwise. `zig build` and `zig build test` never touch t
   `test`.
 - **`src/host/devdraw/DevdrawPath.zig`** (150 lines): `resolve(gpa, env, self_exe_dir, probe)`
   → `$DEVDRAW` (unprobed) → `<exe dir>/devdraw` → `$PLAN9/bin/devdraw` → `devdraw`;
-  `describe()`. `Conn.devdrawPath` deleted; `SpawnOptions.path` added (Conn.zig 466 → 461).
+  `describe()`. `Conn.devdrawPath` deleted; `SpawnOptions.path` added (Conn.zig 466 → 461,
+  then 473 with the gate's double-kill regression test — review-accepted, contract §3h.6).
 - **`main_native.zig`**: resolves before spawning, prints `snarf-native: devdraw: <path>
   (<source>)`, new failure hint.
 
@@ -39,7 +41,7 @@ unless `$DEVDRAW` says otherwise. `zig build` and `zig build test` never touch t
 |---|---|
 | cold `zig build native` (fresh global + local cache, no `zig-pkg/`; fetch + compile everything) | **19.4 s** wall |
 | warm no-op rerun | **0.45 s** wall |
-| `zig-out/bin/devdraw` | **375,832 bytes** (plan9port's own: 332,456) — Mach-O 64-bit arm64 |
+| `zig-out/bin/devdraw` | **372,632 bytes** at the gate (coder's first build: 375,832; plan9port's own: 332,456) — Mach-O 64-bit arm64. Review: `__TEXT` 165,796 vs 163,840, `__LINKEDIT` identical, 745 vs 865 defined symbols — same closure, not a red flag |
 | C/ObjC diagnostics with our flags (275 compilations re-run via `zig cc` with identical flags) | **0** |
 | §3b.7 link fallbacks needed | **none** |
 
