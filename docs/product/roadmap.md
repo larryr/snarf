@@ -125,7 +125,7 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
    - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
    - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
 4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
-5. **A deliberate override still wins:** setting `$DEVDRAW` to a specific binary still selects it over the bundled build. `$PLAN9` ranks below the bundled default (ADR-0006's resolution order, revised in review) so an ambiently-set plan9port install doesn't silently shadow the tested one.
+5. **devdraw is chosen in ADR-0006's order, and the choice is logged.** The order is `$DEVDRAW` (an exact binary; a deliberate override always wins), then the **bundled** `devdraw` resolved relative to the `snarf-native` executable, then `$PLAN9/bin/devdraw`, then bare `devdraw` on `$PATH`. `$PLAN9` ranks below the bundled default, so a plan9port install that happens to be set in the environment doesn't silently shadow the tested build. `snarf-native` prints which `devdraw` it resolved, and from where, at startup.
 
 **Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
 - [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.
