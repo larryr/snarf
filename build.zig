@@ -1,4 +1,5 @@
 const std = @import("std");
+const devdraw_build = @import("build/devdraw.zig");
 
 // Snarf build graph (S-06 §3). `zig build` is the ONLY build entry point and is
 // identical on macOS and Linux (ADR-0001). No node/npm, no Emscripten, no WASI.
@@ -131,9 +132,33 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(native);
-    const native_step = b.step("native", "Build the native host (snarf-native)");
+    const native_step = b.step("native", "Build the native host (snarf-native; on macOS also zig-out/bin/devdraw)");
     native_step.dependOn(&b.addInstallArtifact(native, .{}).step);
-    const run_native = b.addRunArtifact(native);
+
+    // --- devdraw: the display-server PEER, built from the pinned plan9port
+    //     (ADR-0006, phase 18). The ONLY `lazyDependency` call in the repo sits
+    //     under both conditions: `build()` cannot see which steps were asked
+    //     for, so the fetch is gated on `-Ddevdraw=true`, and `zig build
+    //     native`/`zig build devdraw` reach it through a nested `zig build
+    //     devdraw -Ddevdraw=true` (R-P18-1). `zig build`/`zig build test`
+    //     never touch the dependency. macOS only, host == target (R-P18-4). ---
+    const want_devdraw = b.option(bool, "devdraw", "Build the bundled devdraw peer from the pinned plan9port (macOS only; fetches ~22 MB once; implied by `zig build native`)") orelse false;
+    const on_macos = target.result.os.tag == .macos;
+    const devdraw_step = b.step("devdraw", "Build zig-out/bin/devdraw, the bundled display server");
+    if (on_macos and want_devdraw) {
+        if (b.lazyDependency("plan9port", .{})) |dep|
+            devdraw_step.dependOn(&devdraw_build.add(b, dep).step);
+    } else if (on_macos) {
+        devdraw_step.dependOn(&devdraw_build.nested(b).step);
+    } else {
+        devdraw_step.dependOn(&b.addFail("devdraw is built in-tree on macOS only (ADR-0006, phase 18); on this OS set $PLAN9 or $DEVDRAW to an installed devdraw").step);
+    }
+    if (on_macos) native_step.dependOn(devdraw_step);
+
+    // R-P18-8: run the INSTALLED binary, so the bundled `devdraw` beside it is
+    // what `DevdrawPath` finds (a cached exe has no sibling).
+    const run_native = b.addSystemCommand(&.{b.getInstallPath(.bin, "snarf-native")});
+    run_native.step.dependOn(native_step);
     const run_step = b.step("run-native", "Run the native host: the editor in a devdraw window");
     run_step.dependOn(&run_native.step);
 
@@ -190,6 +215,9 @@ pub fn build(b: *std.Build) void {
         .{ .name = "ninep", .module = ninep },
         .{ .name = "dev", .module = dev },
     });
+    // The bundled-devdraw file table's count assertions (phase 18, §3c). A
+    // build-time helper, std-only; testing it touches no dependency.
+    addModuleTests(b, test_step, target, optimize, "build/devdraw_files.zig", &.{});
     // The `/mnt/origin` state machine over a scripted browser (R-P12-9a).
     addModuleTests(b, test_step, target, optimize, "src/origin/origin.zig", &.{
         .{ .name = "ninep", .module = ninep },
