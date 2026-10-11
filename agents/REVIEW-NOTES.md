@@ -11,6 +11,32 @@ amendment accepted, native host is now the primary target).
 
 ---
 
+## Phase 18 — `devdraw` built in-tree (branch `phase18-devdraw-build`, 2026-10-11, not yet merged)
+
+**For you — try it:** with `PLAN9` still set as today, `zig build native && zig build
+run-native`. The first stderr line must read `snarf-native: devdraw: …/zig-out/bin/devdraw
+(bundled)` — not `$PLAN9/bin`. Then `DEVDRAW=~/proj/plan9port/bin/devdraw zig build run-native`
+⇒ `($DEVDRAW)`; `rm zig-out/bin/devdraw && zig-out/bin/snarf-native` ⇒ `($PLAN9/bin)`. If the
+bundled window looks or behaves differently from your installed one (fonts, HiDPI, cursor),
+that's a finding — same source, same SHA, should be indistinguishable.
+
+**What changed:** `build.zig.zon` has its first (lazy) entry, the pinned plan9port tarball
+(22 MB, fetched once into `~/.cache/zig/p/`; unpacked to the git-ignored `zig-pkg/`, 63 MB).
+`zig build native` now also builds `zig-out/bin/devdraw` (≈ 370 KB, ad-hoc signed, 0 compiler
+warnings) — cold ~19 s including the fetch, warm 0.5 s. `zig build`/`zig build test` still need
+no network (verified with `--system <empty dir>`). Linux: unchanged; `zig build devdraw` there
+says "macOS only".
+
+**Decisions made for you:** the fetch is gated on `-Ddevdraw=true`, which `zig build native`
+passes to a nested `zig build devdraw` (Zig 0.16's `build()` can't see which step you asked
+for). `devdraw` is always `ReleaseFast` and ignores `-Doptimize`. `zig build run-native` now
+runs `zig-out/bin/snarf-native` (not a cache copy), so the bundled devdraw beside it is found.
+
+**Still open:** the X11/Linux file list is a separate later pass; a stray Debug-only panic on
+spawn failure (a double kill in `Conn.spawn`) was fixed along the way.
+
+---
+
 ## Phase 17 — Put, Get, Putall, Dump/Load (merged `e734e3f`, 2026-10-10)
 
 **For you — try it:** B2 `Put` on a dirty named window saves it through the namespace (works
