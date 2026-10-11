@@ -1,6 +1,8 @@
 # ADR-0005 — Two hosts, one core: the browser stays; a native host speaks plan9port `devdraw`
 
-Status: **Accepted (2026-09-14) · SPIKE DONE (2026-09-14) — findings below** ·
+Status: **Accepted (2026-09-14) · SPIKE DONE (2026-09-14) — findings below ·
+AMENDMENT PROPOSED (2026-10-10), pending Larry's sign-off — see "Amendment: native becomes
+primary" below** ·
 Satisfies: R-OV-03, R-OV-09 (new) · Fed back into
 requirements [R-01](../../requirements/01-overview.md) (v3 revision is this decision) ·
 Related: ADR-0001 (target), ADR-0002 (dependencies), ADR-0003 (/dev/draw), ADR-0004 (input)
@@ -188,3 +190,104 @@ Host file system as a real 9P server, a process service (`+Errors` with real out
 `win`, the plumber — OQ-EDIT-3 reopens here), `/dev/snarf` wired to the editor's snarf
 buffer, and CI for a host that needs a window. The layout/scroll `moveto` sites
 (`cols.c`, `scrl.c`, `wind.c`, `util.c`) are still unported on both hosts.
+
+## Amendment: native becomes primary, browser freezes (PROPOSED, 2026-10-10)
+
+**Status: proposed — this section records a decision relayed from a Larry ↔ SnarfProdd
+product sync; it is not yet accepted. Treat the rest of this ADR as current until Larry
+confirms.** Discussion and reasoning: `notes/claude/roadmap-review-2026-10-10.md`.
+
+**Two separate sign-offs are asked for here** (SnarfProdd review, 2026-10-11): (1) decision
+items 1–2, native-primary + browser-freeze — this is what the sync actually settled; and
+(2) decision item 3, `devdraw` indefinitely — a new decision this amendment proposes on top
+of the sync, which only left `devdraw`-vs-self-drawn-frame as open. Accepting (1) does not
+imply accepting (2); Larry can confirm them independently.
+
+### Context
+
+Phase 17 (Put/Get/Putall/Dump/Load, R-EDIT-15/16) shipped 2026-10-10, closing the daily-use
+gap this ADR's original Context section named first ("no mouse warping... no processes") as
+a browser-only cost. With saving working and the native host's warp already proven (phase
+15), the original Decision's framing of the browser as "the default demo" and the native
+host as "a backlog commitment" no longer matches how Snarf is actually used: the browser's
+remaining unique advantage (zero install) stops being decisive once `devdraw`-in-tree
+(Parked, below) reduces the install step to one native install rather than zero, and its
+remaining costs (no real warp outside an unbuilt Pointer Lock mode, no real processes,
+permission-gated files/clipboard) are exactly what make daily editing worse, not just
+different. Larry's own words from the sync: "the browser can't reach ACME-level usability,
+and avoiding an install is its only real benefit."
+
+The other half of that reasoning is remote work: native-primary only holds together because
+remote editing is meant to be served by a **dedicated headless 9P server** (Tier 2/M2, not
+yet built — no requirement exists for it yet), not by a browser tab reaching across the
+network. This is also what anchors decision item 4 below: the local-vs-remote distinction in
+the host-command allow-list only makes sense once "remote" has its own answer (a headless
+server) instead of "the browser, today's only remote-reachable surface."
+
+### Decision (proposed)
+
+1. **The native host becomes the primary target.** New feature work is built native-first.
+   Tier 2 of `agents/NEXT-PHASES.md` (native file server, native process service) is
+   re-prioritized ahead of Tier 1's remainder, not behind it.
+2. **The browser host is frozen, not retired.** It SHALL continue to build
+   (`zig build`), pass the full test suite and smoke battery, and stay byte-identical on
+   every FROZEN-ACCEPT golden. It SHALL receive **no new features** (Pointer Lock, HiDPI,
+   touch/chordbar profiles, Worker+SAB — all currently Tier 3/Parked — do not proceed unless
+   this amendment is later reversed). It MAY still receive bug fixes and participate in
+   repo-wide structure/debt passes (freezing means no growth, not no maintenance — this
+   needed stating explicitly since the sync didn't distinguish the two). This is the "browser
+   comes back" condition `agents/NEXT-PHASES.md`'s Parked section already references for
+   Pointer Lock. **Only Pointer Lock parks.** The `savemouse`/`restoremouse` micro-phase and
+   the remaining R-EDIT-25 warp sites are host-agnostic (headless-tested through the
+   `MouseSink` `/dev/mouse` stand-in, `src/core/warp.zig`) and proceed regardless of this
+   amendment — freezing the browser does not park warp work (SnarfProdd review, Finding 4).
+3. **`devdraw` remains the native host's rendering and input module indefinitely** — not
+   provisionally, as §3's original wording implied ("add the frame as a second backend when
+   Larry says go"). The self-drawn native frame (`agents/reports/spike-rhun-self-drawn-frame.md`)
+   is deprioritized below its original "~30–35% within a year" estimate: reasoning is that
+   `devdraw`'s value isn't just the code it saves today, it's that platform churn (new OS
+   releases, trackpad gesture changes, HiDPI/multi-monitor behavior) is absorbed by an
+   upstream project with over a decade of that maintenance already paid down. A self-drawn
+   frame would make Snarf responsible for that churn forever, as the *primary* interactive
+   surface — a materially different and larger commitment than when the frame was being
+   weighed as a secondary host's alternative. This holds whether `devdraw` ships installed or
+   built in-tree (Parked item "devdraw built in-tree" — a distribution question, not a
+   rendering-ownership one). Revisit only given a concrete forcing reason (e.g. Wayland,
+   where `devdraw`'s own coverage is weakest), not on a timer.
+4. **Cross-reference, not resolved here**: the sync's reading that "the host-command
+   allow-list only applies to remote 9P servers" — i.e. the native process service (Tier 2
+   item 5, Larry's own local commands) is not gated on the allow-list ADR the same way the
+   origin's remote-reachable `/bin` export is — is a real and reasonable distinction, but it
+   is **not yet written into any requirement**. It belongs in R-NG-03/R-EDIT-18's revision
+   log when the host-command allow-list ADR itself is drafted (Tier 1 item 2), as an explicit
+   local-vs-remote clause, not left as something only this amendment's prose records.
+
+### Consequences
+
+- **Positive**: investment concentrates on one host, closing ADR-0005's own "two hosts to
+  keep green" cost down to maintenance-only on the frozen side; native's device-layer
+  contract stays thin (ADR-0005's phase-15 honesty check — `git diff -- src/draw src/ninep`
+  empty — already proved new core features need no device changes in the common case, so
+  freezing browser costs little beyond Zig-version-driven upkeep every file pays anyway).
+- **Negative / costs**: diverges from R-01 §2's founding "no install" vision for *daily* use
+  (the browser remains the zero-install demo; it stops being the daily-driver candidate).
+  This needs a revision-log line in R-01, not a silent drift — proposed wording: "R-01 v4:
+  the founding vision distinguishes a zero-install **showcase** host (browser, frozen
+  feature-wise) from the **daily-driver** host (native, primary); ADR-0005 amendment,
+  2026-10-10." The `devdraw`-vs-frame fetch/vendor question (ADR-0002's first amendment,
+  already Parked) is unaffected by and not resolved by this amendment.
+- **Risks**: "frozen" needs the maintenance-vs-growth distinction above to stay a deliberate
+  policy rather than silent bitrot; the next session reading only `NEXT-PHASES.md` without
+  this ADR could miss why Tier 3 stopped moving. **The "SHALL continue to build / pass tests"
+  clause in item 2 is unenforceable today: the repo has no CI.** Until a CI workflow runs
+  `zig build`, `zig build test`, fmt, and a WASM-still-compiles check on every push (M0/Tier
+  4 item 11), "frozen" is only a human remembering to check manually before each native
+  change — exactly the silent bitrot this risk names. CI is a precondition of the freeze
+  holding, not a nice-to-have alongside it (SnarfProdd review, Finding 2).
+
+### Feedback into requirements (on acceptance)
+
+- R-01: v4 revision-log entry as drafted above.
+- `docs/requirements/07-constraints-non-goals.md` (R-NG-03): revision-log entry distinguishing
+  local (native, trusted-by-user) command execution from remote-reachable execution, once the
+  host-command allow-list ADR is drafted — cross-referenced from here, not duplicated.
