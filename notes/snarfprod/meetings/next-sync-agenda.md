@@ -20,12 +20,22 @@
    - Align R-IN-06 to macOS/devdraw (2 fingers = B3, 3 fingers = B2)? If yes, open a requirements PR.
 4. **Roadmap v0.2 follow-through** (5 min):
    - PR #5 is merged (`b92d825`).
-   - Next: create **GitHub Issues** for the M0–M3 items and a **Project board** (columns, owners: Claude pipeline vs Larry vs SnarfProdd).
-   - Fix the roadmap's M3 done-criterion #5 wording to match ADR-0006's final devdraw order (bundled before `$PLAN9`). This needs a small PR.
+   - **Done 2026-10-11:** 16 GitHub Issues were created, labelled `roadmap` plus `M0`–`M3`:
+     - **M0 (3):** [#8](https://github.com/larryr/snarf/issues/8) CI on push; [#9](https://github.com/larryr/snarf/issues/9) Return-after-Del warp; [#10](https://github.com/larryr/snarf/issues/10) guided native walkthrough.
+     - **M1 (3):** [#11](https://github.com/larryr/snarf/issues/11) native file server; [#12](https://github.com/larryr/snarf/issues/12) system clipboard; [#13](https://github.com/larryr/snarf/issues/13) Sort/Zerox/Kill/Exit.
+     - **M2 (5):** [#14](https://github.com/larryr/snarf/issues/14) native process service; [#15](https://github.com/larryr/snarf/issues/15) remote allow-list ADR; [#16](https://github.com/larryr/snarf/issues/16) pipes; [#17](https://github.com/larryr/snarf/issues/17) Kill and long-running output; [#18](https://github.com/larryr/snarf/issues/18) headless 9P server.
+     - **M3 (5):** [#19](https://github.com/larryr/snarf/issues/19) Zig-built devdraw + snarf-native; [#20](https://github.com/larryr/snarf/issues/20) hold-and-tap chords; [#21](https://github.com/larryr/snarf/issues/21) native polish; [#22](https://github.com/larryr/snarf/issues/22) keyboard/IME; [#23](https://github.com/larryr/snarf/issues/23) structure pass.
+     - Skipped as shipped, parked or deferred: Retina, `.app`, Pointer Lock, M4, M5.
+   - **Project board: Larry needs to create it.** The GitHub connector has no Projects access (403). Suggested setup:
+     - a Project v2 named "snarf roadmap", owned by larryr;
+     - a single-select field "Milestone" with M0–M3;
+     - add issues with `label:roadmap`.
+     - To discuss: columns, and owners (Claude pipeline vs Larry vs SnarfProdd).
+   - The M3 done-criterion #5 fix (ADR-0006 devdraw order) plus the stale status line are in [PR #7](https://github.com/larryr/snarf/pull/7), awaiting merge.
 5. **M4 timing** (2 min): still deferred. Revisit only if item 2 greenlights M5, since M5 depends on M4.
 
 **Outputs:**
 - M3 order;
 - M5 go/no-go;
 - R-IN-06 call;
-- issue/board plan.
+- board setup and owners.
