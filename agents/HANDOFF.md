@@ -2,418 +2,160 @@
 
 Protocol: see `CLAUDE.md` §"Session handoff protocol". Read top-to-bottom; newest session
 entry first. Any session may edit; commit to `main` with prefix `handoff:` (standing
-authorization for this file only). Prune freely — git keeps history.
+authorization for this file only). Prune freely — git keeps history; per-phase detail lives
+in `agents/reports/phase*.md` (results, frozen-golden hashes) and `agents/contracts/` (binding
+as-built rulings — read the contract before touching an area).
+
+**Pruned 2026-10-11** (was 419 lines, well over the ~300-line target): collapsed phase-by-
+phase narrative into the one-line table below (full detail is in the reports/contracts, which
+is the actual archive — this file is working memory, not one); dropped the "Session log"
+section entirely (redundant with `git log` and the reports); removed resolved/superseded
+items (the 2026-10-10 roadmap-reconciliation question, the 2026-09-14 draft/backlog notes
+that predate `NEXT-PHASES.md`, the then-"committed" native-host spike, now phase 15); fixed
+one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-10-10 — phase 17 merged `e734e3f`; next phase NOT yet picked — see
-  "Roadmap reconciliation needed" below before starting Tier 1 item 2 or anything else)*
-- *(phase 12b merged `96d7cb5` 2026-09-13; worktree removed)*
-
-## ⚠ Roadmap reconciliation needed (2026-10-10, before picking the next phase)
-
-While phase 17 was running, Larry's separate **"SnarfProdd" PM workstream** landed three
-docs directly to `main` (commits `646504e`, `98768fb`, authored `larryrau@mac.com`, not from
-this pipeline): `docs/product/{README,state-of-snarf,roadmap,spikes/pointer-lock-warp,
-research/touchpad-interaction}.md`. These are explicitly labeled "PM proposals, not agreed
-requirements," but they:
-
-1. **Propose a different near-term sequence**: `roadmap.md`'s M0 ("Ground truth, Now") lists
-   a **Pointer Lock warp spike as its first item**, concurrent with M1 (Put/Get, also "Now").
-   This is a *different* call than the 2026-10-03 decision in this session (finish Tier 1,
-   park Pointer Lock) — not necessarily wrong, but it's Larry's call to reconcile, not mine
-   to silently override either direction.
-2. **Add real new research the 2026-10-03 Fable reviews didn't have**: `spikes/pointer-lock-
-   warp.md` cites the W3C Pointer Lock spec directly and finds a risk neither review surfaced
-   — **unlocking resets the real cursor to the lock-ENTRY point, not snarf's current virtual
-   position** (spec "Exit Pointer Lock" step 1), which affects the edge-exit/re-lock design
-   (A8/A9 in its acceptance table). Also: Safari's unlock banner may **swallow the first Esc**
-   before it reaches the page. Any future Pointer Lock work should start from this doc, not
-   just `phase-review-2026-10-03.md`.
-3. **Explicitly ask Larry** (roadmap.md "Top decisions for Larry", #3): "Is Phase 17 running,
-   and should the autonomous pipeline continue under this roadmap? Does this roadmap
-   supersede `agents/NEXT-PHASES.md`?" — **answerable now**: phase 17 is done (merged
-   `e734e3f`, this session, 2026-10-10), but the supersession question is still open.
-4. Raises decisions above "architecturally significant y/n" — daily-driver host choice
-   (browser vs. native), an identity-aware allow-list policy shape (not just a command list),
-   and an **M5 AI-harness scope change** that would touch non-goals R-NG-02/03 and un-defer
-   `kbd hold` (OQ-EDIT-4, previously "don't build unprompted"). These need Larry directly, not
-   another Fable pass.
-
-**Do not pick Tier 1 item 2 (external commands) or anything else as the next phase without
-Larry reconciling `NEXT-PHASES.md` vs. `roadmap.md` first** — item 2 is gated on the same
-allow-list ADR the roadmap's M2 also names, so this isn't just a formality.
+- *(none as of 2026-10-11)* — `main` is green at phase 17; two ADR docs are mid-review on open
+  branches (not claiming any code area): `adr-0002-devdraw-fetch-amendment` (PR #3, ADR-0006
+  proposed, pending Larry's sign-off) and the convention-switch edit to `CLAUDE.md` bundled
+  into the same PR.
 
 ## Current state (update in place)
 
-- **Phase 17 MERGED (`e734e3f`, 2026-10-10)** — Put/Get/Putall, name-change Undo, Dump/Load.
-  See `agents/reports/phase17-put-get-dump-load.md` and `agents/contracts/phase17-put-get-
-  dump-load.md`. Satisfies **R-EDIT-15/16**. Pipeline: Fable spec → Opus build → Sonnet
-  tests+gate → Fable review (APPROVE WITH NITS, one fix applied: `Putall` now commits each
-  window's tag before checking `mod`, the stand-in for acme's per-keystroke `wincommit`) →
-  this merge. 743/743 tests, `zig build`/`native`/`fmt` clean, two sanctioned golden moves
-  (FROZEN-ACCEPT-8, FROZEN-ACCEPT-12B) with pixel-level evidence (212 pixels, confined to the
-  tag row, both scenes). `$home` closed: `/mnt/opfs` (browser), real `$HOME` (native,
-  unmounted until Tier 2 — honest `NotMounted`, not silent). Origin `fs/` export gained
-  `create` (files only, exclusive). **Debt**: T21 (wasm smoke B2-click-on-Put) not landed —
-  geometry issue, fix recipe recorded in the report; `xfid.zig` (424) and `Window.zig` (405)
-  pretest lines now over the ~400 cap, next wave touching either should carry a split;
-  `Load.finishTail` doesn't set the new tag `.put` field (idempotent extra retag, low
-  priority).
+- **Native host is now primary; browser is a frozen secondary** — ADR-0005 amendment accepted
+  2026-10-11 (PR #2, merged), prompted by a Larry↔SnarfProdd product sync. Browser SHALL keep
+  building/testing/passing goldens, gets no new features. `devdraw` is the native rendering/
+  input module *indefinitely* (not provisional). R-01 v4 applied (`01-overview.md` §2 + R-OV-09
+  reworded). Full reasoning: `notes/claude/roadmap-review-2026-10-10.md`,
+  `docs/spec/adr/0005-two-hosts-one-core.md`'s Amendment section.
+- **ADR convention changed 2026-10-11**: ADRs are now immutable once accepted — a changed
+  decision gets a **new numbered ADR that explicitly supersedes** the old one (one-line Status
+  pointer on the old file), not an in-place "Amendment" section. `CLAUDE.md` updated. ADR-0005's
+  existing in-place amendment predates this and is left as historical record, not retrofitted.
+- **ADR-0006 PROPOSED, not yet accepted** (PR #3, branch `adr-0002-devdraw-fetch-amendment`):
+  fetch the pinned `larryr/plan9port@337c6ac` snapshot via one `build.zig.zon` entry, build just
+  the `devdraw` closure (~240 files/~570 KiB) as a sibling `zig-out/bin/devdraw` via a new
+  `zig build native` step — removes the native host's last separate-install requirement.
+  Supersedes only ADR-0002's empty-dependency-table clause, narrowly. Includes one deliberate
+  deviation from the source spike worth a second look: `Conn.devdrawPath` would check
+  `$DEVDRAW`/`$PLAN9` *before* the bundled binary (explicit overrides win), reversing the
+  spike's suggested order. **On acceptance**: implement the build step, update
+  `Conn.devdrawPath`, promote `NEXT-PHASES.md`'s "devdraw built in-tree" out of Parked.
+- **Product roadmap v0.2 proposal exists**: `notes/snarfprod/roadmap-v0.2-proposal.md` (+ its
+  meeting note), written against the native-primary pivot. Per its own "Process" rule:
+  `docs/product/roadmap.md` is product prioritization, `agents/NEXT-PHASES.md` is the execution
+  queue — they coexist, neither supersedes the other. `NEXT-PHASES.md` itself has **not yet**
+  been re-tiered for native-primary (Tier 2 promotion, CI as a precondition, the `restoremouse`
+  micro-phase) — do that once ADR-0006 lands, not before.
+- **GitHub PR creation now works (fixed 2026-10-11)** — corrects a prior wrong fact below:
+  the repo owner had "Pull Requests" disabled at the repo level (Settings → General; not an
+  API/token issue — every credential tested, OAuth/fine-grained-PAT/classic-PAT, 404'd
+  identically, and Larry's own browser session failed too, which is what isolated it). Once
+  re-enabled, `gh pr create`/`gh pr comment` work normally with the existing `gh auth` OAuth
+  token. **`gh pr merge` is blocked by Claude Code's own auto-mode classifier** ("Merge Without
+  Review", unrelated to GitHub) — Larry merges via the web UI; I delete the branch after.
+- **Phase 17 MERGED (`e734e3f`, 2026-10-10)** — Put/Get/Putall/Dump/Load (R-EDIT-15/16). `$home`
+  closed: `/mnt/opfs` (browser), real `$HOME` (native, `NotMounted` until Tier 2's native file
+  server). Debt: T21 (wasm smoke B2-click-on-Put) not landed, geometry issue, recipe in the
+  report; `xfid.zig`/`Window.zig` nudged over the 400-line cap.
+- **Phases 1–16 are MERGED to `main`; green.** One line each (reports have full detail):
 
-- **NEXT-PHASES.md revised (2026-10-03/04, `bdbac1f`)** after the rhun spike: Tier 1/2/3
-  unchanged (continue the existing queue — none of the spike's ideas are architecturally
-  significant), a loopback-trust hedge added to the allow-list ADR item, a headless-driver
-  CI sub-item, a stale Kdown/`/dev/snarf` correction, and a new "Parked" section (Pointer
-  Lock, devdraw-in-tree, webview shell, native frame) each with its own gating decision.
-  Full discussion + two Fable review passes: `agents/reports/phase-review-2026-10-03.md`.
-  Pointer Lock's Esc conflict is resolved **in principle** (don't rebind Esc; treat
-  unrequested Pointer-Lock-loss, guarded by `document.hasFocus()`, as the Esc signal; don't
-  forward Esc as `Kesc` while locked) — still parked, not queued, until Larry picks it up.
+  | Phase | What | Merge |
+  |---|---|---|
+  | 16 | Debt pass: 10 file splits, 14 cited fixes incl. browser `Kdown`, one golden re-freeze | `f51e4a0` |
+  | 15 | ADR-0005 spike: native host, `devdraw` adapter, real warp — zero forced core changes | `efeb3fe` |
+  | 14b | `/mnt/opfs` (ABI v6, FsRecord codec, parked ops) | `851d0dc` |
+  | 14a | 9P server: parking for every op, create/remove/wstat | `afff8ac` |
+  | 13b | Directory windows, `Load`, `openfile`, FROZEN-ACCEPT-13B | `fd1abe0` |
+  | 13a | Async 9P tickets, real boot namespace | `cee0441` |
+  | 12e | Structure only: `Editor.zig` 824→383 | `35eccc5` |
+  | 12d | Unions, synthetic root, `/mnt/origin`→`/n/origin` | `6d13dda` |
+  | 12c | Canvas fills window + follows resize | `e351203` |
+  | 12b | `Look`, `+Errors`, placement — first full pipeline run | `96d7cb5` |
+  | 12 | Origin mount at boot, `Reconnect`, origin server logging | `34bb36c` |
+  | 1–11 | ninep, draw, fonts, text/frame, browser slice, input, scroll+snarf, windows, exec+look, Edit+served tree, origin server | see `agents/reports/` |
 
-- **Spike landed (2026-10-03) — rhun self-drawn frame vs. plan9port `devdraw`**: see
-  `agents/reports/spike-rhun-self-drawn-frame.md`. Written by a remote session (GitHub
-  identity `larry-sk`, pull-only — see account fact below) as GitHub issue #1 since it
-  couldn't push; landed from `larryr`'s local machine, branch `spike-rhun-frame` merged to
-  `main`, issue closed. **Recommendation: borrow rhun's model, not its code — it's already
-  the browser host's architecture** (`dev/draw.zig` + `HeadlessBackend` + `dev/input.zig`,
-  unchanged, plus a new `src/host/frame/<platform>.zig`); keep `devdraw` as the ADR-0005
-  fallback. Three addenda from follow-up discussion with Larry: (A) build `devdraw` from
-  the pinned plan9port fork ourselves (~570 KiB / 15–18k lines measured closure) instead of
-  requiring a plan9port install — needs an ADR-0002 amendment (fetch vs. vendor), reduces
-  frame urgency to ~30–35%; (B) a Zig shell over the system webview (`WKWebView` et al.) as
-  a legitimate fourth backend, not proposed as a wave; (C) **warp is lost only on the pure
-  browser host + Wayland** — the webview shell keeps real warp via its bridge; the browser
-  host's full recovery is untried **Pointer Lock** (own-drawn cursor under lock, Esc-key
-  conflict with acme's Esc to resolve). Experiments re-ranked: Pointer Lock spike on the
-  browser host first, then devdraw-in-tree (A), then the headless scripted driver, then the
-  native frame if ever. No code written (feasibility write-up only, per the task). All of
-  this is proposal-stage — nothing queued; needs Larry's pick per NEXT-PHASES.
-
-- **Phases 1–12, 12b–12e, 13a, 13b, 14a, 14b, 15, 16 are MERGED to `main`; `main` is green.**
-  712/712 tests (≈3.8 s), node smoke 40/40, `zig build native` OK, `zig fmt` clean, Zig 0.16.0,
-  **ABI v6**, fs-record v2, wasm 2321565 B ReleaseSafe / 289098 B ReleaseSmall (`make sizes`;
-  user keeps ReleaseSafe).
-- **Phase 16 MERGED (`f51e4a0`, 2026-09-14) — DEBT PASS** — see agents/reports/phase16-debt-pass.md
-  (closed/open ledger): 16a ten pure-move splits (`wasm_boot`, `wintag`, `originhook`,
-  `pendinglook`, `client_ops`, `msg_test`, `opfs_io/testsrv`, `draw_msgs/font/ctl/testsrv`,
-  `mux`, `wsys_enc`); 16b fourteen cited fixes incl. **browser `Kdown` fixed** (4e values in
-  `typing.zig`; native `dev_input` translates p9p 0x80), OPFS stat memo (6→1), fs-record v2
-  `close`, tentative-newfid clunk, `BadOffset`, `colgrow` but=1, `bsinsert`, `discardClunk`
-  by-Rclunk, `retryFiltered` snapshot, acme's `isalnum`; 16c **FROZEN-ACCEPT-3 re-frozen**
-  `0x7f16941423defd73 → 0x9171d75adca5e8eb` (tab width 72→36, 160 px on line 4); 16d
-  `make small`/`make sizes`. REMAINING over-cap files (pre-existing, harness-heavy):
-  `draw_backend` 818, `nsdir` 760, `input` 585, `fsys` 539, `Frame` 514, `Text` 498, `nsio`
-  451, `server` 450, `regx_exec` 432, `Buffer` 432, `parse` 417, `opfs` 412, `xfid` 408,
-  `regx_compile` 407, `Font` 406, `Load` 404.
-- **Phase 15 MERGED (`efeb3fe`, 2026-09-14) — ADR-0005 SPIKE DONE, PASSED**: zero adapter-
-  forced core changes (`src/draw`,`src/ninep` byte-identical); NEW `src/host/devdraw/{wsys,Conn,
-  dev_draw,dev_input}.zig` + `main_native.zig` (`zig build run-native` opens a devdraw window);
-  warp = `/dev/mouse` write from `core/warp.zig` (R-EDIT-25 amended, R-02 v6; browser refuses
-  with `permission denied`). devdraw facts: strings `len[4]`; info line via `Twrdraw "JI"` +
-  `Trddraw 144`; `Rrdmouse.resized` overlaps `msec`; devdraw sends p9p `Kdown=0x80`. ENV:
-  `PLAN9=~/proj/plan9port` or `DEVDRAW=<path>`, `NOLIBTHREADDAEMONIZE=1` is set by `Conn`.
-  DEBT: browser `Kdown` bug (`typing.zig:43` 0x80 vs 4e 0xF800 — fix core + translate in
-  `dev_input.zig`); `Conn.zig` 611 / `wsys.zig` 407 pre-test; `warp.to` = the one sanctioned
-  sync-walker use on `/dev`.
-- **Phase 14b MERGED (`851d0dc`, 2026-09-14) — `/mnt/opfs`** — see agents/reports/phase14b-opfs.md
-  and REVIEW-NOTES: `dev/opfs*.zig` (parked ops over a `Requester`; slot table pending→ready→
-  taken), `shim/FsRecord.zig` op-record codec (version 1), `env.fsOp` + `fsStage`/`fsPush`
-  (**ABI v6**), `web/opfs.js`, fourth boot pipe, unconditional mount. R-9P-09 OPFS half DONE;
-  `/mnt/host` (picker) and `/dev/storage` remain. DEBT (pass): tentative-newfid slot leak on a
-  flushed parked walk (framework: `handleWalk` should `ops.clunk` a discarded newfid); 6×
-  `stat` per file open (per-path StatReply memo); writable-per-chunk writes; `bad offset`
-  string; `main_wasm.zig` 458 / `opfs.zig` 440 pre-test.
-- **Phase 14a MERGED (`afff8ac`, 2026-09-14)** — see agents/reports/phase14a-server-parking-create.md:
-  ANY `Ops` fn may return `park.WouldBlock` (NEW `ninep/park.zig`, raw-frame FIFO, bound 64,
-  `retryParked`; `completeReads(path)` alias kept — `dev/input`/`fsys`/`origin` unchanged);
-  Tcreate/Tremove/Twstat codec (`msg_mut.zig`) + handlers (`server_mut.zig`, lib9p default
-  strings); `Client.create/remove/wstat`; `server.zig` 780→450 (harness → `testsrv.zig`,
-  test-only). **Phase-1 R5 LIFTED.** Debt: `client.zig` 637, `msg.zig` 476 pre-test.
-- **Phase 13b MERGED (`fd1abe0`, 2026-09-14) — DIRECTORY WINDOWS** — see
-  agents/reports/phase13b-directory-windows.md and REVIEW-NOTES: acme boot (2 columns, `/`
-  rightmost, scratch demo gone), `dirwin` (dircmp/columnate/TABDIR), `Load` (async textload),
-  `openfile`, `expand` (expandfile + PARKED look — R-P13b-2 async existence check), `Get` for
-  dirs, `isdir` tag/ctl, `/mnt/snarf-self/ns`, FROZEN-ACCEPT-13B. R-EDIT-03 DONE. Debt:
-  `Window.zig` 559 / `Editor.zig` 414 / `expand.zig` 402 pre-test lines; normal-window
-  `maxtab` 72 vs acme 36 (textinit never ported; moves FROZEN-ACCEPT-3); `applyAddress`
-  parses the whole `:addr` run; `expandFile` lacks `reverse`.
-- **Phase 13a MERGED (2026-09-14)** — see agents/reports/phase13a-async-namespace.md:
-  generic async 9P tickets with TOMBSTONES (`ninep/tickets.zig`; `client.zig` 585 lines),
-  namespace jobs (`ninep/nsjob.zig` Walk + `ninep/nsio.zig` Stat/ReadFile/ListDir, `runSync`
-  + `Pumps` — pump EVERY reachable server or a union wedges), `Editor.ns` handle, and a REAL
-  boot namespace (`src/ns_boot.zig`: `/dev`, `/dev/draw`, `/mnt/snarf-self` served at runtime
-  — R-P10-E RETIRED; `/dev` + `/dev/draw` reachable via jobs ONLY). GAPS CLOSED: "no async
-  ticket for walk/open/clunk" and "Editor has no namespace handle". `/mnt/snarf-self/ns`
-  deferred to 13b (SEAM(ns) in fsys.zig). Review caught a real bug (sync cancel/clunk
-  poisoning later tickets on the un-pumped origin client) → fixed + regression T8b.
-- **Phase 12e MERGED (2026-09-14, structure-only)** — see agents/reports/phase12e-structure.md:
-  `Editor.zig` 824→383 pre-test lines via NEW `core/Gesture.zig` (mousethread state+arms),
-  `core/textselect.zig` (sweep/chord loop), `core/snarf.zig`; warning buckets in
-  `errors.zig`; `origin/handshake.zig` split from `OriginMount.zig` (319); `Client.seedQid`;
-  `origin_glue.zig` from `main_wasm.zig` (373). Pure move (540 test names identical, no
-  golden moved). **Gesture carve-out debt CLOSED.** Remaining over-cap (untouched by design):
-  `dev/draw.zig` 806, `ninep/client.zig` 672, `core/Window.zig` 536 — split when touched.
-- **Phase 12d MERGED (`6d13dda`, 2026-09-14)** — see agents/reports/phase12d-unions.md:
-  union mount table (`bind .before/.after/.replace`, `unmount`, `unbindTarget` — the phase-12
-  GAP is CLOSED), NEW `ninep/nsdir.zig` (`walk` first-success over members, `DirReader`
-  = unionread with synthetic root-device dirs for `/`, `/n`, `/mnt`), **`/mnt/origin` →
-  `/n/origin`** everywhere (agents/ history excepted), origin `bin/` bound `-a` into `/bin`
-  during a new `binding` handshake step; S-02 Host column; R-03 v3 (R-9P-16 new, OQ-9P-1
-  RESOLVED). Debt: `OriginMount.zig` 419 pre-test lines (over cap; seam = handshake vs
-  lifecycle); `Client.seedQid` wanted; T11 read-error arm untested.
-- **Phase 12c MERGED (`e351203`, 2026-09-14)** — see agents/reports/phase12c-canvas-resize.md:
-  the canvas fills the browser window at boot (`init(w,h)`) and follows resizes
-  (`EventKind.resize=8` → backend resize → `refresh` exposure → `Display.getWindow` →
-  `Tree.resize`/`Row.resize`, acme.c:548-555). DPR stays 1 (R-P12c-6: crisp Retina needs a
-  2× font — REMAINING half of R-GFX-05). `Row.resize` floors columns at 34 px (libframe traps
-  below ~25). MANUAL for Larry: reload, `make run`, drag the window edge.
-- **Namespace decisions with the user (2026-09-14, one at a time)**: (1) origin mount
-  moves `/mnt/origin` → **`/n/origin`** (Plan 9 network-mount idiom; do the rename in code,
-  S-02 §5, R-9P-10, tests, HANDOFF together in the unions wave); (2) **`$home` DEFERRED**
-  until unions exist — strict acme per-window directories meanwhile; (3) **unions
-  (OQ-9P-1) = YES, own wave BEFORE directory windows**: `bind -a/-b` in the mount table +
-  synthesized listings for mount-point dirs (`/`, `/n`, `/mnt`), origin `bin/` unioned into
-  `/bin` so command lookup is acme's "window dir, then path"; (4) self mount stays
-  **`/mnt/snarf-self`** (no /mnt/acme compatibility claim); (5) **`/dev/dom` kept,
-  browser-host only, LOW priority** — no wave until someone needs to script the page from
-  inside Snarf; S-02 gets a per-device "host" column (browser / native / both) in the
-  unions wave's doc pass. Dump location follows $home (deferred). Round complete.
-- **Phase 12b MERGED (`96d7cb5`, 2026-09-13)** — see agents/reports/phase12b-paper-fidelity.md:
-  `Look` builtin; `activecol` + `makenewwindow` placement (new `core/place.zig`, wired to
-  the served `new` walk; `New` unchanged, faithful); `+Errors` windows (new
-  `core/errors.zig`, warnings flushed from `frameEnd` into `dir/+Errors` in the rightmost
-  column — **ed.warnings is now visible in the UI**, two-strike Del shows its message).
-  FROZEN-ACCEPT-9 re-frozen (spot-checked), FROZEN-ACCEPT-12B new. First full run of the
-  user's pipeline: fable spec → opus code → sonnet tests → sonnet gate → fable review →
-  orchestrator applies nits → merge. Worked first pass; keep it.
-- **Phase 12 MERGED (`34bb36c`, 2026-09-05)** — see agents/reports/phase12-origin-mount.md:
-  browser mounts the origin at `/mnt/origin` (ABI v4 ws imports, WsTransport,
-  tick-driven OriginMount in NEW module `src/origin/`, 10 s absence tolerance,
-  `Reconnect` builtin via Editor.OriginHook, server 30 s keepalive). Also that day:
-  origin server logging (info→stdout, errors→stderr, ops-level 9p access log —
-  `e69d451`, `cd0139f`). GAPS handed forward (in the as-built contract): ninep.Client
-  has NO async ticket for walk/open/clunk (Get/Put + origin file reads BLOCKED on it);
-  Namespace lacks `unmount(prefix)`; ed.warnings still invisible in the UI.
-  (phase-12 gaps — async ticket, `unmount` — are CLOSED as of 12d/13a.)
-  Snarf is a working browser editor: typing/selection/undo, scroll, snarf+chords, window
-  and column management with live tags, B2 exec (10 builtins), B3 look, the Edit language
-  (structural regexps), the `/mnt/snarf-self` served tree, and `snarf-origin`
-  (`zig build serve`) speaking 9P2000 over WebSocket at `/9p` (server side only).
-- **Per-phase detail lives in `agents/reports/phase*.md`** (results, frozen-golden
-  hashes) **and `agents/contracts/`** (binding as-built rulings — read the contract
-  before touching an area). Phases: 1 ninep · 2 draw · 3 fonts · 4 text/frame ·
-  5 browser slice · 6 interactive input · 7 scroll+snarf · 8 windows · 9 exec+look ·
-  10 Edit+served tree · 11 origin server. Recent merges: P11 `8154bd6`;
-  input-modifier-boot `0bd405f` (boot in modifier profile: Option=B2, Cmd/Ctrl=B3,
-  physical-button passthrough).
-- **Manual browser verification (2026-09-05, Larry, Safari + real mice)**: confirmed
-  working — boot render, B2 exec via physical middle button AND Option+click, executing
-  commands typed in a body, Snarf/Paste, New, Newcol (borders/bands correct once
-  multiple windows/columns exist), live tags (Undo appears only on dirty windows), line
-  wrap. Not yet exercised: 1-2/1-3 chords, B3 look + green/red sweeps, Del two-strike,
-  Delcol regrow, Edit language, Undo run-grouping. One unreproduced anomaly: a column
-  tag once read `New Cut Paste ste ste ste…` (fragment of "Paste" repeated) — possibly
-  a stray user edit; if it recurs unprompted, chase it. Known cosmetic gaps: canvas is
-  fixed 640×480 (canvasResize + DPR, R-GFX-05, still deferred — `web/index.html:15`),
-  so the editor occupies the top-left corner of the browser window; DPR=1 renders
-  chunky on Retina. **(Fixed size RETIRED by phase 12c; the DPR half remains.)**
-- **STANDING INSTRUCTION (user, 2026-09-14)**: "continue to execute on each planned phase in
-  turn; keep notes after each phase for me to review; when all planned phases are complete
-  recommend next phases." Planned queue: 13b directory windows → 14 OPFS → ADR-0005
-  native-host spike → **then a debt-collection pass** (2026-09-14 addendum: "make another
-  debt-collection pass if you are bored; then report on that") → recommendations. Every
-  merge is pushed to GitHub immediately ("commit/push all to github when complete").
-  Per-phase digest for Larry: `agents/REVIEW-NOTES.md` (newest first; update it with every
-  merge, commit it with the merge or the handoff).
-- **STANDING AUTHORIZATION (user, 2026-07-19)**: run phases autonomously — merge each
-  phase to `main` WITHOUT per-phase sign-off once orchestrator-inspected + suite green +
-  fmt clean + boundary check passes; leave a report per phase in `agents/reports/`
-  (committed with the phase; `--no-ff` merge = one revertable commit). Still stop and
-  ask for ADR-level changes or design forks the specs don't settle.
-- **Pipeline pattern** (all phases so far): Outline → Build agents in isolated worktrees
-  under per-agent contracts → orchestrator Inspect → merge. (The original plan file
-  lived on a remote machine's `~/.claude/plans/` and is gone; the pattern, the contracts,
-  and this file ARE the plan.)
-- **NEXT: NOTHING QUEUED.** The 2026-09-14 planned queue (13b → 14 → 15 → debt pass) is
-  complete. Proposals ranked in `agents/NEXT-PHASES.md` (tier 1: Put/Get + Dump/Load;
-  external commands via `/bin` — needs the host-command allow-list ADR first; remaining
-  builtins). Wait for Larry's pick. — R-EDIT-03 + paper
-  §User interface: a window named `/mnt/origin/` lists `bin/ fs/ version` (dirs `/`-suffixed,
-  columnated, S-05 §2), B3 on an entry opens it (`openfile` via `place.makeNewWindow(t)`),
-  `isdir` set (Del/Put semantics, wind.c). Prerequisites folded into the same wave:
-  (a) ninep.Client async ticket for walk/open/read/clunk (the standing gate for reading
-  through ANY mount); (b) `Namespace` must synthesize directory listings for mount-point
-  directories (`/`, `/mnt`) — the kernel did this for acme, our mount table must.
-  Then phase 13:
-- **phase 13 (`agents/contracts/phase13-opfs.md`, DRAFT)**: `/mnt/opfs` — in-module
-  9P device server over the Origin Private File System (R-9P-09), `fsOp` import (ABI v5),
-  parked async ops; grows `ninep.server.Ops` with create/remove (lifts phase-1 R5).
-  User's stated direction: later EXPORT `/mnt/opfs` over 9P to other machines (Tauth
-  first). NOTE for the phase-13 outline: fold in the phase-12 gaps — grow
-  `Namespace.unmount(prefix)` while touching the framework, and the async-RPC ticket
-  API in `client.zig` is the gate for ANY wave that reads mounted files (Get/Put,
-  origin file reads, and OPFS acceptance via the client all want it).
-- **Backlog after 12/13** (unordered): canvasResize + DPR (R-GFX-05 — top user-felt
-  gap); Get/Put via namespace (origin/opfs targets) + Dump/Load; `/mnt/host` picker +
-  `/dev/storage`; Worker+SAB (transport swap, R-P6-1); touch profile; /dev/snarf
-  clipboard; Zerox; Sort; Exit; Shift-B3 reverse look + dot=addr ctl (small
-  integration wave); host-command allow-list
-  (ADR); `Tauth` (OQ-9P-3); CI (S-06 §5); Editor.zig ~1800-line gesture-machine
-  OQ-BLD-2 ABI codegen; `colgrow` (R-P12b-3, the `<2 lines` arm after
-  makeNewWindow); `textbsinsert` backspace processing on +Errors output; ASCII-only
-  `isalnum` (Plan 9 is Latin-1); `zig build small` artifact for size tracking.
-- **COMMITTED, not optional — native host spike (ADR-0005, R-OV-09, 2026-09-14)**: the
-  core natively + an adapter from our `/dev/draw`,`/dev/mouse`,`/dev/kbd` device files to
-  plan9port `devdraw`'s pipe protocol (`include/drawfcall.h` at the pinned SHA), drawing
-  the boot scene in a real window WITH `Tmoveto` warping. Spike first (proves the R-OV-03
-  boundary), then native 9P servers for files + processes. Runs after 12c. Do not let
-  this rot: if a session finds it still unstarted three phases from now, raise it.
-- **Open questions**: OQ-IN-1 touch chord-paste; OQ-BLD-2 ABI codegen; OQ-EDIT-4
-  vim-motion layer (design settled, S-02 §6 `kbd hold` — implementation DEFERRED by
-  user, don't build unprompted).
+- **Spike landed (2026-10-03) — rhun self-drawn frame vs. `devdraw`**:
+  `agents/reports/spike-rhun-self-drawn-frame.md`. **Recommendation: borrow rhun's model, not
+  its code** — keep `devdraw` as the ADR-0005 host (now indefinitely, see above). Addendum A
+  (build `devdraw` ourselves) became ADR-0006, above. Addendum B (webview shell) and the native
+  frame itself remain backlog-only in `NEXT-PHASES.md`'s Parked section.
+- **STANDING AUTHORIZATION (user, 2026-07-19)**: run phases autonomously — merge each phase to
+  `main` WITHOUT per-phase sign-off once orchestrator-inspected + suite green + fmt clean +
+  boundary check passes; leave a report per phase in `agents/reports/`. Still stop and ask for
+  ADR-level changes or design forks the specs don't settle.
+- **STANDING INSTRUCTION (user, 2026-09-14)**: keep a per-phase digest for Larry in
+  `agents/REVIEW-NOTES.md` (newest first; update with every merge).
+- **Workflow convention (user, 2026-10-11)**: my own working/draft notes go under
+  `notes/claude/` (direct-to-main like this file); everything else — code, ADRs, requirements,
+  `NEXT-PHASES.md` — goes through a PR now that there are more reviewers (SnarfProdd reviews
+  product/ADR docs; see PR #2 and #3 for the pattern).
+- **Pipeline pattern**: Fable (spec/contract) → Opus (build, isolated worktree) → Sonnet
+  (tests + gate: build/test/fmt/boundary) → Fable (adversarial review) → orchestrator applies
+  nits and merges `--no-ff` (one revertable commit).
+- **Next**: nothing queued pending ADR-0006's sign-off (PR #3) and `NEXT-PHASES.md`'s
+  native-primary re-tier. See that file's Tiers/Parked sections for the ranked backlog.
 
 ## Environment & account facts
 
 - **Claude cloud sessions tied to `lrau@skyhawk.ai` act as GitHub user `larry-sk`**
   (2026-10-03), which has **pull-only** on `larryr/snarf` — reads and filing issues work,
-  pushes 403 (both `git push` and the GitHub API). Such a session should file a GitHub
-  issue for work it can't land itself (see issue #1 / `spike-rhun-self-drawn-frame.md` for
-  the pattern: write the content, include a `git am`-able patch, ask for it to be landed by
-  a session running as `larryr` or `larry-sk` once added as a collaborator).
-- **PR APIs are blocked in BOTH directions, remote and local** (re-verified 2026-09-05):
-  the GitHub App token and larry's local `gh` (2.96.0, authed `larryr`) can push/fetch
-  and read repos, but `gh pr list` returns `[]` even with a PR open, REST
-  `repos/larryr/snarf/pulls` 404s, and `gh pr create` fails GraphQL permissions. PR
-  state is checked in the browser (2026-09-05: a Claude Code Chrome-extension session
-  read the /pulls page directly — works when the extension is connected). The user
-  opens PRs in the UI; merges land by pushing a git merge commit. Re-test occasionally.
-- **Local Mac permission note (2026-09-05)**: the Claude Code auto-mode classifier
-  blocks `git push --delete` (remote branch deletion) and some compound git commands;
-  the user runs those via `! <cmd>` in-session instead.
-- **Remote sandbox git (2026-09-11)**: `git push --delete <branch>` is refused by the git
-  proxy (HTTP 403) — merged branches must be deleted by the user/UI or a local session.
-  Ordinary pushes print scary noise (`--negotiate-only … RPC failed; HTTP 403 …
-  unexpected disconnect`) yet SUCCEED — always confirm with `git ls-remote --heads`
-  before retrying or concluding a push failed.
+  pushes 403. Such a session should file a GitHub issue for work it can't land itself (pattern:
+  issue #1 / `spike-rhun-self-drawn-frame.md` — write the content, ask `larryr` to land it).
+- **Local Mac permission note**: the Claude Code auto-mode classifier blocks some destructive/
+  shared-outcome git and GitHub commands (`git push --delete`, `gh pr merge` without a formal
+  review) — the user runs those via `! <cmd>` in-session or merges via the web UI instead.
+- **Remote sandbox git**: `git push --delete <branch>` is refused by the git proxy (403) —
+  merged branches must be deleted by the user/UI or a local session. Ordinary pushes print
+  scary noise (`--negotiate-only … RPC failed … 403 …`) yet SUCCEED — confirm with
+  `git ls-remote --heads` before concluding a push failed.
 - **Self-approval**: GitHub forbids approving your own PR; don't promise an "approve" step.
 - **Remote-session repo scope**: only repos attached at start or via `add_repo`
   (same-owner-only v1; fork third-party repos to `larryr/` first).
-- **The ACME paper is in-tree**: `docs/acme/` (HTML+PDF+troff source, from the pinned
-  4e fork `sys/doc/acme/`; provenance/license in its README). Cite `acme paper §N`.
-  doc.cat-v.org, 9p.io and plan9.io are proxy-blocked from remote sandboxes — use the
-  fork (`raw.githubusercontent.com/larryr/plan9/<full-sha>/…`; short SHAs 404 there).
+- **The ACME paper is in-tree**: `docs/acme/` (HTML+PDF+troff+markdown, from the pinned 4e
+  fork). Cite `acme paper §N`. doc.cat-v.org/9p.io/plan9.io are proxy-blocked from remote
+  sandboxes — use the fork (`raw.githubusercontent.com/larryr/plan9/<full-sha>/…`).
 - **Reference forks** (pinned, cite by SHA — see CLAUDE.md): `larryr/plan9port@337c6ac`,
-  `larryr/plan9@ed1a9c2`. Local full clones: `~/proj/plan9port`, `~/proj/plan9` (tips
-  already AT the pinned SHAs; macOS case-collision dirty entries are harmless).
-  **plan9port is BUILT on larry's Mac (2026-09-13, `./INSTALL`)**: `~/proj/plan9port/bin/`
-  holds 267 binaries incl. `devdraw` and `acme` (arm64 Mach-O) at the pinned SHA — the
-  peer for the ADR-0005 native-host spike and a live acme to compare behavior against.
-  Use `PLAN9=~/proj/plan9port`, `PATH=$PATH:$PLAN9/bin`. INSTALL rewrites `bin/9`,
-  `bin/9.rc`, `bin/9fs` in place (paths) — those dirty entries are expected; never
-  reset them. Homebrew no longer ships a plan9port formula. Remote:
-  clone shallow to `/workspace/…`. WebFetch of raw.githubusercontent.com works for
-  public spot-reads without attaching.
-- **Remote sandbox network**: ziglang.org, github releases, kroki.io blocked; apt +
-  PyPI open — `pip install ziglang==0.16.0` gives a working Zig (≈12 s test suite);
-  `apt-get install -y plantuml` (1.2020.2) for `-checkonly` (no salt tree-tables — use
-  `@startmindmap`).
+  `larryr/plan9@ed1a9c2`. Local full clones: `~/proj/plan9port`, `~/proj/plan9` (already at the
+  pinned SHAs). **plan9port is BUILT on larry's Mac**: `~/proj/plan9port/bin/` holds `devdraw`
+  + `acme` (arm64 Mach-O) at the pinned SHA. Use `PLAN9=~/proj/plan9port`,
+  `PATH=$PATH:$PLAN9/bin`. Homebrew no longer ships a plan9port formula.
+- **Remote sandbox network**: ziglang.org, github releases, kroki.io blocked; apt + PyPI open —
+  `pip install ziglang==0.16.0` gives a working Zig; `apt-get install -y plantuml` for
+  `-checkonly` (no salt tree-tables — use `@startmindmap`).
 
 ## Design notes pending a requirements revision (keep until folded into R-05/S-04)
 
-- **Touch-profile warp semantics (user discussion 2026-09-14).** On a touch screen there is
-  no pointer between touches, so point-to-type (R-EDIT-22) cannot apply; the touch profile
-  uses acme's `-b` variant — the LAST TOUCHED text keeps focus. Once focus is a software
-  value Snarf owns, the paper's warps (R-EDIT-25) map onto moving it and are HONORABLE on
-  touch: new window ⇒ focus + dot move into it (keyboard types there); B3 hit ⇒ dot moves
-  to the hit, highlighted + scrolled; deleting a pop-up ⇒ focus returns to the text it came
-  from (remember it explicitly); layout-box "click again without moving" does NOT translate
-  — dragging the box is the touch gesture. Record as a third host/profile case when the
-  touch profile is built: desktop browser = no warp; native = real warp; touch = focus/dot
-  follow the action.
-- **Tablets with hardware keyboards + trackpads/mice** behave like a desktop browser, not
-  like touch: iPadOS (trackpad/Magic Keyboard) and Android (mouse) synthesize a real
-  pointer — `pointermove` with `pointerType == "mouse"`, hover works, so point-to-type works
-  and warping is impossible exactly as on the desktop. The SAME device can switch between
-  finger (`pointerType == "touch"`) and pointer mid-session, so profile selection (R-IN-08)
-  must be per-event, not per-boot, and the focus model must be hybrid: hover focus while a
-  pointer is present, last-touch focus for touches. iPadOS also emulates a "middle button"
-  and secondary click on trackpads via gestures/settings — unverified which buttons reach
-  the page. **OQ-IN-4 (new): per-event profile switching + hybrid focus; verify iPadOS/Android
-  button mapping with a real device before the touch wave.** Fold into R-05 v3 / S-04 when
-  the touch profile is scheduled.
+*(Both frozen with the browser host per the ADR-0005 amendment above — only relevant again if
+the browser un-freezes.)*
 
-## Learnings / dead ends (keep)
+- **Touch-profile warp semantics**: no pointer between touches, so point-to-type can't apply;
+  use acme's `-b` variant (last-touched text keeps focus). Once focus is a software value,
+  the paper's warps (R-EDIT-25) map onto moving it and are honorable on touch. Third
+  host/profile case alongside desktop-no-warp and native-real-warp.
+- **Tablets with hardware keyboards/trackpads** behave like desktop browsers (real synthesized
+  pointer), not touch — profile selection (R-IN-08) must be per-event, not per-boot; focus
+  model must be hybrid (hover while a pointer is present, last-touch for touches). OQ-IN-4:
+  verify iPadOS/Android button mapping with a real device before the touch wave.
 
-- **Gate pattern (OPS LESSON 2026-07-20)**: `zig build test | grep …` returns the LAST
-  pipe stage's code — a failing suite can ride a green-looking `&&` chain. Run tests to
-  a file, check `$?`, then grep the file. Shell `printf '0x%x'` mangles > INT64_MAX —
-  use python for hash conversions.
-- **Git close-out (2026-07-19 incident)**: never `git add -A` near close-out (an
-  exclusion pathspec against an ignored dir FAILS and a later add sweeps the stale
-  index); stage explicit paths; `git status` before ANY commit on main; don't mix
-  newline/&& chaining in critical sequences. `.claude/` is gitignored.
-- **Agent orchestration (phase 1)**: worktrees spawn from possibly-stale refs (agents
-  must verify a marker file or rebase); each agent adds its OWN namespace-root re-export
-  or its tests are vacuously unreachable; type-only imports still serialize builds;
-  the inspect wave catches real bugs — keep it.
-- **Zig 0.16 API notes**: build = `b.addModule`/`createModule`, `.root_module`, target
-  only on root; wasm exports = `entry .disabled` + `rdynamic` + `export fn`;
-  `refAllDeclsRecursive` gone. Networking = `std.Io.net` + `std.Io.Threaded` (std.net
-  GONE); reader/writer via `stream.reader(io,&buf).interface`; files via `std.Io.Dir`;
-  `std.http.Server` has server-side WebSocket built in (`upgradeRequested`,
-  `respondWebSocket`, `readSmallMessage`); custom headers via `respond`
-  `extra_headers`; `trimRight`→`trimEnd`; build→exe constants via `b.addOptions()`.
-- plan9port acme at the pinned SHA = 15,830 lines / 25 files; per-file counts are in
-  the S-07 survey table — don't recount.
+## Learnings / dead ends (keep — reusable, timeless)
 
-## Session log (newest first)
-
-### 2026-09-13 — acme paper → markdown, related papers, R-02 re-verification (local, larry's Mac)
-- `docs/acme/acme.md` generated from `acme.ms` by new `docs/acme/ms2md.py` (regenerate,
-  don't hand-edit). Subagent archived Pike's sam, plumb, 8½ papers + 28 Plan 9/plan9port
-  man pages under `docs/acme/{sam,plumb,8half,man}/` from the pinned MIT forks;
-  `docs/acme/PAPERS-INDEX.md` records copied/not-copied and the rule **only
-  Pike-authored = definitive**, everything else supplementary (user direction).
-- Re-verified paper semantics vs requirements + code: mouse language, chords, undo,
-  live tags, served tree all faithful. R-02 → v4: fixed R-EDIT-02 (live tag) and
-  R-EDIT-03 (B3 not B2 opens entries); added R-EDIT-20..25 (directory context, +Errors,
-  point-to-type, placement heuristics, single-click expansion, no-warp divergence).
-  Implementation gaps → backlog above. Docs branch merged `f6ef98a`.
-- Phase 12b (same day, later): the three real gaps built and merged `96d7cb5` via the
-  full pipeline (see Current state). Local `git push --delete` of merged remote branches
-  WORKED from larry's Mac this session (auto mode) — the classifier block noted under
-  Environment is not absolute; try it before falling back to `! <cmd>`.
-
-### 2026-09-05 (later) — phase 12 built + merged (local, larry's Mac)
-- Origin-server logging landed first (user request): stdout/stderr split (`e69d451`),
-  then ops-level 9p access log (`cd0139f`) — that log became the smoke oracle.
-- Phase 12 via the pipeline: B1 (shim+ABI+WsTransport) and B2 (mount+Reconnect+ping)
-  as sequential opus worktree agents; orchestrator smoke battery drives a REAL
-  spawned snarf-origin and executes `Reconnect` as a real user gesture. Merged
-  `34bb36c`; contract updated to AS BUILT with B1/B2/orchestrator rulings.
-- Pipeline lesson: point-to-type inserts at the window's DOT, not at the pointer —
-  input-injection tests must B1-click first to anchor the dot.
-
-### 2026-09-05 — verification + wave planning (local, larry's Mac)
-- Deleted stale merged remote branches `origin-server`, `claude/snarf-docs-specs-iuj6q3`
-  (user ran the push — classifier blocks it for agents). Remote = `main` only.
-- Confirmed zero open PRs by reading github.com/larryr/snarf/pulls via the Chrome
-  extension (API remains blind — see facts).
-- Manual browser walkthrough with the user (results in Current state above).
-- Planned waves with the user; DRAFT contracts for phase 12 (origin mount, browser
-  side) + phase 13 (/mnt/opfs) committed to `main` (`f534272`) at user request for
-  browser review. Spec corrections found while drafting: no JS-initiated WS pings
-  (keepalive must be server-side); wsOpen URL arg dropped (same-origin only).
-- User direction recorded: OPFS mount is wanted, later exportable over 9P; OPFS > 
-  localStorage as the backing store (localStorage is the separate small /dev/storage).
-- Spawned a background Opus agent to add Mermaid review mirrors of the 7 PlantUML
-  diagrams under `docs/spec/diagrams/mermaid/` (user-authorized direct commit to main).
-- Pruned this file (~100 lines shorter); dead pointer to the remote-machine plan file
-  removed — contracts + this file are the plan of record.
-
-### 2026-09-02 — coordination session (remote)
-- Recorded input claim (since merged as `0bd405f` and cleared); added the push-early
-  rule to CLAUDE.md (`9fad850`); PR APIs re-tested, still blocked; libghostty assessed:
-  no action, only future fit is libghostty-vt IF real VT terminals ever happen
-  (would need the first ADR-0002 amendment).
+- **Gate pattern**: `zig build test | grep …` returns the LAST pipe stage's exit code — a
+  failing suite can ride a green-looking `&&` chain. Run tests to a file, check `$?`, then
+  grep the file. Shell `printf '0x%x'` mangles > INT64_MAX — use python for hash conversions.
+- **Git close-out**: never `git add -A` near close-out; stage explicit paths; `git status`
+  before ANY commit on main; don't mix newline/`&&` chaining in critical sequences.
+  `.claude/` is gitignored.
+- **Agent orchestration**: worktrees spawn from possibly-stale refs (agents must verify a
+  marker file or rebase); each agent adds its OWN namespace-root re-export or its tests are
+  vacuously unreachable; type-only imports still serialize builds; the inspect wave catches
+  real bugs — keep it.
+- **Zig 0.16 API notes**: build = `b.addModule`/`createModule`, `.root_module`, target only on
+  root; wasm exports = `entry .disabled` + `rdynamic` + `export fn`; `refAllDeclsRecursive`
+  gone. Networking = `std.Io.net` + `std.Io.Threaded` (`std.net` GONE); reader/writer via
+  `stream.reader(io,&buf).interface`; files via `std.Io.Dir`; `std.http.Server` has
+  server-side WebSocket built in; custom headers via `respond` `extra_headers`;
+  `trimRight`→`trimEnd`; build→exe constants via `b.addOptions()`.
+- plan9port acme at the pinned SHA = 15,830 lines / 25 files; per-file counts are in the S-07
+  survey table — don't recount.
