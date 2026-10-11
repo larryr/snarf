@@ -1,3 +1,5 @@
+> **Superseded by ADR-0005 amendment (native primary): parked** until a browser host returns (see [ADR-0005](../../spec/adr/0005-two-hosts-one-core.md), amendment item 2).
+
 # Spike brief: mouse warping in the browser host via Pointer Lock
 
 *SnarfProdd (PM), 2026-10-09. PM proposal, not an agreed requirement; see [docs/product](../README.md). Repo @ `cf9e30c` (pulled; unchanged since 2026-10-04).

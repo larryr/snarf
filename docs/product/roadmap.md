@@ -1,63 +1,64 @@
-# snarf — product feature roadmap (DRAFT v0.1)
+# snarf: product feature roadmap (v0.2)
 
-**Status: Draft — under review** (PM proposal; not agreed requirements).
+**Status: v0.2 — agreed baseline pending this PR** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
 
-*Draft by SnarfProdd (PM), 2026-10-07, for Larry (product owner), the tech architect and the
-developer. Grounded in [`state-of-snarf.md`](state-of-snarf.md) and the repo @ `cf9e30c`. Labels:
-**[found]** = stated in the repo docs; **[inferred]** = my reading; **[Larry]** = product
-direction Larry gave on 2026-10-07 that isn't in the repo yet.*
+*Replaces v0.1 (2026-10-07, refreshed for phase 17 on 2026-10-10; see git history of this file). Written by SnarfProdd (PM), 2026-10-10, and updated 2026-10-11 after ADR-0005's amendment was accepted (PR #2, merge `1ba1f40`). Sources:*
+- *the sync: [`notes/snarfprod/meetings/2026-10-10-sync.md`](../../notes/snarfprod/meetings/2026-10-10-sync.md);*
+- *the pipeline review with Fable's verdicts: [`notes/claude/roadmap-review-2026-10-10.md`](../../notes/claude/roadmap-review-2026-10-10.md);*
+- *[ADR-0005 amendment](../spec/adr/0005-two-hosts-one-core.md) and [R-01 v4](../requirements/01-overview.md);*
+- *the repo @ `1ba1f40`.*
+
+*Background docs: [`state-of-snarf.md`](state-of-snarf.md) (snapshot as of phase 17, predates the amendment), [Pointer Lock spike brief](spikes/pointer-lock-warp.md) (parked), [touchpad research](research/touchpad-interaction.md).*
+
+*Labels: **[found]** = in the repo docs; **[accepted]** = decided in an ADR or requirement; **[inferred]** = my reading; **[Larry]** = product direction from Larry not yet in the requirements.*
+
+## What changed from v0.1
+- **Decision 1 is ACCEPTED: the native host is primary**, and the browser is a frozen secondary target (ADR-0005 amendment items 1–2; R-01 v4 R-OV-09). The vision, target hosts, M0, M1 and M3 are rewritten around this.
+- **`devdraw` stays the native rendering/input module indefinitely: ACCEPTED** (ADR-0005 amendment item 3). The draft's open "devdraw vs self-drawn window" decision is closed; the self-drawn frame is deprioritized.
+- **M0:** the Pointer Lock spike is parked. CI is added, including a WASM-still-builds check. The `savemouse`/`restoremouse` micro-item is split out (Fable, Finding 4).
+- **M1:**
+  - The browser Clipboard API is dropped, and the clipboard goes native-first.
+  - A native file server is added.
+  - Phase-17 items are marked shipped.
+  - Retina is now a question rather than a commitment.
+- **M2:** the allow-list is scoped to remote 9P servers, and a headless 9P server is added.
+- **M3:** opens with **Zig build of devdraw + a packaged native app** (in progress), with product done-criteria. Native polish follows.
+- **M4:** reframed as backlog that can be scheduled now.
+- **M5:** still stop-and-ask, with a sharper reason.
+- **Process:** two standing rules are added. A proposed R-IN-06 change is noted, but requirements are not edited.
 
 ## Vision
 
-> **Now:** Larry opens snarf and does his real day's programming in it: real ACME semantics,
-> his files, his commands, his clipboard, crisp text. **[Larry]**
+> **Now:** Larry opens **native snarf** on his Mac and does his real day's work in it: ACME semantics with real warp, his files, his commands, his clipboard. **[Larry]**
 >
-> **Founding vision** **[found, R-01 §2]:** "A programmer opens a single web page and gets a
-> complete ACME environment… a Plan 9-style namespace… No install, no server-side session
-> state, no JavaScript framework." Plus ADR-0005 / R-OV-09: the same core also runs as a
-> native host.
+> **Hosts [accepted: ADR-0005 amendment, R-01 v4]:** snarf ships as **targeted native binaries** (Zig cross-compile, native host per ADR-0005), with **plan9port `devdraw` as the display and input server, indefinitely**. The **browser/WASM build is a frozen secondary target**: it keeps building and passing tests, but gets no new features. The core stays host-neutral (R-OV-03, R-OV-09), so the browser can return later without a core change. Remote work goes through **dedicated headless 9P servers**, not a browser tab (headless server: no requirement yet).
 >
-> **Later:** snarf becomes a **developer AI harness**: AI agents work in the same editor and
-> environment as the human, through the same 9P file interface the human's tools use.
-> Human and agent see the same windows, the same `+Errors`, the same files. **[Larry]**,
-> made concrete by me **[inferred]** from R-EDIT-17/19 and R-9P-04.
+> **Later:** snarf becomes a **developer AI harness**. AI agents work in the same editor through the same 9P file interface the human's tools use. **[Larry]**, made concrete by me **[inferred]** from R-EDIT-17/19 and R-9P-04.
 
-**Why the AI angle fits [inferred]:** ACME's design is "external programs drive the editor
-by reading and writing a file tree" (paper §Coupling; R-EDIT-17). An LLM agent is just
-another external program. Snarf's hard architectural rule, that *everything* crosses 9P
-(R-OV-03, ADR-0003/0004), means an agent can do anything the human UI can, with no extra
-API to design.
+**Why native [Larry]:** the browser can't reach ACME-level usability, and no install was its only real benefit. Snarf's job is editing documents and running text services, which is mostly heavy local use.
+
+**Founding vision** **[found, R-01 §2 + v4 note]:** "A programmer opens a single web page…" is kept as written, but R-01 v4 now labels it the **zero-install showcase** vision (browser, frozen). The **daily-driver** target is native.
 
 ## Target users
+1. **Larry: primary, daily driver, on native macOS** **[Larry]**.
+2. **Acme-fluent programmers on Mac and Linux trackpads or mice**, through native binaries **[inferred]**. Secondary.
+3. **AI agents (and the people running them)** **[Larry, later]**.
 
-1. **Larry: primary, daily driver** **[Larry]**. Plan 9/acme-fluent programmer who works
-   on macOS (HANDOFF: Safari + real mice, local plan9port build). Languages he edits (Zig, docs, …) are **[inferred]**.
-2. **Acme-fluent programmers who want acme with zero install, or on a trackpad** **[found,
-   R-01 §2, R-OV-06 chord emulation]**. Secondary. Not courted until Larry is happy.
-3. **AI agents (and the people running them)** **[Larry, later]**. Namespace clients that
-   read and edit text, run commands, and report results in windows a human can watch and
-   correct.
-
-Explicit non-users for now **[found, R-07]**: collaborative/multi-user editing (R-NG-04),
-mobile-first users (R-NG-05), people who want syntax highlighting or LSP inside the editor
-(R-NG-06, "should later arrive *through the namespace*").
-
----
+The non-users from v0.1 are unchanged (R-NG-04/05/06).
 
 ## Milestone overview
 
 | # | Milestone | Outcome for Larry | Headline features |
 |---|-----------|-------------------|-------------------|
-| **M0** | Ground truth *(Now)* | Know it works and which host to bet on | **Pointer Lock warp spike**, ~~phase 17 status~~ (done, see below), guided manual walkthrough, CI |
-| **M1** | Edit real files *(Now)* | Open, edit, **save** real files, copy/paste with the OS, readable text | Put/Get/Putall, origin create/remove, system clipboard, Dump/Load, Retina, small builtins |
-| **M2** | Run real commands *(Next)* | `mk`, `zig build`, `grep -n`, `git` from B2, output in `+Errors`, B3 to jump | Allow-list ADR, external commands via `/bin`, pipes `\| < >` |
-| **M3** | Daily-driver host & polish *(Next)* | snarf is good enough that Larry stops opening acme/other editors | Native file + process servers *or* browser polish (Larry's host choice), devdraw-in-tree, keyboard/IME |
-| **M4** | Programmable editor: harness foundation *(Later)* | acme tooling (and scripts) can drive snarf, from outside the process | Full acme(4) served tree, external 9P attach with auth, headless driver |
-| **M5** | AI harness *(Later)* | An agent works beside Larry in snarf, visibly and safely | Agent session model, per-agent namespaces/permissions, `kbd hold`, agent windows, audit |
-| — | Backlog / parked | (not scheduled) | Touch & chordbar, `/mnt/host`, `/dev/dom`, browser feature files, Worker+SAB, webview shell |
+| **M0** | Ground truth *(Now)* | Trust what's built | CI incl. a WASM-builds check, `restoremouse` warp, a guided walkthrough on native |
+| **M1** | Edit real files on native *(Now)* | Open, edit and save local files, copy/paste with macOS | ~~Put/Get/Dump/Load~~ (shipped), **native file server**, native clipboard, builtins, Retina? |
+| **M2** | Run real commands *(Next)* | `mk`, `zig build`, `git` from B2, output in `+Errors` | Native process service, pipes, `Kill`, remote-only allow-list ADR, **headless 9P server** |
+| **M3** | Native daily-driver polish *(Next)* | Larry stops opening other editors | **Zig-built devdraw + packaged Mac app** (in progress), trackpad chords, native polish, IME |
+| **M4** | Programmable editor *(schedulable now)* | acme tooling and scripts drive snarf from outside | Full acme(4) served tree (already SHALLed), headless driver; `Tauth`/external attach (ADR-gated) |
+| **M5** | AI harness *(stop-and-ask)* | An agent works beside Larry, visibly and safely | Needs new requirements first |
+| — | Frozen / parked | not scheduled | Browser features (Pointer Lock, Clipboard API, touch, Worker+SAB, HiDPI), dual trackpad |
 
-Sizes: **S** = less than one pipeline phase · **M** = one phase (spec→build→test→gate→review,
-like phases 12b–16) · **L** = several phases or needs an ADR first.
+Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = several phases or ADR-first.
 
 ---
 
@@ -65,86 +66,82 @@ like phases 12b–16) · **L** = several phases or needs an ADR first.
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Pointer Lock warp spike** (first) | Opt-in mode where snarf draws its own cursor and acme's warps (search hit, opened file, return after `Del`) work in the browser | Settles whether the browser can be Larry's daily host (Decision 1), and the paper's one known browser divergence | R-EDIT-25, ADR-0005, S-04 §1/§3, R-GFX-08, phase-review 2026-10-03 Decision 2. Brief: [`spikes/pointer-lock-warp.md`](spikes/pointer-lock-warp.md) | M (timeboxed) | None. Ports acme `restoremouse` (dropped in phase 8) |
-| ~~Phase 17 status check~~ **DONE 2026-10-10** | ~~Find out whether Put/Get/Dump/Load work started~~ It shipped — see M1's first two rows below | Was: claimed in HANDOFF 2026-10-04, nothing pushed as of this doc's writing (2026-10-07/09) | `agents/reports/phase17-put-get-dump-load.md`, merge `e734e3f` | S | — |
-| Guided manual walkthrough | A 15-minute checklist Larry runs in Safari/Chrome: chords, B3 sweeps, Del two-strike, Delcol, Edit, undo grouping | These have **never been tried by a human** (HANDOFF "Manual browser verification"). A daily driver can't have untested gestures | R-EDIT-05..12 | S | — |
-| CI on push (Linux + macOS) | Every push runs `zig build`, `zig build test`, fmt, smoke | Daily-driver reliability. Also the future eval harness for agents | R-BLD-03, S-06 §5, NEXT-PHASES Tier 4 #11 | S | Larry OK to add a workflow file. Smoke needs Node ≥ 22 |
+| **CI on push (macOS + Linux)** | Every push runs `zig build`, `zig build test`, fmt, `zig build native`, **and a WASM-build-still-compiles check** (plus the smoke test) | **A precondition of the browser freeze holding**: ADR-0005 amendment Risks says the "SHALL continue to build / pass tests" clause is unenforceable without CI. Also daily-driver reliability and a future agent eval harness | R-BLD-03, S-06 §5, NEXT-PHASES Tier 4 #11 | S | A workflow file (needs a PR). The smoke test needs Node ≥ 22 |
+| **Return-after-`Del` warp (`savemouse`/`restoremouse`)** | Deleting a pop-up window (e.g. `+Errors`) puts the pointer back where it was | The paper's third warp. Real on native today because devdraw warps | R-EDIT-25 (last unported site: `util.c:384-408`, `cols.c:150/178`); Fable Finding 4 | S | None. Explicitly unaffected by the freeze (ADR-0005 amendment item 2). **Host-agnostic, headless-tested through the `MouseSink` `/dev/mouse` stand-in (`src/core/warp.zig`), independent of any spike.** About 40 lines on `Editor`, cleared via `dropTextRefs`, plus one R-EDIT-25 log line |
+| Guided manual walkthrough (native) | A 15-minute checklist in native snarf: chords, B3 sweeps, Del two-strike, Delcol, Edit, undo grouping, warps | Gestures never tried by a human (HANDOFF) | R-EDIT-05..12, 25 | S | — |
+| ~~Phase 17 status~~ | Done: shipped `e734e3f` | — | `agents/reports/phase17-put-get-dump-load.md` | — | — |
+| *Parked:* Pointer Lock warp spike | Only if a browser host returns | Native already warps. Its value was settling the host choice, which is now settled | Brief kept: [`spikes/pointer-lock-warp.md`](spikes/pointer-lock-warp.md). Parked by ADR-0005 amendment item 2 ("Only Pointer Lock parks") | M | Amendment reversed |
 
-## M1: Edit real files (Now) — *daily-driver core*
-
-| Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
-|---|---|---|---|---|---|
-| **Put / Get / Putall for files** — **SHIPPED 2026-10-10 (phase 17)** | B2 `Put` saves the window. `Get` reloads it. `Putall` saves everything. Tags show `Put` only when dirty | Without save it isn't an editor. #1 blocker | R-EDIT-15, R-EDIT-11 (undo survives Put), NEXT-PHASES Tier 1 #1 | M | OPFS one-writable (done in 16b item 4) — **done**, `agents/reports/phase17-put-get-dump-load.md` |
-| **Create on the origin export** — **SHIPPED 2026-10-10 (phase 17)** | Saving a *new* file (or `Put` to a new name) under `/n/origin/fs/` works | Today `tools/origin/hostfs.zig` can't create files, so new files fail on the most likely daily path (browser + local `snarf-origin`) | R-EDIT-15, S-02 §5, R-9P-01 | S | 14a framework (done) — **done**: files only, exclusive, logged (`tools/origin/tree.zig`/`hostfs.zig`). `remove` still unbuilt |
-| **System clipboard (`/dev/snarf`)** | Snarf/Cut/Paste exchange text with other macOS apps | Daily editing constantly crosses apps. Today the snarf buffer is internal only (`src/core/snarf.zig`, R-P7-5 deferred) | R-EDIT-14, R-9P-07 | M | Browser Clipboard API permissions; native already has `Trdsnarf/Twrsnarf` |
-| **Dump / Load** — **SHIPPED 2026-10-10 (phase 17)** | Close the tab or quit, come back, and the columns and windows are restored | Daily use = long-lived sessions | R-EDIT-16; `$home` decision: `/mnt/opfs` in browser, `$HOME` native (NEXT-PHASES) | M | Put/Get — **done**: `$home` resolved as specified; native is honestly `NotMounted` until Tier 2's native file server lands, not silent |
-| **Retina text (2× font)** | Text is crisp on a Retina display | "Top user-felt gap" (HANDOFF backlog). Larry uses a Mac | R-GFX-05, OQ-GFX-2 (font choice/licensing) | M | Font asset decision |
-| **Small builtins: Sort, Zerox, Kill, Exit** | The root/column tag commands that are printed but do nothing start working | Root and column tags advertise them (R-EDIT-02). Dead tag words erode trust | R-EDIT-02, NEXT-PHASES Tier 1 #3 | S–M | Exit needs Dump. Zerox needs multi-Text-per-File |
-
-**Harness-friendly choices to make in M1 [inferred]:**
-- Every new command also gets its **served-tree `ctl` verb** (acme(4) has `get`, `put`,
-  `dump`, `clean`, `show`, …). Make it a definition-of-done rule that **no feature is
-  UI-only**, so M4 doesn't turn into a retrofit.
-- Keep the **Dump file plain text and stable** (acme's format) so an agent can snapshot and
-  restore a workspace.
-- Put/Get go **through the namespace only** (already the rule, R-EDIT-15). Agents then get
-  saving for free, under the same permission checks as the human.
-
-## M2: Run real commands (Next) — *the paper's "coupling" story*
+## M1: Edit real files on native (Now)
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Host-command allow-list ADR** | (Decision) which host commands the origin may run, in which directory, under what trust | Arbitrary exec over a WebSocket = RCE (`tools/origin/services.zig:6-9`). Must be decided first | R-EDIT-18, R-NG-03, OQ-EDIT-1, NEXT-PHASES Tier 1 #2, phase-review Decision 1 (add trust-by-locality sentence) | S (doc) | Larry decision |
-| **External commands via `/bin`** | B2 on `mk`, `zig build`, `grep -n foo *.zig` runs it in the window's directory. Output streams into `dir/+Errors`. B3 on `file.zig:42` jumps there | This is what makes acme an IDE | R-EDIT-06, R-EDIT-18, R-EDIT-20, R-EDIT-21 | L | ADR, 12d `/bin` union (done) |
-| **Pipes `\|cmd`, `<cmd`, `>cmd`** | Filter the selection through a command (e.g. `\|fmt`, `\|sort`) | Everyday text surgery | R-EDIT-06 (acme semantics) | M | External commands |
-| **`Kill` / long-running output** | Stop a runaway command. Output keeps streaming | Builds and tests run long | R-EDIT-02 (root tag `Kill`) | S | External commands |
+| ~~Put / Get / Putall~~ **SHIPPED (phase 17)** | Save, reload, save all | — | R-EDIT-15, `e734e3f` | — | — |
+| ~~Create on origin export~~ **SHIPPED (phase 17)** | New files under `/n/origin/fs/` | Browser path, now frozen | `tools/origin/hostfs.zig` | — | `remove` still unbuilt, now low priority |
+| ~~Dump / Load~~ **SHIPPED (phase 17)** | Restore a session | — | R-EDIT-16 | — | Native `$home` is `NotMounted` until the next row lands |
+| **Native file server** | Native snarf reads and writes local files directly: **Put/Get/Dump/Load work on native** | Today native returns `NotMounted` for these (phase 17), so this is the #1 native blocker | ADR-0005 §2, NEXT-PHASES Tier 2 #4 (`tools/origin/hostfs.zig` reused in-process) | M | — |
+| **System clipboard, native-first** | Snarf/Cut/Paste exchange text with macOS apps | Daily editing crosses apps. Today the buffer is internal (`src/core/snarf.zig`) | R-EDIT-14, R-9P-07; devdraw `Trdsnarf`/`Twrsnarf`; NEXT-PHASES Tier 2 #6 | S–M | — (**browser Clipboard API dropped**: frozen target) |
+| **Small builtins: Sort, Zerox, Kill, Exit** | Tag commands that do nothing today start working | Dead tag words erode trust | R-EDIT-02, NEXT-PHASES Tier 1 #3 | S–M | Zerox needs multi-Text-per-File. Kill pairs with M2 |
+| Retina text **(question)** | Crisp text on a Retina display | Was the "top user-felt gap" **in the browser** | R-GFX-05 | ? | **Still open:** devdraw handles Retina (ADR-0005 consequences). Keep this only if Larry still sees soft text on native. It is also a done-criterion of the M3 packaged-app item, so the hands-on checklist will answer it |
 
-**Harness-friendly choices [inferred]:** design the allow-list as a **policy keyed by *who*
-is asking (client identity/namespace) as well as *what* command**, not a flat list. That
-lets the same mechanism later grant an agent a narrower set than Larry. Command output is
-already a *file* (`bin/<cmd>/output`), and `+Errors` is a window, so agents can read results
-the same way humans do.
-
-## M3: Daily-driver host & polish (Next)
-
-The content of this milestone depends on **Decision 1 below (which host is Larry's daily
-driver)**. Both tracks are listed. Pick one first.
-
-**Track N: native host as daily editor** (ADR-0005 phase 2, NEXT-PHASES Tier 2)
-
-| Feature | Description | Why | Traces to | Size | Depends on |
-|---|---|---|---|---|---|
-| Native file server | Native snarf edits real files directly, with no origin process | Removes a moving part from daily use | ADR-0005 §2, NEXT-PHASES #4 (`tools/origin/hostfs.zig` reused in-process) | M | M1 Put/Get |
-| Native process service | Commands run as real local processes (stdin `/dev/null`, output to `+Errors`) | Full acme coupling, and the natural home for a harness | NEXT-PHASES #5, R-EDIT-21 | L (two waves) | M2 semantics |
-| devdraw built in-tree | `zig build run-native` works without installing plan9port | Install friction | NEXT-PHASES Parked (needs first ADR-0002 amendment: fetch vs vendor) | M | Larry ADR decision |
-| Native polish | Window title, `-b` flag, `/dev/snarf` wired to the snarf buffer | Feels finished | NEXT-PHASES #6 | S | — |
-
-**Track B: browser as daily editor** (NEXT-PHASES Tier 3)
-
-| Feature | Description | Why | Traces to | Size | Depends on |
-|---|---|---|---|---|---|
-| Browser key capture audit | Known list of keys the browser steals (Cmd-W, …) and fallbacks | Daily typing friction | R-IN-09/10 | S | — |
-| Pointer Lock lock-mode wave | Productize the opt-in lock mode **if the M0 spike passes** | The one paper behavior the browser can't do today | R-EDIT-25, NEXT-PHASES Parked, [`spikes/pointer-lock-warp.md`](spikes/pointer-lock-warp.md) | M | M0 spike pass |
-| Worker + SAB | Snarf runs off the main thread: smoother input, OPFS sync handles | Responsiveness on big files | R-PLAT-03, R-P6-1 | M | COOP/COEP (origin already sends them) |
-
-**Both tracks:** IME composition (R-IN-11) if Larry types non-ASCII. Second structure pass
-over the 16 over-cap files (Tier 4 #0) as filler.
-
-## M4: Programmable editor, the harness foundation (Later)
+## M2: Run real commands (Next)
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Full acme(4) served tree** | `/mnt/snarf-self/<id>/{addr,data,xdata,event,errors,rdsel,wrsel,editout}` + the full `ctl` verb set | This *is* the automation API. Today only `body/ctl/tag` exist and `ctl` has five verbs | R-EDIT-17, R-9P-12, `fsys.zig` SEAM(O21), R-P10-J | L | — |
-| **External attach to snarf-self** | Programs outside snarf (origin-side scripts, CLI tools, agents) can mount snarf's tree over 9P | Without this, no external program can drive the editor at all | R-EDIT-17 ("served… to the origin server or other tabs"), R-9P-04, S-02 §6 ("v2 item") | L | Auth (below) |
-| **Authentication for 9P** | Only authorized clients can attach | An agent/automation entry point must not be open to anything that can reach the port | OQ-9P-3 (`Tauth`), R-9P-15 | M | ADR |
-| **Headless scripted driver** | Run snarf windowless: send keys/clicks, get screenshots and hashes | CI for UI behavior, and a sandbox for agents and evals | NEXT-PHASES Tier 4 #11, S-06 `snarf-headless`, ADR-0003 headless backend | S–M | — |
-| acme tooling compatibility check | Existing acme clients (e.g. Go `9fans.net/go/acme`) work against snarf | Proves the API, and gives a free ecosystem | R-EDIT-17 ("tooling can be written against Snarf just as against ACME") | S | Full served tree, external attach |
+| **Native process service** | B2 on `mk`, `zig build`, `grep -n foo *.zig` runs a real local process. Output goes to `dir/+Errors`, and B3 on `file.zig:42` jumps there | This is what makes acme an IDE | R-EDIT-06/18/20/21, NEXT-PHASES Tier 2 #5 | L (two waves) | M1 native file server |
+| **Host-command allow-list ADR, remote scope only** | Policy for which commands a **remote 9P server** may run, where, and for whom | Exec reachable from the network is RCE. **Local native = trusted** (Larry's own commands, his own machine) **[Larry; to confirm]** | R-EDIT-18, R-NG-03, OQ-EDIT-1 | S (doc) | Larry confirms local-trusted. ADR-0005 amendment item 4 records the local/remote distinction but leaves it unresolved, to be written into R-NG-03/R-EDIT-18 when the allow-list ADR is drafted |
+| Pipes `\|cmd`, `<cmd`, `>cmd` | Filter the selection through a command | Everyday text surgery | R-EDIT-06 | M | Process service |
+| `Kill` / long-running output | Stop a runaway command, and output keeps streaming | Builds run long | R-EDIT-02 | S | Process service |
+| **Headless 9P server for remote machines** | Run snarf's file and command services windowless on a remote box, then mount it from local native snarf to edit and build remote documents | Replaces the browser as the remote story **[Larry]** | **No requirement yet [inferred]**; nearest: S-02 §6 external attach, ADR-0003 headless backend | L | Allow-list ADR (remote scope), `Tauth` (M4) |
 
-## M5: AI harness (Later)
+**Harness-friendly choice:** design the remote allow-list as **who × what × where**, so a future agent gets a narrower grant through the same mechanism.
 
-*Nothing in the repo specifies this yet. Everything here is* **[inferred]** *from Larry's
-direction plus existing hooks, and needs requirements (an R-01 v4 / new R-08) before
-building.*
+## M3: Native daily-driver polish (Next; first item in progress)
+
+| Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
+|---|---|---|---|---|---|
+| **Zig build of devdraw + packaged native app** *(Claude session in progress)* | One command builds a Mac app Larry double-clicks (or runs) to get native snarf: no separate plan9port install | The last install step between Larry and a daily driver. With `devdraw` accepted indefinitely (ADR-0005 amendment item 3), this is the distribution answer, not a rendering-ownership question | ADR-0005 amendment; NEXT-PHASES Parked "devdraw built in-tree"; **ADR-0002 amendment proposed in [PR #3](https://github.com/larryr/snarf/pull/3)** (fetch pinned `larryr/plan9port@337c6ac` via `build.zig.zon`, compile the devdraw closure, `Conn.devdrawPath` resolution order) | M | PR #3 acceptance (Larry). Done-criteria and checklist below |
+| Trackpad chords (D1) | Hold a click and tap another finger: +B2 Cut, +B3 Paste, and 2-1 from B2. Modifier+click stays | Chords on a Mac trackpad without hunting for keys | [touchpad research](research/touchpad-interaction.md) D1 | M | A patch in `devdraw` (Larry's `larryr/plan9port` fork), then a re-pin of the PR #3 snapshot. Stock devdraw already gives modifier chords, 2-finger click = B3, 3-finger tap = B2, 4-finger tap = 2-1 |
+| Native polish | Window title, `-b` flag, `Conn` reader on `std.Io` | Feels finished | NEXT-PHASES Tier 2 #6 | S | — |
+| Keyboard / IME | Non-ASCII composition | If Larry needs it | R-IN-11 | M | — |
+| Structure pass | 16 over-cap files | Filler | NEXT-PHASES Tier 4 #0 | S–M | — |
+
+**Product done-criteria: Zig-built devdraw + packaged native app**
+1. **One command, then a runnable Mac app.** On a clean Mac with Zig 0.16 and no plan9port, a single documented command (e.g. `zig build native`, plus a packaging step if it's separate) produces something Larry can launch. That means a `.app` bundle or a single runnable binary with devdraw beside it, with no `$PLAN9` needed. The first fetch may need the network. `zig build` and `zig build test` stay network-free (as proposed in PR #3).
+2. **Crisp Retina text.** On a Retina display, text renders at full device resolution, not soft or 1×. If it fails, the M1 Retina row becomes real work. If it passes, that row is dropped.
+3. **Trackpad chords work.** On a MacBook trackpad and on a Magic Trackpad:
+   - 1-finger click = B1, 2-finger click = B3, Option-click = B2.
+   - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
+   - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
+4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
+5. **Explicit overrides still win:** `$DEVDRAW` or `$PLAN9` still select an installed devdraw (PR #3's proposed resolution order).
+
+**Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
+- [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.
+- [ ] Is the text crisp? Compare against plan9port acme, or zoom a screenshot.
+- [ ] Open a real file (B3 on a path, or `Get`). Edit it, `Put`, and confirm the file changed on disk. *(This needs the M1 native file server. If it isn't landed yet, note "NotMounted" and move on.)*
+- [ ] B1 sweep, then Option mid-sweep: the text is cut. B1 sweep, then Command mid-sweep: the text is pasted. Option-click on a word, then Control: the 2-1 chord runs it with an argument.
+- [ ] 2-finger click on a word looks it up (B3), and the pointer warps to the hit.
+- [ ] Snarf in snarf, then paste in another macOS app, and the reverse. *(This needs the M1 native clipboard. Note pass or fail.)*
+- [ ] Repeat the chord checks on the second trackpad (Magic Trackpad vs MacBook).
+- [ ] Write down the **top 3 things that stopped you from staying in snarf**. That list becomes the next M1–M3 cut.
+
+## M4: Programmable editor, the harness foundation (schedulable now)
+
+*Reframed per Fable (review Finding 3). Most of M4 is **specified but unscheduled**: R-EDIT-17 already SHALLs the full served tree, R-9P-12 mandates `/mnt/snarf-self` with acme's file API shape, and S-02 §6 lists every file and labels external attach "a v2 item". It can get a NEXT-PHASES tier now under existing requirements. **Only `Tauth` plus the external-attach transport is ADR-gated.***
+
+| Feature | User-facing description | Traces to | Size | Gate |
+|---|---|---|---|---|
+| **Full acme(4) served tree** | `addr, data, xdata, event, errors, rdsel, wrsel, editout`, and the full `ctl` verb set | R-EDIT-17, R-9P-12, S-02 §6, `fsys.zig` SEAM(O21) | L | None: existing SHALLs |
+| **Headless scripted driver** | Run snarf windowless and script it: keys, clicks, hashes | NEXT-PHASES Tier 4 #11, S-06 `snarf-headless`, ADR-0003 | S–M | None |
+| acme tooling compatibility | Go `9fans.net/go/acme` clients work against snarf | R-EDIT-17 | S | Served tree, attach |
+| **External attach + `Tauth`** | Outside programs (CLI tools, the M2 remote setup, agents) mount snarf's tree, authenticated | OQ-9P-3, R-9P-15, S-02 §6 | M + ADR | **ADR**: makes `Tauth` and a transport mandatory. Shared with M2's headless server |
+
+## M5: AI harness (stop-and-ask)
+
+*Still **stop-and-ask**, but for a sharper reason (Fable, Finding 3). M5 introduces a **new actor class (an agent as a namespace client) with no requirement at all**. It brushes against **R-NG-04** (no multi-client editing), not R-NG-03: an agent running allow-listed commands through R-EDIT-18 is not "arbitrary execution". R-NG-02 is only at risk under one model-placement option. Before building anything: R-01 v4, a new R-08, and a model-connection ADR.*
+
+The feature list is unchanged from v0.1:
 
 | Feature | User-facing description | Why it matters | Traces to (existing hooks) | Size | Depends on |
 |---|---|---|---|---|---|
@@ -155,25 +152,24 @@ building.*
 | Audit log | Every agent read/write/exec is recorded to a file | Trust, debugging, replay | R-9P-14 (line-oriented text files) | S | M4 |
 | Model connection | Where the LLM runs and how it reaches the namespace (origin-side process, native host process, remote) | Shapes security and deployment | R-NG-02 (no server-side session state), R-CON-03, OQ-9P-2 (`/dev/fetch`) | L (ADR) | Decision 4 |
 
-## Backlog / parked (not scheduled)
 
-Touch profile + hybrid tablet focus (R-IN-06, OQ-IN-1, OQ-IN-4) · chordbar (R-IN-07) ·
-`/mnt/host` File System Access picker (R-9P-09) · `/dev/storage` and the browser feature
-files (R-9P-08) · `/dev/dom` (R-9P-05, low priority per Larry) · settable cursor (R-GFX-08) ·
-webview shell and native frame (NEXT-PHASES Parked) · `win` terminal windows (OQ-EDIT-3) ·
-plumber rules file (OQ-EDIT-2) · ReleaseSmall deploy decision (Tier 4 #12) · GitHub Pages
-deploy (S-06 §5).
+## Frozen / parked
+- **Frozen with the browser host** (ADR-0005 amendment item 2: must keep building and testing, may get bug fixes, gets no new features): Pointer Lock lock-mode wave and spike, browser Clipboard API, browser key-capture audit, Worker+SAB, HiDPI for the browser, touch profile + hybrid focus (R-IN-06, OQ-IN-1, OQ-IN-4), chordbar (R-IN-07), `/mnt/host`, `/dev/storage`, `/dev/dom`, GitHub Pages and ReleaseSmall deploy.
+- **Deprioritized:** self-drawn native frame (ADR-0005 amendment item 3; revisit only for a concrete forcing reason such as Wayland).
+- **Parked:** dual Magic Trackpad chord pad (touchpad D5). Revisit only if multitouch clearly adds something a modifier key can't, given the cost of both hands off the keyboard **[Larry]**. Also parked: `win` terminal windows (OQ-EDIT-3), plumber rules (OQ-EDIT-2), webview shell.
 
----
+## Process (standing rules)
+1. **Every builtin also gets its served-tree `ctl` verb**, with a test through `/mnt/snarf-self`. This was a "Later" aspiration in v0.1. It is now a standing definition-of-done rule, since phase 17 already did it (`get`/`put`).
+2. **The roadmap and `agents/NEXT-PHASES.md` coexist.** The roadmap handles product prioritization: milestones, user value, Larry's calls. NEXT-PHASES is the execution queue the pipeline builds from, refreshed from the roadmap's calls. Neither supersedes the other (review recommendation, agreed in the sync).
+3. Every human-visible behavior still crosses 9P (R-OV-03). This is unchanged and is what keeps both the frozen browser and the AI path open.
 
 ## Architectural choices to protect the AI-harness path (early phases)
 
 For the tech architect. Most of these cost little now and a lot to retrofit later.
 
-1. **No UI-only features.** Every builtin added in M1–M3 also gets its served-tree ctl
+1. **No UI-only features.** Every builtin also gets its served-tree ctl
    verb/file and a test through `/mnt/snarf-self` (R-EDIT-17).
-2. **Allow-list ADR = identity-aware policy** (who × what × where), including the
-   trust-by-origin-locality sentence already requested (phase-review Decision 1).
+2. **Allow-list ADR = identity-aware policy** (who × what × where), scoped to **remote** 9P servers (local native = trusted, to confirm).
 3. **acme(4) wire compatibility, byte for byte** for `event`/`addr`/`ctl`, so existing acme
    clients and any agent built for acme work unchanged.
 4. **Keep R-OV-03 strict.** Anything a human can do must cross 9P (already enforced by the
@@ -188,49 +184,26 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
    right for v1. Note that "human + agent on one namespace" is a multi-client scenario and
    ask the architect to avoid single-client assumptions (e.g. fid recycling that assumes
    in-order peers, REVIEW-NOTES 13a).
+9. **The headless 9P server and M4 external attach should share one transport and auth design** (new in v0.2).
 
-## Open questions for the tech architect
 
-- M1: Put to a path whose mount disappears (origin drop): what does the user see? Does the
-  window stay dirty? (R-9P-10 absence semantics)
-- M1: Clipboard in Safari needs a user gesture per read. How does B1-B3 paste (a mouse
-  chord) satisfy that? Is a read-on-focus cache acceptable? (R-9P-07 "permission failures
-  surface as 9P errors")
-- M1: Font for 2×: Go fonts (BSD) vs Plan 9 `lucm`/`fixed`? (OQ-GFX-2)
-- M2: Streaming output: does `bin/<cmd>/output` need a blocking/long-poll read (parking
-  exists, 14a), and how is `Kill` delivered (ctl verb)?
-- M2/M3: Can one command-service protocol serve the origin (browser) and the native process
-  service, so the M5 permission model is written once?
-- M4: Transport for external attach: reverse attach over the existing origin WebSocket,
-  `BroadcastChannel`, or a native listening socket? (S-02 §6)
-- M4: Which `Tauth` scheme fits a local-first tool (token in URL/cookie per OQ-9P-3, or
-  p9any-style)?
-- M5: Do per-agent namespaces need a second `Namespace` instance per client inside the
-  module, or a separate process (native host)?
+## Open proposal (not a requirements edit)
+- **R-IN-06 finger mapping.** R-IN-06 says 2-finger tap = B2 and 3-finger tap = B3. macOS and devdraw use **2 fingers = B3** (secondary click) and **3-finger tap = B2** (devdraw since `9af9ceca`). Proposal: align R-IN-06 to the macOS/devdraw convention (review Finding 5). Caveat: **Larry uses macOS three-finger drag, so 3-finger tap is unreliable for him.** This is why D1 (hold-and-tap plus modifier+click) is his trackpad path. The touch profile is frozen with the browser, so this is a zero-code text fix, and it is not made here. It needs a PR when Larry wants it.
 
-## Top decisions for Larry (product owner)
+## Follow-ups owned elsewhere (not in this roadmap's PR)
+- **`agents/NEXT-PHASES.md` re-tier** (Tier 2 ahead of Tier 1's remainder, Tier 3 frozen, `restoremouse` micro-item, headless 9P server, devdraw-in-tree promoted out of Parked): Claude pipeline, per the ADR-0005 amendment item 1.
+- **R-NG-03 revision-log line** (local vs remote command execution): Claude pipeline, when the allow-list ADR is drafted (ADR-0005 amendment, "Still pending").
+- **ADR-0002 amendment** (devdraw fetch): PR #3, Larry's sign-off.
 
-1. **Which host is your daily driver: browser (+ local `snarf-origin`) or native
-   (`devdraw`)?** The M0 Pointer Lock spike is meant to inform this. The answer sets M3's track and whether M2's command service lives in the origin
-   or in-process. *(My lean [inferred]: native for daily coding, since warp, real processes
-   and no permission prompts are exactly what ADR-0005 says the browser can't give. Keep the
-   browser as the zero-install showcase.)*
-2. **Host-command allow-list policy:** which commands (`mk`, `zig`, `go`, `grep`, `git`…),
-   in which directories, and is a loopback origin "fully trusted"? This is the gate for M2.
-3. ~~Is Phase 17 (Put/Get/Dump/Load) running~~ **Answered 2026-10-10: shipped and merged**
-   (`e734e3f`, `agents/reports/phase17-put-get-dump-load.md`) — the autonomous pipeline did
-   continue and finished it while this roadmap was being drafted. **Still open: does this
-   roadmap supersede `agents/NEXT-PHASES.md` as the plan of record, or do the two coexist**
-   (roadmap = product prioritization, NEXT-PHASES = the execution queue, refreshed from the
-   roadmap's calls)? See `agents/reports/roadmap-review-2026-10-10.md` for a fuller review —
-   recommendation there is **coexist**, not supersede. Also unresolved from that review:
-   whether the Pointer Lock spike (M0) runs now, concurrent with the rest of Tier 1 (external
-   commands, remaining builtins), or after — this roadmap and the 2026-10-03 phase-planning
-   decision disagree on that ordering.
-4. **AI harness scope change:** OK to amend the requirements (R-01 v4 + a new
-   requirements doc) to make agents first-class namespace clients? This touches non-goals
-   R-NG-03 ("no shell / arbitrary command execution") and R-NG-02 ("no server-side session
-   state"), and un-deferring `kbd hold` (OQ-EDIT-4). Also, where should the model run?
-5. **Quality bar for "daily driver":** what would make you stop opening acme/another editor?
-   Your top 3 missing behaviors would let us cut M1–M3 to the minimum. Also: OK to add CI
-   (a `.github/workflows` file) now?
+## Remaining open decisions for Larry
+1. **Your top 3 daily-use blockers** on native, to cut M1–M3 to the minimum.
+2. **Confirm local native = trusted**, so the allow-list applies to remote 9P servers only. Does this ungate the native process service?
+3. **Retina on native:** is text still soft under devdraw? If not, drop the M1 row.
+4. **M4 tier now or later:** give the served tree and headless driver a NEXT-PHASES tier now, or after M1–M2?
+5. **M5 greenlight:** start the new R-08 and the model-connection ADR, or hold? (R-01 v4 already landed for native-primary. M5 would need a further R-01 revision for the agent actor.)
+6. **R-IN-06 finger mapping:** align to macOS/devdraw (open proposal above)?
+
+## Questions for the architect
+- One transport and auth design for the headless remote server and M4 external attach?
+- Packaged app: `.app` bundle vs binary plus sibling devdraw. Where does `Conn.devdrawPath` look inside a bundle (PR #3)?
+- The Retina check: does snarf's font path (R-GFX-05, OQ-GFX-2) need a 2× subfont even under devdraw, or does devdraw's scaling suffice?
