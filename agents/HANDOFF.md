@@ -16,10 +16,16 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none as of 2026-10-11)* — `main` is green at phase 17; two ADR docs are mid-review on open
-  branches (not claiming any code area): `adr-0002-devdraw-fetch-amendment` (PR #3, ADR-0006
-  proposed, pending Larry's sign-off) and the convention-switch edit to `CLAUDE.md` bundled
-  into the same PR.
+- **Phase 18 built, PR #24 open** (`phase18-devdraw-build`): `build.zig`, `build.zig.zon`,
+  `build/`, `src/host/devdraw/{Conn,DevdrawPath}.zig`, `src/host/host.zig`,
+  `src/main_native.zig`. Full pipeline run (fable → opus → sonnet → fable, ACCEPT WITH NITS)
+  complete; all gates green on this Mac. Awaiting merge (classifier/credential friction on
+  `gh pr merge` — Larry merges via web UI, same as #2/#3/#5) and Larry's manual check (§5 of
+  the contract: `zig build native && zig build run-native` with `$PLAN9` set must print
+  `(bundled)`).
+- **`agents/NEXT-PHASES.md` re-tier, PR #6 open**: do not also edit this file until #6 lands —
+  phase 18's own "devdraw built in-tree" Parked→done update is queued behind it (see Current
+  state).
 
 ## Current state (update in place)
 
@@ -33,21 +39,22 @@ one fact that had gone stale and wrong (PR creation — see below).
   decision gets a **new numbered ADR that explicitly supersedes** the old one (one-line Status
   pointer on the old file), not an in-place "Amendment" section. `CLAUDE.md` updated. ADR-0005's
   existing in-place amendment predates this and is left as historical record, not retrofitted.
-- **ADR-0006 PROPOSED, not yet accepted** (PR #3, branch `adr-0002-devdraw-fetch-amendment`):
-  fetch the pinned `larryr/plan9port@337c6ac` snapshot via one `build.zig.zon` entry, build just
-  the `devdraw` closure (~240 files/~570 KiB) as a sibling `zig-out/bin/devdraw` via a new
-  `zig build native` step — removes the native host's last separate-install requirement.
-  Supersedes only ADR-0002's empty-dependency-table clause, narrowly. Includes one deliberate
-  deviation from the source spike worth a second look: `Conn.devdrawPath` would check
-  `$DEVDRAW`/`$PLAN9` *before* the bundled binary (explicit overrides win), reversing the
-  spike's suggested order. **On acceptance**: implement the build step, update
-  `Conn.devdrawPath`, promote `NEXT-PHASES.md`'s "devdraw built in-tree" out of Parked.
-- **Product roadmap v0.2 proposal exists**: `notes/snarfprod/roadmap-v0.2-proposal.md` (+ its
-  meeting note), written against the native-primary pivot. Per its own "Process" rule:
-  `docs/product/roadmap.md` is product prioritization, `agents/NEXT-PHASES.md` is the execution
-  queue — they coexist, neither supersedes the other. `NEXT-PHASES.md` itself has **not yet**
-  been re-tiered for native-primary (Tier 2 promotion, CI as a precondition, the `restoremouse`
-  micro-phase) — do that once ADR-0006 lands, not before.
+- **ADR-0006 ACCEPTED** (PR #3, merged `38f47d0`): fetch the pinned `larryr/plan9port@337c6ac`
+  snapshot via one lazy `build.zig.zon` entry, build just the `devdraw` closure unmodified into
+  a sibling `zig-out/bin/devdraw`. Final resolution order (revised during review, not the
+  earlier draft): `$DEVDRAW` → bundled (relative to the running executable's own path) →
+  `$PLAN9/bin/devdraw` → bare `devdraw` on `$PATH`.
+- **Phase 18 built — PR #24 open, not yet merged**: implements ADR-0006. `devdraw` built
+  in-tree (372 KB, 0 warnings, cold build ~18s incl. fetch, warm ~0.5s); `zig build`/
+  `zig build test` verified network-free (`--system <empty dir>`); a real pre-existing
+  double-kill bug in `Conn.spawn` found and fixed along the way (regression-tested). Full
+  pipeline (fable contract → opus build → sonnet gate → fable review) complete, verdict ACCEPT
+  WITH NITS, all findings resolved or accepted as documented debt. See "In-flight claims"
+  above and `agents/reports/phase18-devdraw-build.md`.
+- **docs/product/roadmap.md v0.2 promoted** (PR #5, merged `b92d825`): now the agreed baseline,
+  superseding the v0.1 draft. Per its own "Process" rule: the roadmap is product prioritization,
+  `agents/NEXT-PHASES.md` is the execution queue — they coexist, neither supersedes the other.
+  `NEXT-PHASES.md`'s re-tier for native-primary is PR #6 (open) — see "In-flight claims".
 - **GitHub PR creation now works (fixed 2026-10-11)** — corrects a prior wrong fact below:
   the repo owner had "Pull Requests" disabled at the repo level (Settings → General; not an
   API/token issue — every credential tested, OAuth/fine-grained-PAT/classic-PAT, 404'd

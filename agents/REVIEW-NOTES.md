@@ -11,6 +11,38 @@ amendment accepted, native host is now the primary target).
 
 ---
 
+## Phase 18 — `devdraw` built in-tree (PR #24 open, not yet merged, 2026-10-11)
+
+**For you — try it, after merging:** with `PLAN9` still set as today, `zig build native &&
+zig build run-native`. The first stderr line must read `snarf-native: devdraw:
+…/zig-out/bin/devdraw (bundled)` — not `$PLAN9/bin`. Then `DEVDRAW=~/proj/plan9port/bin/devdraw
+zig build run-native` ⇒ `($DEVDRAW)`; `rm zig-out/bin/devdraw && zig-out/bin/snarf-native` ⇒
+`($PLAN9/bin)`. If the bundled window looks or behaves differently from your installed one
+(fonts, HiDPI, cursor), that's a finding — same source, same SHA, should be indistinguishable.
+
+**What changed:** `build.zig.zon` has its first (lazy) entry, the pinned plan9port tarball
+(22 MB, fetched once into `~/.cache/zig/p/`; unpacked to the git-ignored `zig-pkg/`, 63 MB).
+`zig build native` now also builds `zig-out/bin/devdraw` (≈ 370 KB, ad-hoc signed, 0 compiler
+warnings) — cold ~18 s including the fetch, warm 0.5 s. `zig build`/`zig build test` still need
+no network (verified with `--system <empty dir>`, by two independent agents). Linux: unchanged;
+`zig build devdraw` there says "macOS only".
+
+**Decisions made for you:** the fetch is gated on `-Ddevdraw=true`, which `zig build native`
+passes to a nested `zig build devdraw` (Zig 0.16's `build()` can't see which step you asked
+for). `devdraw` is always `ReleaseFast` and ignores `-Doptimize`. `zig build run-native` now
+runs `zig-out/bin/snarf-native` (not a cache copy), so the bundled devdraw beside it is found.
+`zig build native --system <dir>` fails fast with a pointer to the direct command, rather than
+silently fetching through the nested build (adversarial-review finding).
+
+**Found along the way:** a real, pre-existing bug in `Conn.spawn` — a peer that died during
+startup could be killed twice (ESRCH panic in Debug). Fixed and regression-tested; verified as
+a real bug by reverting the fix and watching the new test crash.
+
+**Still open:** the X11/Linux file list is a separate later pass. Merge is pending (PR #24);
+`agents/NEXT-PHASES.md`'s "devdraw built in-tree" Parked→done update is queued behind PR #6.
+
+---
+
 ## Phase 17 — Put, Get, Putall, Dump/Load (merged `e734e3f`, 2026-10-10)
 
 **For you — try it:** B2 `Put` on a dirty named window saves it through the namespace (works
