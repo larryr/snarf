@@ -88,14 +88,12 @@ decision, not a re-read of the spike report.
   re-lock behavior differs from Chromium's).
 - **devdraw built in-tree** (spike Addendum A; removes the plan9port install requirement,
   ~570 KiB / ~240 files from the pinned `larryr/plan9port@337c6ac`, built as an unmodified
-  sibling executable, never linked). Gated on: a Larry decision between fetching the pinned
-  source as a `.lazy` `build.zig.zon` dependency vs. vendoring it into `third_party/`
-  (license note either way — plan9port is mixed MIT/LPL); this is the **first ADR-0002
-  amendment**, narrowly worded to "the pinned reference implementation, used solely to build
-  the `devdraw` peer executable; nothing from it is linked into snarf," plus a small
-  ADR-0005 §3 wording tweak ("not a build dependency" → "may be built from the pinned source,
-  never linked") and an R-BLD-02 note scoping new per-OS header prerequisites (macOS SDK /
-  X11 dev headers) to `zig build native` only, not the default build.
+  sibling executable, never linked). **In progress, 2026-10-11**: drafted as ADR-0006
+  (`docs/spec/adr/0006-devdraw-fetch-dependency.md`), open for review in PR #3 — fetch (not
+  vendor) via one `build.zig.zon` entry, built by a new `zig build native` step. Gated on:
+  Larry's sign-off on PR #3 (the fetch-vs-vendor call and one flagged deviation in
+  `Conn.devdrawPath`'s resolution order). On acceptance, promote this item out of Parked into
+  a scheduled phase.
 - **Webview shell** (ADR-0005 option 2, revisited after phases 11–12 built the origin
   bridges it would need). A Zig shell over the system webview (`WKWebView`/WebKitGTK/
   WebView2) pointed at an in-process origin server — keeps real warp via a 9P bridge, unlike
