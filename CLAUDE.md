@@ -11,8 +11,14 @@ different machines.
 
 ## Source choices — binding guidelines
 
-These decisions are settled and recorded; do not re-decide them silently. Changing one
-requires amending the relevant ADR in `docs/spec/adr/` and getting user sign-off.
+These decisions are settled and recorded; do not re-decide them silently. **Changing one
+requires a new, numbered ADR that explicitly supersedes it, plus user sign-off** — ADRs are
+immutable once accepted; a changed decision is never rewritten in place. The new ADR states
+what it supersedes and why; the superseded ADR gets a one-line Status update pointing at the
+new one (`Status: Accepted · Superseded by ADR-00NN (topic) — see there`), without touching
+its original Context/Decision/Consequences text. (Adopted 2026-10-11; ADRs accepted before
+this date may still carry in-place "Amendment" sections from the prior convention — those are
+left as historical record, not retrofitted.)
 
 1. **Language & target** (ADR-0001): Zig, pinned version (`.zigversion` +
    `build.zig.zon`), target `wasm32-freestanding`. `zig build` is the only build entry
@@ -20,7 +26,8 @@ requires amending the relevant ADR in `docs/spec/adr/` and getting user sign-off
 2. **Dependencies** (ADR-0002): **Zig standard library only.** The `build.zig.zon`
    dependency table stays empty. 9P, the draw client, and the structural-regexp engine
    are written in-project. Embedded assets (fonts) are fine with license notes. Never add
-   an external package without an ADR-0002 amendment approved by the user.
+   an external package without a new ADR that supersedes ADR-0002's empty-table clause,
+   approved by the user.
 3. **Graphics** (ADR-0003): the editor core draws **only** by writing Plan 9 draw-protocol
    messages to `/dev/draw` (spec S-03). Only the device backend touches
    canvas/OffscreenCanvas. Never call browser APIs from `src/core`.
