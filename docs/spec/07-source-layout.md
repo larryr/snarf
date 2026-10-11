@@ -173,6 +173,9 @@ src/
     └── ring.zig             (~250) SAB/postMessage event rings
 web/    index.html, shim.js  (hand-written JS, S-06 §4)
 assets/fonts/                subfont assets (S-03 §4)
+build/                       build-time helpers for `build.zig`; import only `std`; not in any module graph
+├── devdraw.zig              the bundled devdraw peer's build graph (ADR-0006, phase 18)
+└── devdraw_files.zig        its C/ObjC file lists, transcribed from the plan9port mkfiles
 ```
 
 ## 5. C → Zig mapping (every original file accounted for)
@@ -219,7 +222,8 @@ Allowed imports (anything not listed is a review error; no cycles by constructio
 - `ninep/*` → `std` only
 - `dev/*` → `ninep/server|msg`, `shim/*`, `std`
 - `host/*` → `ninep/server|msg`, `dev/*`, `std` — the NATIVE host's device layer
-  (ADR-0005, phase 15: `host/devdraw/{wsys,Conn,dev_draw,dev_input}.zig`). It is the
+  (ADR-0005, phase 15: `host/devdraw/{wsys,Conn,dev_draw,dev_input,DevdrawPath}.zig`;
+  `DevdrawPath` added by phase 18, ADR-0006 §4). It is the
   peer of `dev/` on the other host and obeys the same rule: it may never be imported by
   `core`, `draw` or `ninep`, and it never imports them. It imports `dev` for exactly one
   thing — `dev.input.formatMouseRec`, the 49-byte `/dev/mouse` record — so the two hosts
