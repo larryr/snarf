@@ -460,22 +460,12 @@ test "conn: moveTo emits Tmoveto with the point" {
     try testing.expectEqual(@as(i32, 200), sent.tmoveto.y);
 }
 
-// ==========================================================================
-// `spawn` — a REAL child process, the one thing above cannot script.
-// ==========================================================================
-
-// Regression: a peer that dies before `Tinit` answers used to be killed
-// TWICE — once by `spawn`'s own `errdefer`, once again by `deinit` reading
-// the same `self.child` — and `Child.kill` on an already-reaped pid panics
-// (ESRCH) in Debug. `/usr/bin/true` exits immediately, closing its stdout
-// before any reply can land, which is exactly "a dead peer during startup":
-// `rpc`'s poll loop sees EOF and `spawn` fails with `error.Closed`. The fix
-// is the `errdefer`'s `self.child = null` (this file, `spawn`): this test
-// fails by panicking in `c.deinit()`, not by a wrong return value, if that
-// line regresses.
+// Regression: a dead peer during startup used to be killed twice (ESRCH
+// panic in Debug) because `deinit` re-killed what `spawn`'s errdefer already
+// had; fails by panicking `deinit`, not by a wrong return, if that regresses.
 test "conn: a dead peer during startup is killed once, not twice" {
     var c = Conn.init(testing.allocator);
-    defer c.deinit(); // must not re-kill a child `spawn` already killed
+    defer c.deinit();
     var env: std.process.Environ.Map = .init(testing.allocator);
     defer env.deinit();
     try testing.expectError(error.Closed, c.spawn(testing.io, &env, .{ .path = "/usr/bin/true" }));
