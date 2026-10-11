@@ -2,13 +2,18 @@
 
 **Status: v0.2 — agreed baseline pending this PR** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
 
-*Replaces v0.1 (2026-10-07, refreshed for phase 17 on 2026-10-10; see git history of this file). Written by SnarfProdd (PM), 2026-10-10, and updated 2026-10-11 after ADR-0005's amendment was accepted (PR #2, merge `1ba1f40`). Sources:*
+*Replaces v0.1 (2026-10-07, refreshed for phase 17 on 2026-10-10; see git history of this file). Written by SnarfProdd (PM), 2026-10-10, and updated 2026-10-11 after ADR-0005's amendment was accepted (PR #2, merge `1ba1f40`) and after the 2026-10-11 follow-up sync. Sources:*
 - *the sync: [`notes/snarfprod/meetings/2026-10-10-sync.md`](../../notes/snarfprod/meetings/2026-10-10-sync.md);*
+- *the follow-up: [`notes/snarfprod/meetings/2026-10-11-followup.md`](../../notes/snarfprod/meetings/2026-10-11-followup.md);*
 - *the pipeline review with Fable's verdicts: [`notes/claude/roadmap-review-2026-10-10.md`](../../notes/claude/roadmap-review-2026-10-10.md);*
 - *[ADR-0005 amendment](../spec/adr/0005-two-hosts-one-core.md) and [R-01 v4](../requirements/01-overview.md);*
 - *the repo @ `1ba1f40`.*
 
 *Background docs: [`state-of-snarf.md`](state-of-snarf.md) (snapshot as of phase 17, predates the amendment), [Pointer Lock spike brief](spikes/pointer-lock-warp.md) (parked), [touchpad research](research/touchpad-interaction.md).*
+
+*Proposals linked from here (working notes, not agreed): [input mapping guide](../../notes/snarfprod/input/input-mapping-guide.md) (mouse, Magic Mouse and trackpad profiles; recommended trackpad default) and [M5 AI-harness requirements draft](../../notes/snarfprod/requirements/m5-ai-harness-requirements-draft.md) (PROPOSED R-08).*
+
+*ADR convention (agreed 2026-10-11): ADRs are **immutable once accepted**. A changed decision gets a **new numbered ADR that supersedes** the old one, and the old one gets a Status pointer. ADR-0005's in-place amendment predates the convention and stays as historical record. ADR-0006 (PR #3) is the first ADR under the new rule.*
 
 *Labels: **[found]** = in the repo docs; **[accepted]** = decided in an ADR or requirement; **[inferred]** = my reading; **[Larry]** = product direction from Larry not yet in the requirements.*
 
@@ -21,8 +26,14 @@
   - A native file server is added.
   - Phase-17 items are marked shipped.
   - Retina is now a question rather than a commitment.
-- **M2:** the allow-list is scoped to remote 9P servers, and a headless 9P server is added.
-- **M3:** opens with **Zig build of devdraw + a packaged native app** (in progress), with product done-criteria. Native polish follows.
+- **Oct 11 decisions:**
+  - Local commands are trusted and run as the logged-in user, with no silent identity switch; elevation only by user-invoked `sudo`.
+  - The allow-list is for remote servers only.
+  - Retina is deferred until native is running.
+  - M4 scheduling is deferred.
+  - `.app` packaging is deferred; devdraw is resolved relative to the `snarf-native` executable.
+- **M2:** the allow-list is scoped to remote 9P servers (**decided 2026-10-11**), and a headless 9P server is added.
+- **M3:** opens with **Zig build of devdraw + runnable native snarf** (in progress; `.app` packaging deferred), with product done-criteria. Native polish follows.
 - **M4:** reframed as backlog that can be scheduled now.
 - **M5:** still stop-and-ask, with a sharper reason.
 - **Process:** two standing rules are added. A proposed R-IN-06 change is noted, but requirements are not edited.
@@ -53,8 +64,8 @@ The non-users from v0.1 are unchanged (R-NG-04/05/06).
 | **M0** | Ground truth *(Now)* | Trust what's built | CI incl. a WASM-builds check, `restoremouse` warp, a guided walkthrough on native |
 | **M1** | Edit real files on native *(Now)* | Open, edit and save local files, copy/paste with macOS | ~~Put/Get/Dump/Load~~ (shipped), **native file server**, native clipboard, builtins, Retina? |
 | **M2** | Run real commands *(Next)* | `mk`, `zig build`, `git` from B2, output in `+Errors` | Native process service, pipes, `Kill`, remote-only allow-list ADR, **headless 9P server** |
-| **M3** | Native daily-driver polish *(Next)* | Larry stops opening other editors | **Zig-built devdraw + packaged Mac app** (in progress), trackpad chords, native polish, IME |
-| **M4** | Programmable editor *(schedulable now)* | acme tooling and scripts drive snarf from outside | Full acme(4) served tree (already SHALLed), headless driver; `Tauth`/external attach (ADR-gated) |
+| **M3** | Native daily-driver polish *(Next)* | Larry stops opening other editors | **Zig-built devdraw + runnable `snarf-native`** (in progress), trackpad chords, native polish, IME |
+| **M4** | Programmable editor *(schedulable; timing deferred)* | acme tooling and scripts drive snarf from outside | Full acme(4) served tree (already SHALLed), headless driver; `Tauth`/external attach (ADR-gated) |
 | **M5** | AI harness *(stop-and-ask)* | An agent works beside Larry, visibly and safely | Needs new requirements first |
 | — | Frozen / parked | not scheduled | Browser features (Pointer Lock, Clipboard API, touch, Worker+SAB, HiDPI), dual trackpad |
 
@@ -82,14 +93,14 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
 | **Native file server** | Native snarf reads and writes local files directly: **Put/Get/Dump/Load work on native** | Today native returns `NotMounted` for these (phase 17), so this is the #1 native blocker | ADR-0005 §2, NEXT-PHASES Tier 2 #4 (`tools/origin/hostfs.zig` reused in-process) | M | — |
 | **System clipboard, native-first** | Snarf/Cut/Paste exchange text with macOS apps | Daily editing crosses apps. Today the buffer is internal (`src/core/snarf.zig`) | R-EDIT-14, R-9P-07; devdraw `Trdsnarf`/`Twrsnarf`; NEXT-PHASES Tier 2 #6 | S–M | — (**browser Clipboard API dropped**: frozen target) |
 | **Small builtins: Sort, Zerox, Kill, Exit** | Tag commands that do nothing today start working | Dead tag words erode trust | R-EDIT-02, NEXT-PHASES Tier 1 #3 | S–M | Zerox needs multi-Text-per-File. Kill pairs with M2 |
-| Retina text **(question)** | Crisp text on a Retina display | Was the "top user-felt gap" **in the browser** | R-GFX-05 | ? | **Still open:** devdraw handles Retina (ADR-0005 consequences). Keep this only if Larry still sees soft text on native. It is also a done-criterion of the M3 packaged-app item, so the hands-on checklist will answer it |
+| Retina text **(question)** | Crisp text on a Retina display | Was the "top user-felt gap" **in the browser** | R-GFX-05 | ? | **Deferred (2026-10-11)** until native is merged and running. devdraw handles Retina (ADR-0005 consequences), so keep this only if Larry still sees soft text on native. The M3 checklist records it |
 
 ## M2: Run real commands (Next)
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
 | **Native process service** | B2 on `mk`, `zig build`, `grep -n foo *.zig` runs a real local process. Output goes to `dir/+Errors`, and B3 on `file.zig:42` jumps there | This is what makes acme an IDE | R-EDIT-06/18/20/21, NEXT-PHASES Tier 2 #5 | L (two waves) | M1 native file server |
-| **Host-command allow-list ADR, remote scope only** | Policy for which commands a **remote 9P server** may run, where, and for whom | Exec reachable from the network is RCE. **Local native = trusted** (Larry's own commands, his own machine) **[Larry; to confirm]** | R-EDIT-18, R-NG-03, OQ-EDIT-1 | S (doc) | Larry confirms local-trusted. ADR-0005 amendment item 4 records the local/remote distinction but leaves it unresolved, to be written into R-NG-03/R-EDIT-18 when the allow-list ADR is drafted |
+| **Host-command allow-list ADR, remote scope only** | Policy for which commands a **remote 9P server** may run, where, and for whom | Exec reachable from the network is RCE. **Local native = fully trusted [decided 2026-10-11]**: local commands run as the logged-in user. Snarf never silently switches identity, and elevation happens only if the user invokes `sudo` or similar | R-EDIT-18, R-NG-03, OQ-EDIT-1 | S (doc) | The requirement text (R-NG-03/R-EDIT-18 local-vs-remote clause) is still to be written when the allow-list ADR is drafted (ADR-0005 amendment item 4). Under the immutable-ADR convention, that will be a new ADR. The native process service is not gated on it |
 | Pipes `\|cmd`, `<cmd`, `>cmd` | Filter the selection through a command | Everyday text surgery | R-EDIT-06 | M | Process service |
 | `Kill` / long-running output | Stop a runaway command, and output keeps streaming | Builds run long | R-EDIT-02 | S | Process service |
 | **Headless 9P server for remote machines** | Run snarf's file and command services windowless on a remote box, then mount it from local native snarf to edit and build remote documents | Replaces the browser as the remote story **[Larry]** | **No requirement yet [inferred]**; nearest: S-02 §6 external attach, ADR-0003 headless backend | L | Allow-list ADR (remote scope), `Tauth` (M4) |
@@ -100,25 +111,25 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Zig build of devdraw + packaged native app** *(Claude session in progress)* | One command builds a Mac app Larry double-clicks (or runs) to get native snarf: no separate plan9port install | The last install step between Larry and a daily driver. With `devdraw` accepted indefinitely (ADR-0005 amendment item 3), this is the distribution answer, not a rendering-ownership question | ADR-0005 amendment; NEXT-PHASES Parked "devdraw built in-tree"; **ADR-0002 amendment proposed in [PR #3](https://github.com/larryr/snarf/pull/3)** (fetch pinned `larryr/plan9port@337c6ac` via `build.zig.zon`, compile the devdraw closure, `Conn.devdrawPath` resolution order) | M | PR #3 acceptance (Larry). Done-criteria and checklist below |
-| Trackpad chords (D1) | Hold a click and tap another finger: +B2 Cut, +B3 Paste, and 2-1 from B2. Modifier+click stays | Chords on a Mac trackpad without hunting for keys | [touchpad research](research/touchpad-interaction.md) D1 | M | A patch in `devdraw` (Larry's `larryr/plan9port` fork), then a re-pin of the PR #3 snapshot. Stock devdraw already gives modifier chords, 2-finger click = B3, 3-finger tap = B2, 4-finger tap = 2-1 |
+| **Zig build of devdraw + runnable native snarf** *(Claude session in progress)* | One command builds `snarf-native` plus a sibling `devdraw` that Larry runs to get native snarf: no separate plan9port install. **`.app` packaging is deferred** (2026-10-11) | The last install step between Larry and a daily driver. With `devdraw` accepted indefinitely (ADR-0005 amendment item 3), this is the distribution answer, not a rendering-ownership question | ADR-0005 amendment; NEXT-PHASES Parked "devdraw built in-tree"; **ADR-0006 (proposed, [PR #3](https://github.com/larryr/snarf/pull/3))**: fetch pinned `larryr/plan9port@337c6ac` via `build.zig.zon` and compile the devdraw closure. It supersedes only ADR-0002's empty-dependency clause, per the immutable-ADR convention. It also sets the `Conn.devdrawPath` resolution order | M | ADR-0006 acceptance (Larry). Done-criteria and checklist below |
+| Trackpad chords (D1) | Hold a click and tap another finger: +B2 Cut, +B3 Paste, and 2-1 from B2. Modifier+click stays | Chords on a Mac trackpad without hunting for keys | [touchpad research](research/touchpad-interaction.md) D1; profile P3 in the [input mapping guide](../../notes/snarfprod/input/input-mapping-guide.md) (proposal; recommended default today is P2, the modifier profile) | M | A patch in `devdraw` (Larry's `larryr/plan9port` fork), then a re-pin of the ADR-0006 snapshot. Stock devdraw already gives modifier chords, 2-finger click = B3, 3-finger tap = B2, 4-finger tap = 2-1 |
 | Native polish | Window title, `-b` flag, `Conn` reader on `std.Io` | Feels finished | NEXT-PHASES Tier 2 #6 | S | — |
 | Keyboard / IME | Non-ASCII composition | If Larry needs it | R-IN-11 | M | — |
 | Structure pass | 16 over-cap files | Filler | NEXT-PHASES Tier 4 #0 | S–M | — |
 
-**Product done-criteria: Zig-built devdraw + packaged native app**
-1. **One command, then a runnable Mac app.** On a clean Mac with Zig 0.16 and no plan9port, a single documented command (e.g. `zig build native`, plus a packaging step if it's separate) produces something Larry can launch. That means a `.app` bundle or a single runnable binary with devdraw beside it, with no `$PLAN9` needed. The first fetch may need the network. `zig build` and `zig build test` stay network-free (as proposed in PR #3).
-2. **Crisp Retina text.** On a Retina display, text renders at full device resolution, not soft or 1×. If it fails, the M1 Retina row becomes real work. If it passes, that row is dropped.
+**Product done-criteria: Zig-built devdraw + runnable native snarf**
+1. **One command, then a runnable Mac app.** On a clean Mac with Zig 0.16 and no plan9port, a single documented command (e.g. `zig build native`, plus a packaging step if it's separate) produces `snarf-native` with `devdraw` beside it, which Larry can launch with no `$PLAN9` needed. **devdraw is resolved relative to the `snarf-native` executable**, not the working directory (2026-10-11). A `.app` bundle is deferred. The first fetch may need the network. `zig build` and `zig build test` stay network-free (ADR-0006).
+2. **Crisp Retina text: check it, but it is not a gate.** Retina is deferred until native is merged and running (2026-10-11). Record what you see on a Retina display. If text is soft, the M1 Retina row becomes real work. If crisp, that row is dropped.
 3. **Trackpad chords work.** On a MacBook trackpad and on a Magic Trackpad:
    - 1-finger click = B1, 2-finger click = B3, Option-click = B2.
    - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
    - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
 4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
-5. **Explicit overrides still win:** `$DEVDRAW` or `$PLAN9` still select an installed devdraw (PR #3's proposed resolution order).
+5. **Explicit overrides still win:** `$DEVDRAW` or `$PLAN9` still select an installed devdraw (ADR-0006's proposed resolution order).
 
 **Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
 - [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.
-- [ ] Is the text crisp? Compare against plan9port acme, or zoom a screenshot.
+- [ ] Is the text crisp? Compare against plan9port acme, or zoom a screenshot. Record only; Retina is deferred.
 - [ ] Open a real file (B3 on a path, or `Get`). Edit it, `Put`, and confirm the file changed on disk. *(This needs the M1 native file server. If it isn't landed yet, note "NotMounted" and move on.)*
 - [ ] B1 sweep, then Option mid-sweep: the text is cut. B1 sweep, then Command mid-sweep: the text is pasted. Option-click on a word, then Control: the 2-1 chord runs it with an argument.
 - [ ] 2-finger click on a word looks it up (B3), and the pointer warps to the hit.
@@ -126,7 +137,7 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
 - [ ] Repeat the chord checks on the second trackpad (Magic Trackpad vs MacBook).
 - [ ] Write down the **top 3 things that stopped you from staying in snarf**. That list becomes the next M1–M3 cut.
 
-## M4: Programmable editor, the harness foundation (schedulable now)
+## M4: Programmable editor, the harness foundation (schedulable; timing deferred 2026-10-11)
 
 *Reframed per Fable (review Finding 3). Most of M4 is **specified but unscheduled**: R-EDIT-17 already SHALLs the full served tree, R-9P-12 mandates `/mnt/snarf-self` with acme's file API shape, and S-02 §6 lists every file and labels external attach "a v2 item". It can get a NEXT-PHASES tier now under existing requirements. **Only `Tauth` plus the external-attach transport is ADR-gated.***
 
@@ -139,7 +150,7 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
 
 ## M5: AI harness (stop-and-ask)
 
-*Still **stop-and-ask**, but for a sharper reason (Fable, Finding 3). M5 introduces a **new actor class (an agent as a namespace client) with no requirement at all**. It brushes against **R-NG-04** (no multi-client editing), not R-NG-03: an agent running allow-listed commands through R-EDIT-18 is not "arbitrary execution". R-NG-02 is only at risk under one model-placement option. Before building anything: R-01 v4, a new R-08, and a model-connection ADR.*
+*Still **stop-and-ask**, but for a sharper reason (Fable, Finding 3). M5 introduces a **new actor class (an agent as a namespace client) with no requirement at all**. It brushes against **R-NG-04** (no multi-client editing), not R-NG-03: an agent running allow-listed commands through R-EDIT-18 is not "arbitrary execution". R-NG-02 is only at risk under one model-placement option. Before building anything: R-01 v5, a new R-08, and a model-connection ADR. A starting draft exists: [M5 requirements draft](../../notes/snarfprod/requirements/m5-ai-harness-requirements-draft.md) (PROPOSED).*
 
 The feature list is unchanged from v0.1:
 
@@ -169,7 +180,7 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
 
 1. **No UI-only features.** Every builtin also gets its served-tree ctl
    verb/file and a test through `/mnt/snarf-self` (R-EDIT-17).
-2. **Allow-list ADR = identity-aware policy** (who × what × where), scoped to **remote** 9P servers (local native = trusted, to confirm).
+2. **Allow-list ADR = identity-aware policy** (who × what × where), scoped to **remote** 9P servers (local native = trusted, decided 2026-10-11).
 3. **acme(4) wire compatibility, byte for byte** for `event`/`addr`/`ctl`, so existing acme
    clients and any agent built for acme work unchanged.
 4. **Keep R-OV-03 strict.** Anything a human can do must cross 9P (already enforced by the
@@ -193,17 +204,17 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
 ## Follow-ups owned elsewhere (not in this roadmap's PR)
 - **`agents/NEXT-PHASES.md` re-tier** (Tier 2 ahead of Tier 1's remainder, Tier 3 frozen, `restoremouse` micro-item, headless 9P server, devdraw-in-tree promoted out of Parked): Claude pipeline, per the ADR-0005 amendment item 1.
 - **R-NG-03 revision-log line** (local vs remote command execution): Claude pipeline, when the allow-list ADR is drafted (ADR-0005 amendment, "Still pending").
-- **ADR-0002 amendment** (devdraw fetch): PR #3, Larry's sign-off.
+- **ADR-0006 (proposed)** (devdraw fetch; supersedes only ADR-0002's empty-dependency clause): PR #3, Larry's sign-off.
 
 ## Remaining open decisions for Larry
 1. **Your top 3 daily-use blockers** on native, to cut M1–M3 to the minimum.
-2. **Confirm local native = trusted**, so the allow-list applies to remote 9P servers only. Does this ungate the native process service?
-3. **Retina on native:** is text still soft under devdraw? If not, drop the M1 row.
-4. **M4 tier now or later:** give the served tree and headless driver a NEXT-PHASES tier now, or after M1–M2?
+2. ~~Confirm local native = trusted~~ **Decided 2026-10-11**: trusted, runs as the user, allow-list for remote only.
+3. **Retina on native:** *deferred* until native is merged and running. Then: is text still soft under devdraw?
+4. **M4 tier:** *deferred* (2026-10-11). Revisit with the M5 greenlight, since M5 depends on M4.
 5. **M5 greenlight:** start the new R-08 and the model-connection ADR, or hold? (R-01 v4 already landed for native-primary. M5 would need a further R-01 revision for the agent actor.)
 6. **R-IN-06 finger mapping:** align to macOS/devdraw (open proposal above)?
 
 ## Questions for the architect
 - One transport and auth design for the headless remote server and M4 external attach?
-- Packaged app: `.app` bundle vs binary plus sibling devdraw. Where does `Conn.devdrawPath` look inside a bundle (PR #3)?
+- devdraw lookup relative to the `snarf-native` executable (decided 2026-10-11): how does it fit ADR-0006's `$DEVDRAW` → `$PLAN9` → bundled → `$PATH` order? Where would it look inside a future `.app` (deferred)?
 - The Retina check: does snarf's font path (R-GFX-05, OQ-GFX-2) need a 2× subfont even under devdraw, or does devdraw's scaling suffice?
