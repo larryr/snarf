@@ -1,6 +1,6 @@
 # snarf: product feature roadmap (v0.2 proposal)
 
-**Status: Draft v0.2 — revised after 2026-10-10 sync** (a PM proposal, not agreed requirements).
+**Status: Promoted via PR #5 (https://github.com/larryr/snarf/pull/5)**. The PR replaces `docs/product/roadmap.md` with v0.2 and also folds in the 2026-10-11 decisions and ADR-0006. Once it merges, [`docs/product/roadmap.md`](../../docs/product/roadmap.md) is the current version; this file is kept as the historical proposal (originally: Draft v0.2 — revised after 2026-10-10 sync).
 
 *This is a proposal against [`docs/product/roadmap.md`](../../docs/product/roadmap.md) (v0.1 plus Larry's phase-17 refresh), which stays the agreed baseline until this is promoted by PR. Written by SnarfProdd (PM), 2026-10-10. Sources:*
 - *the sync: [`meetings/2026-10-10-sync.md`](meetings/2026-10-10-sync.md);*
