@@ -197,6 +197,12 @@ buffer, and CI for a host that needs a window. The layout/scroll `moveto` sites
 product sync; it is not yet accepted. Treat the rest of this ADR as current until Larry
 confirms.** Discussion and reasoning: `notes/claude/roadmap-review-2026-10-10.md`.
 
+**Two separate sign-offs are asked for here** (SnarfProdd review, 2026-10-11): (1) decision
+items 1–2, native-primary + browser-freeze — this is what the sync actually settled; and
+(2) decision item 3, `devdraw` indefinitely — a new decision this amendment proposes on top
+of the sync, which only left `devdraw`-vs-self-drawn-frame as open. Accepting (1) does not
+imply accepting (2); Larry can confirm them independently.
+
 ### Context
 
 Phase 17 (Put/Get/Putall/Dump/Load, R-EDIT-15/16) shipped 2026-10-10, closing the daily-use
@@ -205,10 +211,18 @@ a browser-only cost. With saving working and the native host's warp already prov
 15), the original Decision's framing of the browser as "the default demo" and the native
 host as "a backlog commitment" no longer matches how Snarf is actually used: the browser's
 remaining unique advantage (zero install) stops being decisive once `devdraw`-in-tree
-(Parked, below) removes the install step, and its remaining costs (no real warp outside an
-unbuilt Pointer Lock mode, no real processes, permission-gated files/clipboard) are exactly
-what make daily editing worse, not just different. Larry's own words from the sync: "the
-browser can't reach ACME-level usability, and avoiding an install is its only real benefit."
+(Parked, below) reduces the install step to one native install rather than zero, and its
+remaining costs (no real warp outside an unbuilt Pointer Lock mode, no real processes,
+permission-gated files/clipboard) are exactly what make daily editing worse, not just
+different. Larry's own words from the sync: "the browser can't reach ACME-level usability,
+and avoiding an install is its only real benefit."
+
+The other half of that reasoning is remote work: native-primary only holds together because
+remote editing is meant to be served by a **dedicated headless 9P server** (Tier 2/M2, not
+yet built — no requirement exists for it yet), not by a browser tab reaching across the
+network. This is also what anchors decision item 4 below: the local-vs-remote distinction in
+the host-command allow-list only makes sense once "remote" has its own answer (a headless
+server) instead of "the browser, today's only remote-reachable surface."
 
 ### Decision (proposed)
 
@@ -223,7 +237,10 @@ browser can't reach ACME-level usability, and avoiding an install is its only re
    repo-wide structure/debt passes (freezing means no growth, not no maintenance — this
    needed stating explicitly since the sync didn't distinguish the two). This is the "browser
    comes back" condition `agents/NEXT-PHASES.md`'s Parked section already references for
-   Pointer Lock.
+   Pointer Lock. **Only Pointer Lock parks.** The `savemouse`/`restoremouse` micro-phase and
+   the remaining R-EDIT-25 warp sites are host-agnostic (headless-tested through the
+   `MouseSink` `/dev/mouse` stand-in, `src/core/warp.zig`) and proceed regardless of this
+   amendment — freezing the browser does not park warp work (SnarfProdd review, Finding 4).
 3. **`devdraw` remains the native host's rendering and input module indefinitely** — not
    provisionally, as §3's original wording implied ("add the frame as a second backend when
    Larry says go"). The self-drawn native frame (`agents/reports/spike-rhun-self-drawn-frame.md`)
@@ -261,7 +278,12 @@ browser can't reach ACME-level usability, and avoiding an install is its only re
   already Parked) is unaffected by and not resolved by this amendment.
 - **Risks**: "frozen" needs the maintenance-vs-growth distinction above to stay a deliberate
   policy rather than silent bitrot; the next session reading only `NEXT-PHASES.md` without
-  this ADR could miss why Tier 3 stopped moving.
+  this ADR could miss why Tier 3 stopped moving. **The "SHALL continue to build / pass tests"
+  clause in item 2 is unenforceable today: the repo has no CI.** Until a CI workflow runs
+  `zig build`, `zig build test`, fmt, and a WASM-still-compiles check on every push (M0/Tier
+  4 item 11), "frozen" is only a human remembering to check manually before each native
+  change — exactly the silent bitrot this risk names. CI is a precondition of the freeze
+  holding, not a nice-to-have alongside it (SnarfProdd review, Finding 2).
 
 ### Feedback into requirements (on acceptance)
 
