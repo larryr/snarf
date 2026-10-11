@@ -86,17 +86,32 @@ pub fn main(init: std.process.Init) !void {
     const a = try gpa.create(App);
     defer gpa.destroy(a);
 
+    // ADR-0006 §4: $DEVDRAW → bundled (beside this executable) → $PLAN9/bin →
+    // $PATH. No executable path just skips "bundled"; it is never fatal.
+    const exe_path: ?[:0]u8 = std.process.executablePathAlloc(init.io, gpa) catch null;
+    defer if (exe_path) |p| gpa.free(p);
+    var io = init.io;
+    var dd_path = try host.DevdrawPath.resolve(
+        gpa,
+        init.environ_map,
+        if (exe_path) |p| std.fs.path.dirname(p) else null,
+        .{ .ctx = &io, .exists = existsOnDisk },
+    );
+    defer dd_path.deinit(gpa);
+    // R-P18-9: printed once, before the spawn's outcome is known.
+    std.debug.print("snarf-native: devdraw: {s} ({s})\n", .{ dd_path.path, dd_path.describe() });
+
     a.conn = Conn.init(gpa);
     defer a.conn.deinit();
     a.conn.spawn(init.io, init.environ_map, .{
         .winsize = winsizeFromEnv(init.environ_map),
         .label = "snarf",
         .argv0 = "snarf",
+        .path = dd_path.path,
     }) catch |e| {
         std.debug.print(
             \\snarf-native: cannot start devdraw ({t}).
-            \\  Set $PLAN9 to a plan9port tree (its bin/devdraw is this host's
-            \\  display server, ADR-0005), or $DEVDRAW to the binary itself.
+            \\  Run `zig build native` to build the bundled devdraw (macOS), or set $DEVDRAW to a devdraw binary, or $PLAN9 to a plan9port tree.
             \\
         , .{e});
         return e;
@@ -123,6 +138,15 @@ pub fn main(init: std.process.Init) !void {
         try pumpWindowSystem(a);
         try tick(a);
     }
+}
+
+/// `DevdrawPath.Probe` over the real file system: an `access(2)` existence
+/// check through `Io.Dir.access` (no open, no write). Relative `$PLAN9` values
+/// resolve against the working directory, as the spawn itself would.
+fn existsOnDisk(ctx: *anyopaque, path: []const u8) bool {
+    const io: *const std.Io = @ptrCast(@alignCast(ctx));
+    std.Io.Dir.cwd().access(io.*, path, .{}) catch return false;
+    return true;
 }
 
 /// `$winsize` is libdraw's own knob for the initial window geometry
