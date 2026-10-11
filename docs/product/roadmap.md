@@ -125,7 +125,7 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
    - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
    - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
 4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
-5. **Explicit overrides still win:** `$DEVDRAW` or `$PLAN9` still select an installed devdraw (ADR-0006's proposed resolution order).
+5. **A deliberate override still wins:** setting `$DEVDRAW` to a specific binary still selects it over the bundled build. `$PLAN9` ranks below the bundled default (ADR-0006's resolution order, revised in review) so an ambiently-set plan9port install doesn't silently shadow the tested one.
 
 **Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
 - [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.
@@ -216,5 +216,5 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
 
 ## Questions for the architect
 - One transport and auth design for the headless remote server and M4 external attach?
-- devdraw lookup relative to the `snarf-native` executable (decided 2026-10-11): how does it fit ADR-0006's `$DEVDRAW` → `$PLAN9` → bundled → `$PATH` order? Where would it look inside a future `.app` (deferred)?
+- devdraw lookup relative to the `snarf-native` executable (decided 2026-10-11): how does it fit ADR-0006's `$DEVDRAW` → bundled → `$PLAN9` → `$PATH` order (revised after SnarfProdd's PR #3 review — bundled now outranks `$PLAN9` so an ambiently-set plan9port install doesn't shadow the tested build)? Where would it look inside a future `.app` (deferred)?
 - The Retina check: does snarf's font path (R-GFX-05, OQ-GFX-2) need a 2× subfont even under devdraw, or does devdraw's scaling suffice?
