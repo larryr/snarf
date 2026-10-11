@@ -16,11 +16,7 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **`phase18-devdraw-build`** (worktree `.worktrees/phase18-devdraw-build`, 2026-10-11, ADR-0006):
-  owns `build.zig`, `build.zig.zon`, `build/`, `.gitignore`, `src/host/devdraw/{Conn,DevdrawPath}.zig`,
-  `src/host/host.zig`, `src/main_native.zig`, plus the ADR-0002/0006 Status lines, `CLAUDE.md`
-  item 2, R-06, S-07 §4/§6. Opus coding done; awaiting sonnet tests → gate → fable review.
-- *(older, as of 2026-10-11)* — `main` is green at phase 17; two ADR docs are mid-review on open
+- *(none as of 2026-10-11)* — `main` is green at phase 17; two ADR docs are mid-review on open
   branches (not claiming any code area): `adr-0002-devdraw-fetch-amendment` (PR #3, ADR-0006
   proposed, pending Larry's sign-off) and the convention-switch edit to `CLAUDE.md` bundled
   into the same PR.
