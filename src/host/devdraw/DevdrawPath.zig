@@ -78,7 +78,7 @@ fn nonEmpty(v: ?[]const u8) ?[]const u8 {
 }
 
 // ==========================================================================
-// Tests — the full §4 T4 matrix is the gate's; these pin the basics.
+// Tests
 // ==========================================================================
 
 const testing = std.testing;
@@ -100,45 +100,108 @@ const FakeFs = struct {
     }
 };
 
-fn expectResolve(env: *const std.process.Environ.Map, dir: ?[]const u8, fs: *FakeFs, path: []const u8, source: Source) !void {
-    var r = try resolve(testing.allocator, env, dir, fs.probe());
-    defer r.deinit(testing.allocator);
-    try testing.expectEqualStrings(path, r.path);
-    try testing.expectEqual(source, r.source);
+/// One row of the contract §4 T4 table. `devdraw`/`plan9` null means the env
+/// var is unset (not put at all — distinct from `""`, case (f)'s point).
+const Case = struct {
+    label: []const u8,
+    devdraw: ?[]const u8 = null,
+    plan9: ?[]const u8 = null,
+    self_exe_dir: ?[]const u8 = null,
+    present: []const []const u8 = &.{},
+    want_path: []const u8,
+    want_source: Source,
+    /// How many times `probe.exists` must have been called — pins that
+    /// `$DEVDRAW` and bare `"devdraw"` are never probed (R-P18-5) and that a
+    /// hit short-circuits the rest of the chain.
+    want_calls: usize,
+};
+
+/// Contract §4 T4, cases (a)-(f) verbatim ((g) is `describe()`, tested below).
+const t4_cases = [_]Case{
+    .{
+        .label = "(a) $DEVDRAW wins over bundled and $PLAN9, and neither is probed",
+        .devdraw = "/x/devdraw",
+        .plan9 = "/p9",
+        .self_exe_dir = "/opt/snarf/bin",
+        .present = &.{ "/opt/snarf/bin/devdraw", "/p9/bin/devdraw" },
+        .want_path = "/x/devdraw",
+        .want_source = .env_devdraw,
+        .want_calls = 0,
+    },
+    .{
+        .label = "(b) bundled beats $PLAN9 when both exist — the ADR's whole point",
+        .plan9 = "/p9",
+        .self_exe_dir = "/opt/snarf/bin",
+        .present = &.{ "/opt/snarf/bin/devdraw", "/p9/bin/devdraw" },
+        .want_path = "/opt/snarf/bin/devdraw",
+        .want_source = .bundled,
+        .want_calls = 1,
+    },
+    .{
+        .label = "(c) bundled absent -> $PLAN9/bin/devdraw",
+        .plan9 = "/p9",
+        .self_exe_dir = "/opt/snarf/bin",
+        .present = &.{"/p9/bin/devdraw"},
+        .want_path = "/p9/bin/devdraw",
+        .want_source = .plan9,
+        .want_calls = 2,
+    },
+    .{
+        .label = "(d) bundled and $PLAN9/bin/devdraw both absent -> bare \"devdraw\" on $PATH",
+        .plan9 = "/p9",
+        .self_exe_dir = "/opt/snarf/bin",
+        .present = &.{},
+        .want_path = "devdraw",
+        .want_source = .path,
+        .want_calls = 2,
+    },
+    .{
+        .label = "(e) nothing set, no self_exe_dir -> $PATH, probe never called",
+        .want_path = "devdraw",
+        .want_source = .path,
+        .want_calls = 0,
+    },
+    .{
+        .label = "(f) empty $DEVDRAW is treated as unset, falls through to bundled",
+        .devdraw = "",
+        .self_exe_dir = "/opt/snarf/bin",
+        .present = &.{"/opt/snarf/bin/devdraw"},
+        .want_path = "/opt/snarf/bin/devdraw",
+        .want_source = .bundled,
+        .want_calls = 1,
+    },
+};
+
+test "DevdrawPath.resolve — contract §4 T4 table (a)-(f)" {
+    for (t4_cases) |c| {
+        var env: std.process.Environ.Map = .init(testing.allocator);
+        defer env.deinit();
+        if (c.devdraw) |v| try env.put("DEVDRAW", v);
+        if (c.plan9) |v| try env.put("PLAN9", v);
+        var fs: FakeFs = .{ .present = c.present };
+
+        var r = resolve(testing.allocator, &env, c.self_exe_dir, fs.probe()) catch |e| {
+            std.debug.print("T4 case {s}: resolve failed: {t}\n", .{ c.label, e });
+            return e;
+        };
+        defer r.deinit(testing.allocator);
+
+        testing.expectEqualStrings(c.want_path, r.path) catch |e| {
+            std.debug.print("T4 case {s}: path mismatch\n", .{c.label});
+            return e;
+        };
+        testing.expectEqual(c.want_source, r.source) catch |e| {
+            std.debug.print("T4 case {s}: source mismatch\n", .{c.label});
+            return e;
+        };
+        testing.expectEqual(c.want_calls, fs.calls) catch |e| {
+            std.debug.print("T4 case {s}: probe call count mismatch\n", .{c.label});
+            return e;
+        };
+    }
 }
 
-test "bundled beats $PLAN9; $DEVDRAW beats both and is never probed" {
-    var env: std.process.Environ.Map = .init(testing.allocator);
-    defer env.deinit();
-    try env.put("PLAN9", "/p9");
-    var fs: FakeFs = .{ .present = &.{ "/opt/snarf/bin/devdraw", "/p9/bin/devdraw" } };
-    try expectResolve(&env, "/opt/snarf/bin", &fs, "/opt/snarf/bin/devdraw", .bundled);
-
-    try env.put("DEVDRAW", "/x/devdraw");
-    fs.calls = 0;
-    try expectResolve(&env, "/opt/snarf/bin", &fs, "/x/devdraw", .env_devdraw);
-    try testing.expectEqual(@as(usize, 0), fs.calls);
-}
-
-test "missing derived paths fall through to $PATH; empty vars count as unset" {
-    var env: std.process.Environ.Map = .init(testing.allocator);
-    defer env.deinit();
-    try env.put("DEVDRAW", "");
-    try env.put("PLAN9", "/p9");
-    var fs: FakeFs = .{ .present = &.{"/p9/bin/devdraw"} };
-    try expectResolve(&env, "/opt/snarf/bin", &fs, "/p9/bin/devdraw", .plan9);
-
-    fs.present = &.{};
-    try expectResolve(&env, "/opt/snarf/bin", &fs, "devdraw", .path);
-
-    var empty: std.process.Environ.Map = .init(testing.allocator);
-    defer empty.deinit();
-    fs.calls = 0;
-    try expectResolve(&empty, null, &fs, "devdraw", .path);
-    try testing.expectEqual(@as(usize, 0), fs.calls);
-}
-
-test "describe strings are the startup-line interface (R-P18-9)" {
+test "(g) describe strings are the startup-line interface (R-P18-9)" {
     var p: DevdrawPath = .{ .path = undefined, .source = .env_devdraw };
     try testing.expectEqualStrings("$DEVDRAW", p.describe());
     p.source = .bundled;
