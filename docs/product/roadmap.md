@@ -1,6 +1,6 @@
 # snarf: product feature roadmap (v0.2)
 
-**Status: v0.2 — agreed baseline pending this PR** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
+**Status: v0.2, agreed baseline (PR #5, merged 2026-10-11)** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
 
 *Replaces v0.1 (2026-10-07, refreshed for phase 17 on 2026-10-10; see git history of this file). Written by SnarfProdd (PM), 2026-10-10, and updated 2026-10-11 after ADR-0005's amendment was accepted (PR #2, merge `1ba1f40`) and after the 2026-10-11 follow-up sync. Sources:*
 - *the sync: [`notes/snarfprod/meetings/2026-10-10-sync.md`](../../notes/snarfprod/meetings/2026-10-10-sync.md);*
