@@ -1,10 +1,6 @@
 # ADR-0002 — External libraries: Zig std only
 
-Status: **Accepted** · **Partial supersession proposed**: ADR-0006 (proposed, pending Larry's
-sign-off) would override one clause of Decision below — the empty `build.zig.zon` dependency
-table — for a single, narrowly-scoped entry (fetching plan9port to build a `devdraw` peer
-executable). Everything else in this ADR stands. See `0006-devdraw-fetch-dependency.md`. ·
-Satisfies: R-OV-08, R-CON-01
+Status: **Accepted** · Satisfies: R-OV-08, R-CON-01
 
 ## Context
 

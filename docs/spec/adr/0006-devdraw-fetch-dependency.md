@@ -48,24 +48,26 @@ Cocoa/Metal/QuartzCore on macOS; X11 on Linux) with no `mk`/`9c`/`9l`/system com
 3. **`devdraw` ships unmodified.** No patches to the fetched source — preserves the pinned
    fork's compatibility clause; the `msec` bug and `Kdown` dialect stay absorbed entirely in
    our own adapter (`src/host/devdraw/*`, unchanged by this decision).
-4. **`Conn.devdrawPath` resolution order, with one deliberate change from Addendum A's
-   suggestion.** Addendum A proposed checking the build-produced binary *before*
-   `$DEVDRAW`/`$PLAN9`. This decision proposes the opposite priority — explicit overrides
-   win: `$DEVDRAW` (if set) → `$PLAN9/bin/devdraw` (if set) → the build-produced
-   `zig-out/bin/devdraw` sitting next to the running `snarf-native` binary → bare `devdraw` on
-   `$PATH` as the last resort. Rationale: an operator who explicitly sets an env var
-   presumably wants that binary (debugging a different devdraw build, a patched one, a newer
-   plan9port), and silently preferring our bundled default over an explicit override would be
-   surprising. This flips the current code's actual order too — today `$DEVDRAW`/`$PLAN9`
-   already come before bare `devdraw`; the only new entry is the bundled default, inserted
-   between `$PLAN9` and the bare-`devdraw`-on-`$PATH` fallback. Flagging this explicitly since
-   it's user-facing default-resolution behavior, not just an implementation detail — happy to
-   take the Addendum A order instead if there's a reason it was specified that way.
+4. **`Conn.devdrawPath` resolution order: `$DEVDRAW` → bundled → `$PLAN9` → bare `devdraw` on
+   `$PATH`.** Neither Addendum A's original order (bundled first) nor this ADR's first draft
+   (every env var before the bundled binary) is quite right, per SnarfProdd review: most
+   ACME users — Larry included — already have `$PLAN9` set system-wide, so putting it ahead of
+   the bundled binary would silently shadow the pinned, tested build with whatever plan9port
+   happens to be installed, defeating the point of bundling. `$DEVDRAW` is different: it names
+   one specific binary, so setting it is an unambiguous, deliberate override and should still
+   win outright. Final order: **`$DEVDRAW`** (exact binary, always wins) → **bundled**
+   `devdraw` resolved relative to `snarf-native`'s own executable path (not the cwd and not a
+   hardcoded `zig-out/bin` — `std.fs.selfExePath` or equivalent, so this rule carries over
+   unchanged to a future packaged layout, e.g. a macOS `.app`'s `Contents/MacOS/`, without a
+   new ADR) → **`$PLAN9/bin/devdraw`** (a general plan9port install, lowest-priority env
+   signal) → bare `devdraw` on `$PATH` as the last resort. `snarf-native` SHALL print which
+   `devdraw` it resolved and from where (startup log line or a `-v`/`ctl` query) so the choice
+   is never silent.
 
 ## Consequences
 
-- **Positive**: closes the gap SnarfProdd's roadmap v0.2 calls the "#1 native blocker" in
-  spirit — a user who clones the repo and runs `zig build native` gets a working native host
+- **Positive**: closes the first native daily-driver item in roadmap v0.2 (M3) — a user who
+  clones the repo and runs `zig build native` gets a working native host
   with no separate plan9port install, no env vars to set. Keeps ADR-0005 §3's "MUST NOT link
   plan9port code" intact (separate process, same as today). The fetched source is pinned to
   the exact commit already cited project-wide (CLAUDE.md citation policy) — no version drift
