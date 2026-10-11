@@ -6,8 +6,8 @@ try, decisions I made on your behalf, and open questions. Details live in
 (2026-09-14): "continue to execute on each planned phase in turn; keep notes after each phase
 for me to review; when all planned phases are complete recommend next phases."
 
-Planned queue: **13b directory windows → 14 OPFS (`/mnt/opfs`) → ADR-0005 native-host spike**
-(`devdraw` adapter, the core drawing in a real window with warping). Then recommendations.
+Current queue: see `agents/NEXT-PHASES.md` (re-tiering for native-primary, 2026-10-11 — ADR-0005
+amendment accepted, native host is now the primary target).
 
 ---
 
@@ -39,14 +39,21 @@ is in the phase report; two files nudged just over the 400-line soft cap (`xfid.
 `Window.zig` — fine to fold into whichever next phase touches them); a system clipboard still
 isn't wired (that's Tier 1's *next* un-picked item per the roadmap below, not this phase).
 
-**Heads up — a second planning document now exists.** While this phase was running, you (via
+**Resolved, 2026-10-11**: the roadmap-vs-`NEXT-PHASES.md` question below answered itself —
+native host is now the primary target (ADR-0005 amendment, accepted), Pointer Lock moved out
+of M0 entirely (only matters if the browser host un-freezes), and the two documents now
+coexist by design (roadmap = product prioritization, `NEXT-PHASES.md` = execution queue). See
+`docs/spec/adr/0005-two-hosts-one-core.md`'s Amendment section and
+`notes/snarfprod/roadmap-v0.2-proposal.md`.
+
+~~**Heads up — a second planning document now exists.** While this phase was running, you (via
 a separate "SnarfProdd" PM session) landed `docs/product/{roadmap,state-of-snarf,spikes/
 pointer-lock-warp,research/touchpad-interaction}.md` straight to `main`. The roadmap proposes
 a different near-term order (Pointer Lock spike concurrent with Put/Get, not after it) and the
 Pointer Lock spike brief has real new research our 2026-10-03 review didn't have (the W3C spec
 detail that unlocking snaps the cursor back to where lock began, not to snarf's tracked
 position — relevant to the edge-exit design). I haven't picked the next phase pending your
-call on whether the roadmap supersedes `NEXT-PHASES.md` — see HANDOFF's new section.
+call on whether the roadmap supersedes `NEXT-PHASES.md` — see HANDOFF's new section.~~
 
 ## Phase 16 — debt-collection pass (merged `f51e4a0`, 2026-09-14)
 
