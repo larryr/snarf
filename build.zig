@@ -149,7 +149,16 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("plan9port", .{})) |dep|
             devdraw_step.dependOn(&devdraw_build.add(b, dep).step);
     } else if (on_macos) {
-        devdraw_step.dependOn(&devdraw_build.nested(b).step);
+        // `--system` can't be forwarded into the nested invocation (the pkgdir
+        // is consumed by this process, not visible to build()), so without
+        // this check `zig build native --system <dir>` would silently fetch
+        // from the network through the nested build, defeating --system's
+        // "disable package fetching" promise. Fail fast instead (fable review).
+        if (b.graph.system_package_mode) {
+            devdraw_step.dependOn(&b.addFail("--system: run `zig build devdraw -Ddevdraw=true --system <dir>` directly").step);
+        } else {
+            devdraw_step.dependOn(&devdraw_build.nested(b).step);
+        }
     } else {
         devdraw_step.dependOn(&b.addFail("devdraw is built in-tree on macOS only (ADR-0006, phase 18); on this OS set $PLAN9 or $DEVDRAW to an installed devdraw").step);
     }
