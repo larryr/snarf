@@ -1,6 +1,6 @@
 # Proposal: Markdown editing and rendered preview
 
-**Status: PROPOSED.** Scheduled after M3. This is a SnarfProdd working note, not a requirement. It would reach `docs/product/` only via a PR once Larry agrees.
+**Status: PROPOSED** (three points decided by Larry 2026-10-14; see §8). Scheduled after M3. This is a SnarfProdd working note, not a requirement. It would reach `docs/product/` only via a PR once Larry agrees.
 **Author:** SnarfProdd (PM). **Date:** 2026-10-14.
 
 ## 1. Editing: plain text in normal windows
@@ -19,7 +19,8 @@
   - is read-only;
   - is named after its source (see §7, file names);
   - has a tag carrying `Markdown` (refresh) and `Del`.
-- Running `Markdown` again on the same source re-renders into the same preview window; it never opens a second copy.
+- **Decided (Larry, 2026-10-14):** running `Markdown` again on the same source re-renders into the existing preview window. There is **one preview per source file**, never a second copy.
+- **Decided (Larry, 2026-10-14): the preview renders styled text from the start** (see §8).
 
 ## 3. Lineage: what acme does and doesn't do
 
@@ -49,12 +50,12 @@
 |---|---|
 | A. **Timer refresh as the default** | Rejected as the default. Surprise redraws while typing, wasted renders, and un-acme-like. Kept only as an opt-in |
 | B. **Live render on every keystroke / split WYSIWYG** | Rejected. It is costly, couples the editor to a renderer, and breaks the plain-text model |
-| C. **External browser only** (render to HTML, plumb it to Safari) | Kept as a **complement**: a `Markdown -web` variant for full fidelity (images, tables, math). On its own it fails the "stay in snarf" goal |
+| C. **External browser only** (render to HTML, plumb it to Safari) | **Decided (Larry, 2026-10-14): kept** as a complement: `Markdown -web` plumbs rendered HTML to the external browser for full fidelity (images, tables, math). On its own it fails the "stay in snarf" goal |
 | D. **Sibling preview window, refreshed on Put or B2** (chosen) | It is acme-shaped, cheap, and readable by agents |
 
 ## 6. Fit with the architecture
 
-- **Native-primary via devdraw** (ADR-0005 amendment). The preview is an ordinary snarf window drawn through devdraw, so it needs no new host capability. How rich the rendering can be is the open question in §7.
+- **Native-primary via devdraw** (ADR-0005 amendment). The preview is an ordinary snarf window drawn through devdraw, so it needs no new host capability. devdraw already supports multiple fonts and colours. The limit is acme's one-font-per-frame layout, so the preview needs its own multi-font renderer (§8).
 - **Frozen WASM target.** No browser-specific work. The renderer must stay core-side and pure Zig (or a sidecar process), so it doesn't break the "WASM still compiles" CI check (#8). Browser parity is not a goal.
 - **M5 agents.** The preview is **a file in snarf's 9P tree** (e.g. the window's `body`, plus a rendered-text file). Agents can then:
   - read rendered output the same way they read any window;
@@ -66,20 +67,34 @@
 ## 7. Open questions
 
 1. **Renderer:** `cmark` (C, CommonMark, small) vs `pandoc` (huge, very capable, external) vs a **Zig CommonMark parser** in core (WASM-safe and dependency-free, but there is work to do).
-2. **How rendered output is displayed in a devdraw window:**
-   - (a) **styled text**: fonts and sizes per span, which needs a multi-font text frame, a new core capability;
-   - (b) **plain "rendered text"**: reflowed, headings underlined, links listed as footnotes (cheap, and acme-pure);
-   - (c) **an image**: rasterised HTML, which loses selection and look.
-
-   The leaning is (b) first, then (a).
-3. **Images and links:** show images inline, as placeholders, or only via `-web`? Do links stay B3-able in the preview?
-4. **Local-only security:** the renderer must never fetch remote URLs (images, includes) by default. Raw HTML is passed through or stripped? What happens when the source is on a **remote 9P mount**?
-5. **Preview names in the 9P tree:**
+2. **Links:** do coloured links stay B3-able in the preview (open the target or plumb the URL)? Images, tables and math go via `-web` (decided); the open part is how the styled preview should mark where they were left out.
+3. **Local-only security:** the renderer must never fetch remote URLs (images, includes) by default. Raw HTML is passed through or stripped? What happens when the source is on a **remote 9P mount**?
+4. **Preview names in the 9P tree:**
    - `+Markdown` beside the file (like `+Errors`), or `file.md+preview`?
    - Is there a per-window `rendered` file under `/mnt/snarf/<id>/` for agents?
+
+## 8. Decisions (Larry, 2026-10-14)
+
+| # | Decision |
+|---|---|
+| D1 | **One preview per source file.** Re-running `Markdown` reuses the existing preview window |
+| D2 | **`Markdown -web` is kept.** It plumbs rendered HTML to the external browser, for full fidelity |
+| D3 | **The preview shows styled text from the start, not plain reflow.** See below |
+
+**D3 in detail:**
+- devdraw already supports multiple fonts and colours. The limit is acme's **one-font-per-frame** text layout.
+- The preview therefore gets its **own multi-font renderer**:
+  - bold, larger headings;
+  - italics;
+  - code in a fixed-width font;
+  - coloured links.
+- **Edit windows stay single-font**, as in acme.
+- **Tables, images and math go via `-web`**, not the in-snarf preview.
+- This is a new core capability: a multi-font frame for read-only preview windows. It needs an architect review, and probably an ADR.
 
 ## Revision log
 
 | Date | Change |
 |---|---|
 | 2026-10-14 | v0.1 created (SnarfProdd). Records the update policy agreed with Larry; status PROPOSED, scheduled after M3 |
+| 2026-10-14 | v0.2: Larry's decisions recorded (§8). D1: one preview per source. D2: `Markdown -web` kept. D3: styled multi-font preview from the start, edit windows stay single-font, tables/images/math via `-web`. These were removed from the open questions, which are renumbered |
