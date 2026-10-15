@@ -16,6 +16,7 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
+- **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
 - **Phase 18 built, PR #24 open** (`phase18-devdraw-build`): `build.zig`, `build.zig.zon`,
   `build/`, `src/host/devdraw/{Conn,DevdrawPath}.zig`, `src/host/host.zig`,
   `src/main_native.zig`. Full pipeline run (fable → opus → sonnet → fable, ACCEPT WITH NITS)
