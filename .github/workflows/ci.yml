@@ -1,0 +1,64 @@
+# CI on push (issue #8; R-BLD-03, S-06 §5, ADR-0005 amendment Risks, ADR-0006 Risks).
+# `zig build` stays the only build entry point (ADR-0001); this file only calls it.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned Zig version
+        id: zv
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zv.outputs.version }}
+      - name: zig fmt --check
+        run: zig fmt --check .
+      - name: zig build test (core+draw+ninep, no browser)
+        run: zig build test
+      - name: zig build (wasm32-freestanding still compiles)
+        run: zig build
+      - name: WASM artifact present
+        run: test -s zig-out/www/snarf.wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Smoke test (Node >= 22)
+        run: node tools/smoke_wasm.mjs
+
+  # Separate job so a devdraw/native build failure never blocks the core job's
+  # green `zig build test` signal (ADR-0006 Risks). Linux native is allowed to fail.
+  native:
+    name: native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned Zig version
+        id: zv
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zv.outputs.version }}
+      - name: Detect native step
+        id: has
+        run: |
+          if zig build -l | grep -qE '^\s+native\s'; then echo "native=1" >> "$GITHUB_OUTPUT"
+          else echo "::notice::no 'native' build step yet; skipping"; fi
+      - name: zig build native
+        if: steps.has.outputs.native == '1'
+        run: zig build native
