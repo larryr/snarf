@@ -213,27 +213,59 @@ test "hostfs-native NFS-10: Put to a read-only file errors and leaves the old by
     try testing.expectEqualStrings("original\n", d);
 }
 
-test "hostfs-native NFS-15: symlinks out of the export are invisible; '..' does not escape" {
+/// Flip when issue #28 is fixed (confined mode refuses escaping symlinks).
+const symlink_escape_fixed = false;
+
+fn readable(h: *TempExport, rel: []const u8) bool {
+    const bytes = h.read9p(rel) catch return false;
+    testing.allocator.free(bytes);
+    return true;
+}
+
+// Symlink policy (PM, 2026-10-14; issue #28). `HostFs` has no mode switch
+// yet, so both policies are exercised against today's single HostFs; when #28
+// adds trusted-local vs confined-export modes, point each test at its mode.
+
+test "hostfs-native NFS-15a: native (trusted local) mount follows symlinks, even out of the root" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const h = try TempExport.create();
     defer h.destroy();
     try h.tmp.dir.symLink(testing.io, "/etc/hostname", "escape", .{});
-    // FINDING (2026-10-14): hostfs.zig's header says symlinks are invisible,
-    // but `statFile` follows them, so this reads /etc/hostname through the
-    // export. Kept as a separate known-failure until triaged (does the
-    // native mount want to follow symlinks? The origin/remote export must not).
-    const escaped = if (h.read9p("escape")) |bytes| blk: {
-        testing.allocator.free(bytes);
-        break :blk true;
-    } else |_| false;
-    if (escaped) {
-        std.debug.print("hostfs_native_test NFS-15: KNOWN BUG symlink escapes export\n", .{});
+    try testing.expect(readable(h, "escape"));
+}
+
+test "hostfs-native NFS-15b: remote export allows symlinks that stay inside the root" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("real.txt", "inside\n");
+    try h.tmp.dir.symLink(testing.io, "real.txt", "link.txt", .{});
+    const got = try h.read9p("link.txt");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("inside\n", got);
+}
+
+test "hostfs-native NFS-15c: remote export refuses symlinks escaping the root (known bug #28)" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.tmp.dir.symLink(testing.io, "/etc/hostname", "escape", .{});
+    const refused = !readable(h, "escape");
+    if (!symlink_escape_fixed) {
+        if (refused) return error.UnexpectedPassFlipFlag;
         return error.SkipZigTest;
     }
+    try testing.expect(refused);
+}
+
+test "hostfs-native NFS-15d: '..' never escapes the export root" {
+    const h = try TempExport.create();
+    defer h.destroy();
     // fs/.. is the synthetic origin root, never the host parent directory.
     const up = try h.cl.walk(h.root, &.{ "fs", "..", ".." });
     h.cl.clunk(up.fid) catch {};
     try testing.expectError(error.FileDoesNotExist, h.cl.walk(h.root, &.{ "fs", "..", "..", "etc" }));
+    try testing.expectError(error.FileDoesNotExist, h.cl.walk(h.root, &.{ "fs", "..", "..", "..", "etc", "hostname" }));
 }
 
 test "hostfs-native NFS-16: a 5 MB file round-trips through 9P" {
