@@ -25,6 +25,9 @@ pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const warp = @import("warp.zig");
+test {
+    _ = @import("restoremouse_test.zig"); // #9 acceptance (SnarfDev2)
+}
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
 /// (text.c:121-275), phase 13b, R-EDIT-03.
 pub const dirwin = @import("dirwin.zig");
