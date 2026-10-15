@@ -16,7 +16,7 @@ const DevInput9 = dev_input.DevInput9;
 const Server = ninep.server.Server;
 const Fid = ninep.server.Fid;
 
-/// Flip when chunked /dev/snarf writes are assembled (see CB-07b).
+/// Flip when chunked /dev/snarf writes are assembled (see CB-07b, issue #31).
 const multi_write_fixed = false;
 
 pub const Pasteboard = struct {
@@ -171,7 +171,7 @@ test "clipboard CB-07a: empty pasteboard reads 0 bytes; a 1 MB pasteboard pages 
     try testing.expectEqual(@as(usize, 1), r.pb.rd);
 }
 
-test "clipboard CB-07b: a write split across 9P messages lands whole (known gap)" {
+test "clipboard CB-07b: a write split across 9P messages lands whole (known bug #31)" {
     // A paste bigger than msize arrives as several Twrites at increasing
     // offsets. writeOp ignores the offset and sends each chunk as a full
     // Twrsnarf, so the pasteboard ends up with only the LAST chunk.
