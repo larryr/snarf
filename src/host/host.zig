@@ -32,4 +32,5 @@ test {
     _ = Conn;
     _ = dev_draw;
     _ = dev_input;
+    _ = @import("devdraw/clipboard_test.zig"); // #12 (SnarfDev2)
 }
