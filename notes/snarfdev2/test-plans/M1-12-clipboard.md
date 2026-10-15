@@ -1,6 +1,6 @@
 # Test plan: #12 System clipboard on native
 
-**Issue:** #12 · **Requirements:** R-EDIT-14, R-9P-07 (**text names the browser Clipboard API — see Q2**), devdraw `Trdsnarf`/`Twrsnarf` (`src/host/devdraw/wsys.zig`), ADR-0005 amendment
+**Issue:** #12 · **Requirements:** R-EDIT-14, R-9P-07 (native path = devdraw Trdsnarf/Twrsnarf; browser keeps Clipboard API; PM to fix R-9P-07 wording — PM Q2), devdraw `Trdsnarf`/`Twrsnarf` (`src/host/devdraw/wsys.zig`), ADR-0005 amendment
 
 Harness: scripted devdraw peer (existing `src/host` codec tests pattern) that answers `Trdsnarf` and records `Twrsnarf`.
 

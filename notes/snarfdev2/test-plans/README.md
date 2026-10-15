@@ -39,5 +39,13 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-9P-14 | NFS-11 |
 | ADR-0005 §2 | NFS-01, NFS-15 |
 
-## Open questions for PM (tracked here until answered)
-See the report to SnarfProdd 2026-10-14; IDs Q1–Q7 are referenced from the plans.
+## PM decisions (SnarfProdd, 2026-10-14)
+Default rule: when unsure, use ACME behaviour.
+- Q1 mount point: follow #11 spec text; conflicts with checklist step 4 → test TBD pending Larry.
+- Q2 clipboard: test native devdraw Trdsnarf/Twrsnarf; browser keeps Clipboard API; PM fixes R-9P-07 wording.
+- Q3 Del warp-back: restore only if pointer still in pop-up; nested → innermost saved point.
+- Q4 Exit two-strike, ACME Sort order, Zerox as ACME allows.
+- Q5 Put atomic temp+rename, old file kept on failure; new files 0666 &~ umask.
+- Q6 spec S-02 authoritative for R-P17-5.
+- Q7 Node 22 pinned; native build in a separate CI job.
+- #20 plans on hold (R-IN-06 undecided).

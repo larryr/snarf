@@ -9,9 +9,9 @@ Harness: headless editor + `warp.MouseSink` (`src/core/warp.zig`) served over a 
 | RM-01 | unit | Pointer at P0; a pop-up window (e.g. `+Errors`) is created by `Column.add` with the pointer moved into it (savemouse) | Editor records P0 and the new window as `mousew` | #9, R-EDIT-25 |
 | RM-02 | unit | `Del` that same window (`Column.close`) | `MouseSink.last == P0` (restoremouse warp emitted) | #9, R-EDIT-25 |
 | RM-03 | unit | Delete a *different* window than the saved one | No restore warp; saved state unchanged (acme: only if `w == mousew`) | R-EDIT-25, util.c |
-| RM-04 | unit | Pointer moved by user after pop-up opened (acme checks the pointer is still inside the window) | Behaviour matches acme `restoremouse` condition — **see PM question Q3** | R-EDIT-25 |
+| RM-04 | unit | Pointer moved by user after pop-up opened (acme checks the pointer is still inside the window) | Restore **only if** pointer still inside the pop-up; otherwise no warp (PM Q3, acme) | R-EDIT-25 |
 | RM-05 | unit | Saved window destroyed by another path (Delcol, Load replacing layout) | `dropTextRefs` clears fields; no dangling pointer, no warp; runs clean under Debug safety | #9 |
-| RM-06 | unit | Two pop-ups in sequence; delete second, then first | Only the most recent save is honoured (single `prevmouse` like acme) | R-EDIT-25 |
+| RM-06 | unit | Two pop-ups in sequence; delete second, then first | Nested pop-ups: deleting the innermost restores to its own saved point (PM Q3) | R-EDIT-25 |
 | RM-07 | unit | Host with no warp (browser `/dev/mouse` write is a no-op / divergence) | Core still requests; no error surfaces | R-EDIT-25 per-host |
 | RM-08 | regression | Existing warp tests (open, look hit, layout move) | Still pass | R-EDIT-25 |
 | RM-09 | review | One R-EDIT-25 revision-log line added; "permanently impossible" comments re-cited (`rg -n "permanently impossible" src`) | Present / none stale | #9 |
