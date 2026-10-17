@@ -19,6 +19,7 @@ test {
     _ = @import("ws_transport.zig");
     _ = @import("dirread.zig");
     _ = @import("hostfs.zig");
+    _ = @import("hostfs_native_test.zig"); // #11 harness (SnarfDev2)
     _ = @import("log.zig");
     _ = services;
     _ = tree;
