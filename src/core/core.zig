@@ -28,6 +28,9 @@ pub const warp = @import("warp.zig");
 test {
     _ = @import("restoremouse_test.zig"); // #9 acceptance (SnarfDev2)
 }
+test {
+    _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)
+}
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
 /// (text.c:121-275), phase 13b, R-EDIT-03.
 pub const dirwin = @import("dirwin.zig");
