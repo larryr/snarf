@@ -26,6 +26,9 @@ pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const warp = @import("warp.zig");
 test {
+    _ = @import("restoremouse_test.zig"); // #9 acceptance (SnarfDev2)
+}
+test {
     _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)
 }
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
@@ -67,6 +70,9 @@ pub const errors = @import("errors.zig");
 /// since phase 16a so the one place `core` touches the transport is named.
 pub const originhook = @import("originhook.zig");
 pub const exec = @import("exec/exec.zig");
+test {
+    _ = @import("exec/builtins_m1_test.zig"); // #13 acceptance (SnarfDev2)
+}
 // Edit language (phase 10). One public type per line, matching the flat style
 // above; later 10x waves add ast/parse/addr/Elog/cmd here.
 pub const Regx = @import("edit/Regx.zig");

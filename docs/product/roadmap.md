@@ -1,6 +1,6 @@
 # snarf: product feature roadmap (v0.2)
 
-**Status: v0.2 — agreed baseline pending this PR** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
+**Status: v0.2, agreed baseline (PR #5, merged 2026-10-11)** (product prioritization. Requirements stay authoritative in `docs/requirements/`, decisions in `docs/spec/adr/`, execution in `agents/NEXT-PHASES.md`).
 
 *Replaces v0.1 (2026-10-07, refreshed for phase 17 on 2026-10-10; see git history of this file). Written by SnarfProdd (PM), 2026-10-10, and updated 2026-10-11 after ADR-0005's amendment was accepted (PR #2, merge `1ba1f40`) and after the 2026-10-11 follow-up sync. Sources:*
 - *the sync: [`notes/snarfprod/meetings/2026-10-10-sync.md`](../../notes/snarfprod/meetings/2026-10-10-sync.md);*
@@ -125,7 +125,7 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
    - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
    - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
 4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
-5. **A deliberate override still wins:** setting `$DEVDRAW` to a specific binary still selects it over the bundled build. `$PLAN9` ranks below the bundled default (ADR-0006's resolution order, revised in review) so an ambiently-set plan9port install doesn't silently shadow the tested one.
+5. **devdraw is chosen in ADR-0006's order, and the choice is logged.** The order is `$DEVDRAW` (an exact binary; a deliberate override always wins), then the **bundled** `devdraw` resolved relative to the `snarf-native` executable, then `$PLAN9/bin/devdraw`, then bare `devdraw` on `$PATH`. `$PLAN9` ranks below the bundled default, so a plan9port install that happens to be set in the environment doesn't silently shadow the tested build. `snarf-native` prints which `devdraw` it resolved, and from where, at startup.
 
 **Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
 - [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.

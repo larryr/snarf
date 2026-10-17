@@ -21,6 +21,16 @@ Status: **Draft v1**
 | R-BLD-04 | A dev loop SHALL exist: `zig build serve` (or documented one-liner, e.g. `python3 -m http.server` over `zig-out/www`) serving with the COOP/COEP headers needed for R-PLAT-03's SAB path. |
 | R-BLD-05 | Docs tooling (PlantUML/Java or Kroki) SHALL be needed only to *render* documentation, never to build the software. |
 
+**Note (v2, ADR-0006 / phase 18) — the native `devdraw` peer.** `zig build native` and `zig build
+devdraw` (macOS only) additionally need (a) **network once**, to fetch the pinned plan9port
+snapshot (`larryr/plan9port@337c6ac`) into Zig's global cache — a 22 MB tarball, which Zig then
+unpacks to the git-ignored `zig-pkg/<hash>/` (63 MB); offline, copy
+`~/.cache/zig/p/N-V-__8AAJxZ3wK-9yFlPu40838vwp3xUVQhAt1ebgXEhI3F.tar.gz` into place or use
+`zig build --system <dir>` with `<dir>/<hash>/` unpacked — and (b) the **macOS SDK** from the Xcode
+Command Line Tools, for the Cocoa/Metal headers and frameworks. R-BLD-02's "no system C compiler"
+still holds: Zig's bundled clang compiles all the C/ObjC. `zig build` and `zig build test` need
+neither — no network and no SDK — enforced by the phase-18 gate (`--system <empty dir>`).
+
 ## 3. Open questions
 
 - OQ-PLAT-1: Minimum browser versions to state officially — pin at time of first release.
@@ -30,3 +40,8 @@ Status: **Draft v1**
 ## 4. Revision log
 
 - **v1** — initial.
+- **v2** (2026-10-11, ADR-0006 / phase 18) — note under §2: `zig build native`/`zig build
+  devdraw` on macOS need network once (the pinned plan9port fetch) and the macOS SDK; `zig
+  build`/`zig build test` need neither. R-BLD-01's "identical commands and results" is
+  honestly narrowed for those two native targets: the bundled `devdraw` is macOS-only for now
+  (Linux uses `$DEVDRAW`/`$PLAN9`/`$PATH`); the default and test targets are unchanged.

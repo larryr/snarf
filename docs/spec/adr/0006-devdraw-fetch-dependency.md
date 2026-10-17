@@ -1,6 +1,6 @@
 # ADR-0006 — Fetch pinned plan9port to build a devdraw peer executable
 
-Status: **Proposed (2026-10-11), pending Larry's sign-off** · Supersedes: ADR-0002's Decision
+Status: **Accepted (2026-10-11, Larry's sign-off relayed by the orchestrator) · implemented by phase 18 (agents/contracts/phase18-devdraw-build.md)** · Supersedes: ADR-0002's Decision
 clause "`build.zig.zon` keeps an empty dependency table" — **only** for the single, narrowly
 scoped entry below; ADR-0002 otherwise stands. Satisfies: none yet (feedback into requirements
 on acceptance, below). Related: ADR-0001 (build entry point), ADR-0005 (two hosts, `devdraw`

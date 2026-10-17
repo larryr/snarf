@@ -13,6 +13,7 @@
 //!
 //!     wsys.zig      the drawfcall codec (pure)
 //!     Conn.zig      one connection: spawn, reader thread, tag mux, long polls
+//!     DevdrawPath.zig  which devdraw to spawn: $DEVDRAW, bundled, $PLAN9, $PATH
 //!     dev_draw.zig  9P `Ops` for /dev/draw  — forwards to Twrdraw/Trddraw
 //!     dev_input.zig 9P `Ops` for /dev/{mouse,kbd,cursor,snarf,label}
 //!
@@ -26,11 +27,13 @@ pub const wsys_enc = @import("devdraw/wsys_enc.zig");
 pub const Conn = wsys.Conn;
 pub const dev_draw = @import("devdraw/dev_draw.zig");
 pub const dev_input = @import("devdraw/dev_input.zig");
+pub const DevdrawPath = @import("devdraw/DevdrawPath.zig");
 
 test {
     _ = wsys;
     _ = Conn;
     _ = dev_draw;
     _ = dev_input;
+    _ = DevdrawPath;
     _ = @import("devdraw/clipboard_test.zig"); // #12 (SnarfDev2)
 }

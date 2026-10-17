@@ -148,16 +148,9 @@ pub const SpawnOptions = struct {
     label: []const u8 = "snarf",
     /// argv[0] for the child, purely cosmetic in `ps` (drawclient.c:104-119).
     argv0: []const u8 = "snarf",
+    /// The `devdraw` binary to exec — resolved by `DevdrawPath` (ADR-0006 §4).
+    path: []const u8,
 };
-
-/// Find the `devdraw` binary: `$DEVDRAW` (drawclient.c:96-98), else
-/// `$PLAN9/bin/devdraw`, else bare `devdraw` for the PATH search. The returned
-/// slice is owned by the caller's allocator.
-pub fn devdrawPath(gpa: std.mem.Allocator, env: *const std.process.Environ.Map) ![]u8 {
-    if (env.get("DEVDRAW")) |p| return gpa.dupe(u8, p);
-    if (env.get("PLAN9")) |p9| return std.fmt.allocPrint(gpa, "{s}/bin/devdraw", .{p9});
-    return gpa.dupe(u8, "devdraw");
-}
 
 /// Spawn `devdraw` and wire the pipes up. `env` is
 /// COPIED into the child's environment with `NOLIBTHREADDAEMONIZE=1` added —
@@ -165,22 +158,24 @@ pub fn devdrawPath(gpa: std.mem.Allocator, env: *const std.process.Environ.Map) 
 /// (drawclient.c:110-123, libthread/thread.c:729).
 pub fn spawn(self: *Conn, io: std.Io, env: *const std.process.Environ.Map, opts: SpawnOptions) !void {
     const gpa = self.gpa;
-    const path = try devdrawPath(gpa, env);
-    defer gpa.free(path);
-
     var child_env: std.process.Environ.Map = .init(gpa);
     defer child_env.deinit();
     for (env.keys(), env.values()) |k, v| try child_env.put(k, v);
     try child_env.put("NOLIBTHREADDAEMONIZE", "1");
 
     var child = try std.process.spawn(io, .{
-        .argv = &.{ path, opts.argv0, "(devdraw)" },
+        .argv = &.{ opts.path, opts.argv0, "(devdraw)" },
         .environ_map = &child_env,
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .inherit,
     });
-    errdefer child.kill(io);
+    // Kill through the local copy, then forget the stored one: `deinit` must
+    // not kill an already-reaped child again (ESRCH panics in Debug).
+    errdefer {
+        child.kill(io);
+        self.child = null;
+    }
 
     self.child = child;
     self.io = io;
@@ -463,4 +458,16 @@ test "conn: moveTo emits Tmoveto with the point" {
     const sent = script.frame(0).?.msg;
     try testing.expectEqual(@as(i32, 100), sent.tmoveto.x);
     try testing.expectEqual(@as(i32, 200), sent.tmoveto.y);
+}
+
+// Regression: a dead peer during startup used to be killed twice (ESRCH
+// panic in Debug) because `deinit` re-killed what `spawn`'s errdefer already
+// had; fails by panicking `deinit`, not by a wrong return, if that regresses.
+test "conn: a dead peer during startup is killed once, not twice" {
+    var c = Conn.init(testing.allocator);
+    defer c.deinit();
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    try testing.expectError(error.Closed, c.spawn(testing.io, &env, .{ .path = "/usr/bin/true" }));
+    try testing.expect(c.child == null);
 }
