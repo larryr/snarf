@@ -6,12 +6,22 @@
     // OQ-BLD-1 resolved: pin Zig 0.16.0 (ADR-0001 revision log). Keep in sync
     // with .zigversion. `zig version` must equal this.
     .minimum_zig_version = "0.16.0",
-    // ADR-0002: the dependency table stays EMPTY. Zig standard library only.
-    // Never add an entry here without an approved ADR-0002 amendment.
-    .dependencies = .{},
+    .dependencies = .{
+        // ADR-0006 (accepted 2026-10-11) — the ONE permitted entry, superseding ADR-0002's
+        // empty-table clause narrowly: the pinned reference fork, LAZY, consumed only by
+        // `zig build devdraw -Ddevdraw=true` (which `zig build native` runs) to build the
+        // devdraw PEER PROCESS. Nothing from it is linked into snarf or snarf-native; the
+        // wasm build graph and `zig build test` never touch it. Hash from `zig fetch <url>`.
+        .plan9port = .{
+            .url = "https://github.com/larryr/plan9port/archive/337c6acbfed51d8d9f08598c6cd398f53abcca7d.tar.gz",
+            .hash = "N-V-__8AAJxZ3wK-9yFlPu40838vwp3xUVQhAt1ebgXEhI3F",
+            .lazy = true,
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build",
         "src",
         "tools",
         "web",

@@ -1,6 +1,6 @@
 # ADR-0002 — External libraries: Zig std only
 
-Status: **Accepted** · Satisfies: R-OV-08, R-CON-01
+Status: **Accepted · Superseded in part by ADR-0006 (one lazy build.zig.zon entry: the pinned plan9port snapshot, consumed only by the devdraw peer build, never linked) — see there** · Satisfies: R-OV-08, R-CON-01
 
 ## Context
 

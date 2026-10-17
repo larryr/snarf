@@ -24,10 +24,12 @@ left as historical record, not retrofitted.)
    `build.zig.zon`), target `wasm32-freestanding`. `zig build` is the only build entry
    point; identical on macOS and Linux. No Emscripten, no WASI, no node/npm in the build.
 2. **Dependencies** (ADR-0002): **Zig standard library only.** The `build.zig.zon`
-   dependency table stays empty. 9P, the draw client, and the structural-regexp engine
-   are written in-project. Embedded assets (fonts) are fine with license notes. Never add
-   an external package without a new ADR that supersedes ADR-0002's empty-table clause,
-   approved by the user.
+   dependency table holds exactly one entry — ADR-0006's lazy, pinned plan9port
+   snapshot, consumed only by `zig build native`/`zig build devdraw` to build the
+   `devdraw` peer process, never linked into snarf or snarf-native. 9P, the draw client,
+   and the structural-regexp engine are written in-project. Embedded assets (fonts) are
+   fine with license notes. Never add an external package without a new ADR that
+   supersedes ADR-0002's empty-table clause, approved by the user.
 3. **Graphics** (ADR-0003): the editor core draws **only** by writing Plan 9 draw-protocol
    messages to `/dev/draw` (spec S-03). Only the device backend touches
    canvas/OffscreenCanvas. Never call browser APIs from `src/core`.
