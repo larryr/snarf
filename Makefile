@@ -4,6 +4,8 @@
 #   make            build snarf.wasm + web assets into zig-out/www
 #   make run        build, then serve at http://$(BIND):$(PORT) and open the browser
 #   make serve      build, then serve (no browser)
+#   make native     build snarf-native + the bundled devdraw peer (ADR-0006, macOS)
+#   make run-native run native, then launch it: the editor in a devdraw window
 #   make test       full native test suite (core+draw+ninep, no browser)
 #   make smoke      node smoke test against the built wasm
 #   make check      test + fmt check
@@ -27,7 +29,7 @@ else
   OPEN = xdg-open
 endif
 
-.PHONY: all build run serve test smoke fmt check clean small sizes
+.PHONY: all build run serve native run-native test smoke fmt check clean small sizes
 
 all: build
 
@@ -45,6 +47,16 @@ run: build
 serve: build
 	@echo "serving $(URL)  (Ctrl-C to stop)"
 	$(ZIG) build serve $(SERVE_FLAGS)
+
+# snarf-native + the bundled devdraw peer, built in-tree from the pinned
+# plan9port snapshot (ADR-0006, macOS only for now). No $PLAN9 install needed.
+native:
+	$(ZIG) build native
+
+# Builds (if needed) then runs the installed snarf-native, which resolves the
+# bundled devdraw beside it — a real window, no plan9port install required.
+run-native:
+	$(ZIG) build run-native
 
 test:
 	$(ZIG) build test --summary all
