@@ -35,9 +35,12 @@ recorded in `notes/snarfdev2/test-plans/README.md` §"PM decisions" (Q1, Q5, Q6)
 - **R-P20-2 — namespace wiring.** In `main_native.zig`: `HostFs.open(io, "/")`, serve,
   `ns.mount("/", …)` AND `ns.mount("/mnt/host", …)` (same client+root fid). `/dev` and
   `/mnt/snarf-self` mounts unchanged. The boot directory window (`openfile.readFile(…,
-  "/")`, `main_native.zig:~238`) now lists the real root — synthetic prefixes (`/dev`,
-  `/mnt`) are NOT in that listing (they're ns prefixes, not hostfs entries); accept and
-  document this in the as-built report.
+  "/")`, `main_native.zig:~238`) now lists the real root. ~~Synthetic prefixes (`/dev`,
+  `/mnt`) are NOT in that listing~~ — **CORRECTED 2026-10-26 (orchestrator): this claim
+  was wrong and untested.** `ListDirJob` concatenates synthetic mount-point children
+  with the union members' streams (S-02 §1.2, R-9P-16, implemented phase 12d), so
+  `dev/` and `mnt/` DO appear beside the real root entries. Pinned by test NFS-01b;
+  see the report's Correction section.
 - **R-P20-3 — hostfs grows what Q5 needs, nothing more.** Temp-file + rename-on-clunk
   for OTRUNC writes (and plain create for new files). Extend the FILE-LEVEL tests in
   `tools/origin/hostfs_native_test.zig`'s style for: atomic replace observed (old
