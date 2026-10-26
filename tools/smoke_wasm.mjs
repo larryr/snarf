@@ -162,7 +162,7 @@ check("dirty rect within framebuffer bounds", () =>
     ? last.x >= 0 && last.y >= 0 && last.x + last.w <= last.fbW && last.y + last.h <= last.fbH
     : "pending");
 
-// Phase 6: the boot scene is the acme-ivory ground fill over the whole
+// Phase 6: the boot scene is the ground fill over the whole
 // display (empty buffer) — the initial damage covers the full surface.
 check("dirty rect covers the full display", () =>
   last
@@ -172,10 +172,10 @@ check("dirty rect covers the full display", () =>
 check("blit ptr + fbW*fbH*4 <= memory size", () =>
   last ? last.ptr + last.fbW * last.fbH * 4 <= memory.buffer.byteLength : "pending");
 
-check("pixel (0,0) is the row-tag pale blue (0xEAFFFF)", () => {
+check("pixel (0,0) is the row-tag chocorua periwinkle (0xEEEEFF)", () => {
   if (!last) return "pending";
   const p = pixelAt(last.ptr, last.fbW, 0, 0);
-  return p.r === 234 && p.g === 255 && p.b === 255;
+  return p.r === 238 && p.g === 238 && p.b === 255;
 });
 
 // Phase 13b boot layout (acme.c:242-260): TWO columns, the left one EMPTY and
@@ -258,11 +258,11 @@ check("resize blit covers the full new display", () => {
   return b.x === 0 && b.y === 0 && b.w === RESIZE_W && b.h === RESIZE_H;
 });
 
-check("resized display still draws the row-tag pale blue at (0,0)", () => {
+check("resized display still draws the row-tag periwinkle at (0,0)", () => {
   const b = afterResize.find((x) => x.fbW === RESIZE_W && x.fbH === RESIZE_H);
   if (!b) return false;
   const p = pixelAt(b.ptr, b.fbW, 0, 0);
-  return p.r === 234 && p.g === 255 && p.b === 255;
+  return p.r === 238 && p.g === 238 && p.b === 255;
 });
 
 let pumpTrapped = false;
