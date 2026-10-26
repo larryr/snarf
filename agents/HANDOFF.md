@@ -23,7 +23,12 @@ one fact that had gone stale and wrong (PR creation — see below).
   recorded: synthetic mount points ARE listed in `/` (R-9P-16, pinned by NFS-01b) — the
   contract's contrary claim was wrong. **PR #42 MERGED (2026-10-26)**: `make install` names the
   installed binary `snarf` (build artifact stays `snarf-native`); startup/error log
-  prefix is now `snarf:`.
+  prefix is now `snarf:`. **Manually validated by Larry 2026-10-26**
+  (navigate tree, New→tag-path→Put creates on disk, B3 opens, edit/Put/Get) — issue #11
+  ready to close (PAT can't; Larry closes). Two UX facts worth re-telling users: macOS's
+  option-click-into-another-app hides the previous app (first B2 chord needs snarf focused
+  first), and window placement is acme's makenewwindow heuristic (activecol/seltext pick
+  the column, util.c:449-495, `place.zig`) — B3 clicks don't steer it, typing/B1 do.
 - **Phase 19 MERGED (PR #38, `7dc412d`, 2026-10-26)**: ADR-0007 + implementation in one
   squash (#37 closed as superseded — its ADR commits rode inside #38). Four NH-mountain
   schemes in `src/core/Palette.zig` — `sunapee` default, `whiteface`, `monadnock` (dark),
