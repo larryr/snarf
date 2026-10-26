@@ -170,3 +170,28 @@ No native screenshot was taken; pixel correctness rests on the headless spot che
    rename landed as follow-up commits rather than rewritten history. All gates were
    re-run after it: tests 776/792 passed (0 failed), smoke 40/40, and the native
    `-colors=sunapee` launch stayed alive. `-colors=chocorua` now exits 2.
+
+## Gate (sonnet, 2026-10-26)
+
+**Verdict: PASS WITH NOTES.**
+
+| Check | Result |
+|-------|--------|
+| Clean tree; only phase-19 commits (plus the ADR merge); no HANDOFF/NEXT-PHASES in diff | OK |
+| Palette.zig, 14 fields x 4 schemes vs R-P19-1 table, field by field | all 56 cells match; `default == &sunapee`; `names` = acme monadnock sunapee whiteface; `fromName` ok for 4 names, null for bogus/""/"Acme" |
+| R-P19-7: B2/B3 local solids live in `src/draw/frame/select.zig:410` (not src/core); diff empty. ACCEPT-6a/6b/7 hunks (accept.zig ~344-515) untouched; the 0xFFFFEAFF hits at :367/:398/:421/:461 are those fixtures | OK |
+| Goldens 8/9/10/12B/13B re-frozen; each scene calls `expectSunapee` (tag back 0xEEEEFFFF, body back 0xFFF2E5FF, scrollbar bord 0xA47F54FF) = 3 pixels matching the sunapee column; 8 and 13B also pin row tag (30,2) | OK |
+| `zig fmt --check`, `zig build`, `zig build native` | clean |
+| `zig build test --summary all` | 22/22 steps; 776/792 pass, 16 skip, 0 fail |
+| `node tools/smoke_wasm.mjs` | 40 pass, 0 fail |
+| `-colors=bogus` | exit 2, stderr lists the four names, no devdraw spawned |
+| No flag, acme, whiteface, monadnock, sunapee | each: alive after 2 s, bundled devdraw child present, killed by recorded PID, both gone |
+| web/index.html `#fff2e5`; no `#ffffea` in web/ or src/ outside Palette.zig acme preset | only hits are the ACCEPT-6a/6b/7 local fixtures (deliberate) |
+| Docs: S-07 tree (:111) and §6 (:222) name Palette.zig; README :28 documents -colors= with names; Chrome.zig header cites ADR-0007 | OK |
+
+**Adversarial check:** malformed/edge flags: `-colors=`, bare `-colors`, `-colors=ACME` (case), `-colors=acme -colors=bogus`, `-colors=bogus -colors=acme`. All exit 2 with the name list and spawn nothing (the last-wins/first-wins ordering cannot slip a bogus name through).
+
+**Notes (non-blocking):**
+1. Commit ordering: the spot-checks and new hashes were first introduced in 8ec5c24 on `chocorua`; the hashes were re-frozen again in 7239b38 for the sunapee rename (same values, new name). The final state satisfies R-P19-6 (hash and spot-checks agree), but the "one re-freeze" wording is literally two hash changes in history.
+2. The comments "which `Palette.acme` still reproduces byte-exact" are not backed by a test (accept_colors.zig has no acme golden-hash assertion). I did not verify the claim.
+3. Pre-existing unrelated `snarf-native` (pid 64998) and `devdraw` (pid 64999) from the user's own session were running before the gate. I left them alone, so the "no stray processes" grep is not empty. None of the gate's launches remain.
