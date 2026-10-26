@@ -231,6 +231,7 @@ const draw = @import("draw");
 const Frame = draw.Frame;
 const proto = draw.proto;
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const boot = @import("boot.zig");
 
 test "errors: errorName joins the directory" {
@@ -357,7 +358,7 @@ test "errors: flushWarnings grows a column in an empty row (T20)" {
     const a = testing.allocator;
     var fx = try Frame.TestFixture.init();
     defer fx.deinit();
-    var chrome = try Chrome.init(a, fx.disp, fx.font);
+    var chrome = try Chrome.init(a, fx.disp, fx.font, Palette.default);
     defer chrome.deinit();
     var row: Row = undefined;
     try row.init(chrome, proto.Rect.make(0, 0, 600, 460));

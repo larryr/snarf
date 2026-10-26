@@ -115,7 +115,7 @@ fn pack(c: *Column, w: *Window, i: usize, cr: Rect, nl: []const i32, ny: []i32) 
         if (nl[j0] != 0) r.max.y += 1 + nl[j0] * v.body.fr.font.height;
         r.min.y = try v.resize(r, c.safe, false); // cols.c:417 winresize
         r.max.y = r.min.y + bd;
-        try screen.draw(r, c.chrome.black, null, .{}); // cols.c:419
+        try screen.draw(r, c.chrome.rule, null, .{}); // cols.c:419
         y1 = r.max.y;
     }
 
@@ -145,7 +145,7 @@ fn pack(c: *Column, w: *Window, i: usize, cr: Rect, nl: []const i32, ny: []i32) 
     if (i + 1 < nw) { // cols.c:444-450
         r.min.y = r.max.y;
         r.max.y += bd;
-        try screen.draw(r, c.chrome.black, null, .{});
+        try screen.draw(r, c.chrome.rule, null, .{});
         const shift = y2 - r.max.y;
         for (ny[i + 1 ..]) |*v| v.* -= shift;
     }
@@ -163,7 +163,7 @@ fn pack(c: *Column, w: *Window, i: usize, cr: Rect, nl: []const i32, ny: []i32) 
         if (j + 1 < nw) { // no border under the last window (cols.c:461)
             vr.min.y = y1;
             vr.max.y += bd;
-            try screen.draw(vr, c.chrome.black, null, .{});
+            try screen.draw(vr, c.chrome.rule, null, .{});
             y1 = vr.max.y;
         }
     }

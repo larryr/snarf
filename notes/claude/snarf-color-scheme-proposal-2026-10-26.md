@@ -1,5 +1,14 @@
 # Snarf color scheme proposal — 2026-10-26
 
+**ADOPTED 2026-10-26 as ADR-0007** (`docs/spec/adr/0007-snarf-colors.md`) with Larry's
+renames — the schemes are named after New Hampshire mountains: A "Manila" → **`sunapee`**
+(default; renamed from the initial pick "chocorua" on 2026-10-26), B "Rio" →
+**`whiteface`**, C "Dusk" → **`monadnock`** (no longer deferred — it
+ships), and the original is **`-colors=acme`**. Selection is a native startup flag,
+`-colors=name`. The open questions in §7 are resolved by the ADR. This file remains the
+design record (token derivations, contrast math, migration table); the candidate letters
+and working names below are historical.
+
 Recommendation document only; no code changed. Ground truth for every Acme value and slot
 below is `notes/claude/acme-color-research-2026-10-26.md` ("the research notes"); citations
 of the form §1.2 point there. Snarf's live palette is `src/core/Chrome.zig:41-63`.

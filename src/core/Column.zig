@@ -21,6 +21,7 @@
 const std = @import("std");
 const draw = @import("draw");
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
@@ -65,7 +66,7 @@ pub fn init(c: *Column, chrome: *const Chrome, r: Rect) Error!void {
     c.row = null;
     c.safe = true; // cols.c:49
 
-    try screen.draw(r, chrome.white, null, .{}); // cols.c:32 white ground
+    try screen.draw(r, chrome.ground, null, .{}); // cols.c:32 ground
 
     // columntag over the top one-line strip (cols.c:39-42).
     var r1 = r;
@@ -78,7 +79,7 @@ pub fn init(c: *Column, chrome: *const Chrome, r: Rect) Error!void {
     // Border-px black band beneath the tag (cols.c:43-45).
     r1.min.y = r1.max.y;
     r1.max.y += Chrome.border;
-    try screen.draw(r1, chrome.black, null, .{}); // cols.c:45
+    try screen.draw(r1, chrome.rule, null, .{}); // cols.c:45
 
     // Header text + caret at the end (cols.c:46-47).
     try c.tag.insertAt(0, header, true); // textinsert
@@ -159,7 +160,7 @@ pub fn add(c: *Column, winid: *u32, body_file: *File, y_in: i32) Error!*Window {
         r1.min.y = try v.resize(r1, false, false); // cols.c:118 winresize
         // Border-px black band beneath v (cols.c:119-120).
         r1.max.y = r1.min.y + Chrome.border;
-        try screen.draw(r1, c.chrome.black, null, .{});
+        try screen.draw(r1, c.chrome.rule, null, .{});
         r.min.y = r1.max.y; // leave r with the new window's coordinates (cols.c:125)
     }
 
@@ -215,7 +216,7 @@ pub fn close(c: *Column, ed: *Editor, w: *Window, dofree: bool) Error!void {
 
     const nw = c.w.items.len;
     if (nw == 0) {
-        try screen.draw(r, c.chrome.white, null, .{}); // cols.c:184-187
+        try screen.draw(r, c.chrome.ground, null, .{}); // cols.c:184-187
         return;
     }
 
@@ -263,7 +264,7 @@ pub fn resize(c: *Column, r: Rect) Error!void {
     try screen.draw(c.tag.scrollr, c.chrome.colbutton, null, .{}); // cols.c:246
     r1.min.y = r1.max.y;
     r1.max.y += bd;
-    try screen.draw(r1, c.chrome.black, null, .{}); // cols.c:249 black band
+    try screen.draw(r1, c.chrome.rule, null, .{}); // cols.c:249 band
     r1.max.y = r.max.y; // cols.c:250
 
     const nw: i32 = @intCast(c.w.items.len);
@@ -283,7 +284,7 @@ pub fn resize(c: *Column, r: Rect) Error!void {
         r1.max.y = @max(r1.max.y, r1.min.y + bd + fh); // cols.c:264
         var r2 = r1;
         r2.max.y = r2.min.y + bd; // cols.c:266
-        try screen.draw(r2, c.chrome.black, null, .{}); // cols.c:267 black top band
+        try screen.draw(r2, c.chrome.rule, null, .{}); // cols.c:267 top band
         r1.min.y = r2.max.y; // cols.c:268
         r1.min.y = try w.resize(r1, false, is_last); // cols.c:269 winresize
     }
@@ -355,7 +356,7 @@ const ColHarness = struct {
         const h = try a.create(ColHarness);
         errdefer a.destroy(h);
         h.fx = try Frame.TestFixture.init();
-        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font);
+        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font, Palette.default);
         h.col = try a.create(Column);
         try h.col.init(h.chrome, r);
         h.bodies = .empty;

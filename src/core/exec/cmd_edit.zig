@@ -125,6 +125,7 @@ const File = @import("../File.zig");
 const Buffer = @import("../Buffer.zig");
 const Window = @import("../Window.zig");
 const Chrome = @import("../Chrome.zig");
+const Palette = @import("../Palette.zig");
 
 const win_rect = proto.Rect.make(0, 20, 300, 380);
 
@@ -142,7 +143,7 @@ const WinHarness = struct {
         const h = try a.create(WinHarness);
         errdefer a.destroy(h);
         h.fx = try Frame.TestFixture.init();
-        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font);
+        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font, Palette.default);
         h.body_file = File.init(a, try Buffer.initFromBytes(a, seed));
         try h.w.init(h.chrome, &h.body_file, 1, win_rect);
         _ = try h.w.resize(win_rect, false, false);

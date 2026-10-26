@@ -15,6 +15,7 @@
 const std = @import("std");
 const draw = @import("draw");
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
@@ -376,7 +377,7 @@ pub const WinHarness = struct {
         const h = try a.create(WinHarness);
         errdefer a.destroy(h);
         h.fx = try Frame.TestFixture.init();
-        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font);
+        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font, Palette.default);
         h.body_file = File.init(a, try Buffer.initFromBytes(a, seed));
         try h.w.init(h.chrome, &h.body_file, 1, r);
         return h;

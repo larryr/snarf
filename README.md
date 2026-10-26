@@ -13,17 +13,29 @@ showcase; native is the daily-driver target now.
 
 ## Native (primary)
 
-Pinned Zig, see `.zigversion`. `zig build native` builds `snarf-native`; `zig build
-run-native` runs it. It needs a `devdraw` to talk to:
+Pinned Zig, see `.zigversion`. `zig build native` builds `snarf-native` **and** its
+`devdraw` display server in-tree from a pinned plan9port snapshot (ADR-0006, macOS) — no
+plan9port install needed; the first build fetches once, `zig build`/`zig build test` stay
+network-free. `zig build run-native` runs it; `make install` puts both binaries side by
+side in `$(PREFIX)/bin` (default `~/.local/bin`). A deliberate `$DEVDRAW` still wins, and
+`$PLAN9`/`$PATH` remain fallbacks (resolution order in ADR-0006).
 
-- Today, that means a [plan9port](https://github.com/larryr/plan9port) install, found via
-  `$PLAN9/bin/devdraw` or `devdraw` on `$PATH`.
-- Building `devdraw` in-tree from a pinned plan9port snapshot — no separate install —
-  is implemented in [PR #24](https://github.com/larryr/snarf/pull/24) (ADR-0006), pending
-  merge. Until then, a **prebuilt preview** (native snarf + bundled `devdraw`, macOS
-  arm64 only, unsigned) is available for direct download from the
-  [`release/native-preview-2026-10-17`](https://github.com/larryr/snarf/raw/release/native-preview-2026-10-17/dist/snarf-native-preview-macos-arm64.zip)
-  branch (see that branch's `dist/README.md` for the Gatekeeper quarantine step).
+### Snarf Palette Options
+
+`snarf-native -colors=NAME` picks the color scheme at startup (ADR-0007, named after New
+Hampshire mountains); an unknown name exits listing the valid ones. The browser build
+always uses the default.
+
+| Name | Scheme | body / tag |
+|------|--------|------------|
+| `sunapee` | **default** — manila-paper body, periwinkle tag | `#FFF2E5` / `#EEEEFF` |
+| `whiteface` | rio's greys: white body, pale blue-green tag | `#FFFFFF` / `#E7FAFA` |
+| `monadnock` | dark: light text on near-black | `#22201C` / `#1C2228` |
+| `acme` | the original acme palette, byte-exact | `#FFFFEA` / `#EAFFFF` |
+
+Full token tables, contrast math, and the history (no, Pike never explained the yellow):
+[ADR-0007](docs/spec/adr/0007-snarf-colors.md),
+[`notes/claude/snarf-color-scheme-proposal-2026-10-26.md`](notes/claude/snarf-color-scheme-proposal-2026-10-26.md).
 
 `zig build test` runs everything natively, with no browser or devdraw dependency.
 
