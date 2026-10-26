@@ -17,12 +17,13 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
-- **Phase 20 native file save (issue #11), PR #41 OPEN** (`phase20-native-save`): full
-  pipeline done (fable → sonnet tests red-first → opus → sonnet gate PASS WITH NOTES →
-  fable fix: dirlock rename-failure now saves in place, test Q5-e). Host fs mounted at `/`
-  (acme-like, Larry 2026-10-26; `/mnt/host` alias), atomic Put in new `src/hostfs/` module
-  (PM Q5), Dump/Load came free. 818 tests 0 fail. Awaiting Larry's merge + post-merge
-  `make install` and a real-file Put check.
+- **Phase 20 MERGED (PR #41, 2026-10-26)**: native file save — host fs mounted at `/`
+  (acme-like) + `/mnt/host` alias; atomic Put in `src/hostfs/` (PM Q5; dirlock
+  rename-failure saves in place, Q5-e); Dump/Load work; 819 tests 0 fail. Correction
+  recorded: synthetic mount points ARE listed in `/` (R-9P-16, pinned by NFS-01b) — the
+  contract's contrary claim was wrong. **PR #42 OPEN**: `make install` names the installed
+  binary `snarf` (build artifact stays `snarf-native`). Cosmetic nit on offer: the
+  startup line's hardcoded `snarf-native:` prefix.
 - **Phase 19 MERGED (PR #38, `7dc412d`, 2026-10-26)**: ADR-0007 + implementation in one
   squash (#37 closed as superseded — its ADR commits rode inside #38). Four NH-mountain
   schemes in `src/core/Palette.zig` — `sunapee` default, `whiteface`, `monadnock` (dark),
