@@ -17,12 +17,12 @@ Pinned Zig, see `.zigversion`. `zig build native` builds `snarf-native` **and** 
 `devdraw` display server in-tree from a pinned plan9port snapshot (ADR-0006, macOS) — no
 plan9port install needed; the first build fetches once, `zig build`/`zig build test` stay
 network-free. `zig build run-native` runs it; `make install` puts both binaries side by
-side in `$(PREFIX)/bin` (default `~/.local/bin`). A deliberate `$DEVDRAW` still wins, and
+side in `$(PREFIX)/bin` (default `~/.local/bin`), installing `snarf-native` as `snarf`. A deliberate `$DEVDRAW` still wins, and
 `$PLAN9`/`$PATH` remain fallbacks (resolution order in ADR-0006).
 
 ### Snarf Palette Options
 
-`snarf-native -colors=NAME` picks the color scheme at startup (ADR-0007, named after New
+`snarf -colors=NAME` picks the color scheme at startup (ADR-0007, named after New
 Hampshire mountains); an unknown name exits listing the valid ones. The browser build
 always uses the default.
 
