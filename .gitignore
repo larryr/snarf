@@ -4,3 +4,4 @@ zig-out/
 .claude/
 zig-pkg/
 .worktrees/
+dist/
