@@ -16,7 +16,7 @@ const ninep = @import("ninep");
 const build_options = @import("build_options");
 const http = @import("http.zig");
 const WsTransport = @import("ws_transport.zig").WsTransport;
-const HostFs = @import("hostfs.zig").HostFs;
+const HostFs = @import("hostfs").HostFs;
 const Tree = @import("tree.zig").Tree;
 const Log = @import("log.zig").Log;
 

@@ -3,7 +3,7 @@
 //!   /
 //!   ├── version          "snarf-origin <ver>\n"
 //!   ├── bin/             services.zig — <name>/{ctl,output}
-//!   └── fs/              hostfs.zig — the export directory, read/write
+//!   └── fs/              hostfs.HostFs — the export directory, read/write
 //!
 //! One `Tree` per connection. Each fid carries a heap `Node` (`fid.ctx`); the
 //! synthetic nodes have fixed qid paths, host nodes carry their relative path
@@ -15,9 +15,11 @@ const msg = ninep.msg;
 const Qid = ninep.Qid;
 const Stat = ninep.stat;
 const OpError = ninep.errors.OpError;
-const HostFs = @import("hostfs.zig").HostFs;
+const hostfs = @import("hostfs");
+const HostFs = hostfs.HostFs;
+const Replace = hostfs.Replace;
 const services = @import("services.zig");
-const DirReader = @import("dirread.zig").DirReader;
+const DirReader = hostfs.DirReader;
 const Log = @import("log.zig").Log;
 
 pub const version_text = "snarf-origin 0.1\n";
@@ -38,7 +40,12 @@ pub const Node = union(enum) {
     svc_output: u8,
     /// Owned path relative to the export root; "" is `fs/` itself.
     host: []u8,
+    /// A host file opened OTRUNC: the atomic Put in flight (phase 20, PM Q5)
+    /// — committed or discarded at clunk (`hostfs.Replace`).
+    host_put: *HostPut,
 };
+
+pub const HostPut = struct { rel: []u8, put: Replace };
 
 pub const Tree = struct {
     gpa: std.mem.Allocator,
@@ -84,7 +91,15 @@ pub const Tree = struct {
 
     fn freeNode(self: *Tree, fid: *server.Fid) void {
         const p: *Node = @ptrCast(@alignCast(fid.ctx orelse return));
-        if (p.* == .host) self.gpa.free(p.host);
+        switch (p.*) {
+            .host => |rel| self.gpa.free(rel),
+            .host_put => |hp| {
+                hp.put.end(self.host, self.gpa); // commit or discard
+                self.gpa.free(hp.rel);
+                self.gpa.destroy(hp);
+            },
+            else => {},
+        }
         self.gpa.destroy(p);
         fid.ctx = null;
     }
@@ -92,6 +107,7 @@ pub const Tree = struct {
     fn dupNode(self: *Tree, node: Node) OpError!Node {
         return switch (node) {
             .host => |rel| .{ .host = self.gpa.dupe(u8, rel) catch return error.IoError },
+            .host_put => error.FidOpen, // the framework never clones an open fid
             else => node,
         };
     }
@@ -107,6 +123,7 @@ pub const Tree = struct {
             .svc_ctl => |i| .{ .path = q_ctl + i },
             .svc_output => |i| .{ .path = q_out + i },
             .host => |rel| self.host.qidOf(rel),
+            .host_put => |hp| self.host.qidOf(hp.rel),
         };
     }
 
@@ -118,6 +135,7 @@ pub const Tree = struct {
             .svc_ctl => .{ .qid = try self.qidOf(node), .mode = 0o222, .length = 0, .name = name },
             .svc_output => |i| .{ .qid = try self.qidOf(node), .mode = 0o444, .length = self.outputs.get(i).len, .name = name },
             .host => |rel| self.host.statOf(rel, name),
+            .host_put => |hp| self.host.statOf(hp.rel, name),
         };
     }
 
@@ -130,6 +148,7 @@ pub const Tree = struct {
             .svc_ctl => "ctl",
             .svc_output => "output",
             .host => |rel| if (rel.len == 0) "fs" else basename(rel),
+            .host_put => |hp| basename(hp.rel),
         };
     }
 
@@ -145,6 +164,7 @@ pub const Tree = struct {
             .svc_ctl => |i| std.fmt.bufPrint(buf, "bin/{s}/ctl", .{services.table[i].name}) catch "bin/?/ctl",
             .svc_output => |i| std.fmt.bufPrint(buf, "bin/{s}/output", .{services.table[i].name}) catch "bin/?/output",
             .host => |rel| if (rel.len == 0) "fs" else std.fmt.bufPrint(buf, "fs/{s}", .{rel}) catch "fs/…",
+            .host_put => |hp| std.fmt.bufPrint(buf, "fs/{s}", .{hp.rel}) catch "fs/…",
         };
     }
 
@@ -175,7 +195,7 @@ pub const Tree = struct {
         const up = eq(u8, name, "..");
         const next: Node = switch (cur.*) {
             .root => if (up) .root else if (eq(u8, name, "version")) .version else if (eq(u8, name, "bin")) .bin else if (eq(u8, name, "fs")) .{ .host = try self.hostPath("", "") } else return error.FileDoesNotExist,
-            .version, .svc_ctl, .svc_output => return error.WalkNoDir,
+            .version, .svc_ctl, .svc_output, .host_put => return error.WalkNoDir,
             .bin => if (up) .root else if (services.indexOf(name)) |i| .{ .svc = i } else return error.FileDoesNotExist,
             .svc => |i| if (up) .bin else if (eq(u8, name, "ctl")) .{ .svc_ctl = i } else if (eq(u8, name, "output")) .{ .svc_output = i } else return error.FileDoesNotExist,
             .host => |rel| try self.walkHost(rel, name, up),
@@ -238,9 +258,16 @@ pub const Tree = struct {
                         return error.PermissionDenied;
                     }
                 } else if ((mode & msg.OTRUNC) != 0) {
-                    try self.host.truncate(rel);
+                    // Atomic Put (phase 20, PM Q5): writes go to a temp file
+                    // renamed over `rel` at clunk; see `hostfs.Replace`.
+                    const hp = self.gpa.create(HostPut) catch return error.IoError;
+                    errdefer self.gpa.destroy(hp);
+                    hp.put = try Replace.begin(self.host, self.gpa, rel);
+                    hp.rel = rel; // ownership moves from the node
+                    nodeOf(fid).* = .{ .host_put = hp };
                 }
             },
+            .host_put => return error.FidOpen,
         }
         if (self.log != null) {
             var pb: [640]u8 = undefined;
@@ -324,6 +351,7 @@ pub const Tree = struct {
                 if ((try self.host.qidOf(rel)).qtype.dir) return self.host.readDir(rel, offset, buf);
                 return self.host.readFile(rel, offset, buf);
             },
+            .host_put => |hp| return hp.put.read(self.host, offset, buf),
         }
     }
 
@@ -349,6 +377,7 @@ pub const Tree = struct {
                 }
                 return self.host.writeFile(rel, offset, data);
             },
+            .host_put => |hp| return hp.put.write(self.host, offset, data),
             else => {
                 self.logDenied("write", node);
                 return error.PermissionDenied;

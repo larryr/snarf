@@ -160,6 +160,12 @@ src/
 │   ├── mount.zig            (~200) mount table / namespace
 │   ├── chan.zig             (~200) in-memory transport rings
 │   └── ws.zig               (~150) WebSocket transport framing
+├── hostfs/                  — the host file system as 9P (imports: ninep, std) [phase 20]
+│   ├── root.zig             module root (re-exports)
+│   ├── HostFs.zig           stateless host calls: stat/list/read/write/create   (moved from tools/origin/hostfs.zig)
+│   ├── Replace.zig          the atomic Put: temp + rename-on-clunk (PM Q5)
+│   ├── HostTree.zig         ninep.server.Ops with the export dir as root (native's `/`)
+│   └── dirread.zig          offset-addressed directory reads                 (moved from tools/origin/)
 ├── dev/                     — device servers (imports: ninep server, shim)
 │   ├── draw.zig             (~400) devdraw: image state, verb dispatch    [ref: 9/port/devdraw.c]
 │   ├── draw_backend.zig     (~250) OffscreenCanvas backend + headless backend
@@ -234,8 +240,12 @@ Allowed imports (anything not listed is a review error; no cycles by constructio
   thing — `dev.input.formatMouseRec`, the 49-byte `/dev/mouse` record — so the two hosts
   cannot drift in what a record is. It never imports `shim` (that is the browser's
   boundary, not this one).
+- `hostfs/*` → `ninep/server|msg|stat|errors`, `std` — the host file system as 9P (phase
+  20). A host-side layer like `host/*`: never imported by `core`, `draw` or `ninep`.
+  Consumed by `main_native.zig` (mounted at `/` and `/mnt/host`), by the origin server
+  (`tools/origin`, under `fs/`) and by the cross-module accept test root.
 - `shim/*` → `std` only
-- `main_wasm.zig` → everything except `host`; `main_native.zig` → everything except `shim`
+- `main_wasm.zig` → everything except `host` and `hostfs`; `main_native.zig` → everything except `shim`
 
 `core` importing `dev`, `host` or `shim` is forbidden — that is the R-CON-02 boundary that keeps
 the editor natively testable. Mechanically: `zig build test` compiles `core`+`draw`+
@@ -256,6 +266,12 @@ Diagram source: [diagrams/module-deps.puml](diagrams/module-deps.puml)
 | §4–§5 tree & mapping | S-00 §3 (owns the detail now) |
 | §6 dependency rules | R-OV-03, R-CON-02 |
 
+> Revision log: 2026-10-26 — §4 gains `src/hostfs/` and §6 the `hostfs/*` line: phase 20
+> moved `tools/origin/hostfs.zig` (→ `HostFs.zig`) and `dirread.zig` into their own build
+> module so the origin server and the native host serve the same code (contract
+> `agents/contracts/phase20-native-save.md` R-P20-1). The module root is `root.zig`
+> because `hostfs.zig` and `HostFs.zig` collide on case-insensitive file systems (macOS).
+>
 > Revision log: 2026-09-14 — §6 gains the `host/*` line (the native host's device layer,
 > ADR-0005 / phase 15) and the two entry-point lines are made symmetric: each host's glue
 > is invisible to the other and to `core`. Per agents/contracts/phase15-native-spike.md

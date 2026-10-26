@@ -9,31 +9,16 @@
 //! where #11 finally mounts it (PM Q1: per #11 spec text; checklist step 4
 //! conflict is TBD pending Larry). Paths are under the tree's `fs/`.
 //!
-//! EXPECTED-FAIL: `native_fs_landed` is false until #11 merges. `xfail`
-//! skips when the check fails and FAILS if it unexpectedly passes, so the
-//! landing PR must flip the flag.
+//! The one EXPECTED-FAIL test (`NFS-10b`, gated on a `native_fs_landed`
+//! flag) was replaced in phase 20 by a plain test of the orchestrator's
+//! ruling on the empty Put (see that test).
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const ninep = @import("ninep");
 const msg = ninep.msg;
-const HostFs = @import("hostfs.zig").HostFs;
+const HostFs = @import("hostfs").HostFs;
 const tree = @import("tree.zig");
-
-/// Flip to true in the PR that lands #11.
-const native_fs_landed = false;
-
-fn xfail(ok: bool) !void {
-    if (native_fs_landed) {
-        if (!ok) return error.TestUnexpectedResult;
-        return;
-    }
-    if (ok) {
-        std.debug.print("hostfs_native_test: now passes; set native_fs_landed = true\n", .{});
-        return error.UnexpectedPassFlipFlag;
-    }
-    return error.SkipZigTest;
-}
 
 fn pump(ctx: *anyopaque) anyerror!void {
     const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
@@ -281,17 +266,171 @@ test "hostfs-native NFS-16: a 5 MB file round-trips through 9P" {
     try testing.expect(std.mem.eql(u8, big, got));
 }
 
-test "hostfs-native NFS-10b: Put is atomic — an interrupted Put keeps the old file (PM Q5, expected-fail)" {
-    // Today Put is open(OTRUNC)+write: a client that dies after Topen and
-    // before the first Twrite leaves an EMPTY file. PM Q5 requires temp+rename,
-    // so the old contents must survive. Simulated by OTRUNC-open then clunk.
+test "hostfs-native NFS-10b: OTRUNC open + clunk with no write is an EMPTY Put, committed atomically" {
+    // Phase 20 ruling (orchestrator, contract clarification of PM Q5): an
+    // OTRUNC open followed by a clean clunk with ZERO writes is acme putting an
+    // empty buffer (exec.c:727 create + no writes + close), so the file ends
+    // EMPTY — exactly as acme leaves it. Atomicity protects against FAILED
+    // Puts (a failed Twrite poisons the fid: Q5-b), not against empty ones.
+    // This test previously asserted the old bytes survive (an xfail written
+    // before the ruling); that contradicted the contract and was corrected.
     const h = try TempExport.create();
     defer h.destroy();
     try h.seed("keep.txt", "precious\n");
     const fid = try h.walkFs("keep.txt");
     _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    const d0 = try h.disk("keep.txt");
+    defer testing.allocator.free(d0);
+    try testing.expectEqualStrings("precious\n", d0); // untouched until clunk
     try h.cl.clunk(fid);
     const d = try h.disk("keep.txt");
     defer testing.allocator.free(d);
-    try xfail(std.mem.eql(u8, d, "precious\n"));
+    try testing.expectEqualStrings("", d);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 20 (R-P20-3, PM Q5): hostfs makes Put atomic. An OTRUNC open of an
+// existing file must NOT touch it: bytes go to a same-directory temp file that
+// is renamed over the original on clunk; a failure before clunk discards the
+// temp. New files are created `0666 & ~umask`. These are real tests (not
+// `xfail`): they FAIL until the implementation lands.
+// ---------------------------------------------------------------------------
+
+fn umaskNow() u32 {
+    if (builtin.os.tag == .linux) {
+        const old: u32 = @intCast(std.os.linux.syscall1(.umask, 0o022));
+        _ = std.os.linux.syscall1(.umask, old);
+        return old;
+    }
+    const old: u32 = @intCast(std.c.umask(0o022));
+    _ = std.c.umask(@intCast(old));
+    return old;
+}
+
+/// Sorted, space-joined names in the export root. Caller frees.
+fn listRoot(h: *TempExport) ![]u8 {
+    const a = testing.allocator;
+    var d = try h.tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+    defer d.close(testing.io);
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| a.free(n);
+        names.deinit(a);
+    }
+    var it = d.iterate();
+    while (try it.next(testing.io)) |e| try names.append(a, try a.dupe(u8, e.name));
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lt(_: void, x: []u8, y: []u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.lt);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    for (names.items, 0..) |n, i| {
+        if (i > 0) try out.append(a, ' ');
+        try out.appendSlice(a, n);
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn expectDisk(h: *TempExport, rel: []const u8, want: []const u8) !void {
+    const d = try h.disk(rel);
+    defer testing.allocator.free(d);
+    try testing.expectEqualStrings(want, d);
+}
+
+/// A write that must fail: far past any file-size limit.
+const unwritable_offset: u64 = 1 << 62;
+
+test "hostfs-native Q5-a: atomic replace — old bytes stay readable until clunk, new ones appear at clunk" {
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("keep.txt", "old\n");
+    const fid = try h.walkFs("keep.txt");
+    _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    try expectDisk(h, "keep.txt", "old\n"); // open(OTRUNC) alone must not truncate
+    _ = try h.cl.write(fid, 0, "brand new content\n");
+    try expectDisk(h, "keep.txt", "old\n"); // still the old file mid-write
+    // And a concurrent reader through 9P sees the old file too.
+    const rd = try h.read9p("keep.txt");
+    defer testing.allocator.free(rd);
+    try testing.expectEqualStrings("old\n", rd);
+    try h.cl.clunk(fid);
+    try expectDisk(h, "keep.txt", "brand new content\n");
+}
+
+test "hostfs-native Q5-b: a failure before clunk keeps the old file (shorter and longer)" {
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("keep.txt", "precious\n");
+    const fid = try h.walkFs("keep.txt");
+    _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    _ = try h.cl.write(fid, 0, "partial");
+    if (h.cl.write(fid, unwritable_offset, "x")) |_| {
+        return error.FailureInjectionDidNotFail;
+    } else |_| {}
+    try h.cl.clunk(fid); // clunk after a failed write must DISCARD, not commit
+    try expectDisk(h, "keep.txt", "precious\n");
+}
+
+test "hostfs-native Q5-c: no temp-file litter after a successful or a failed atomic Put" {
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("ok.txt", "old\n");
+    try h.seed("bad.txt", "old\n");
+    try h.put9p("ok.txt", "new\n");
+    {
+        const fid = try h.walkFs("bad.txt");
+        _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+        _ = try h.cl.write(fid, 0, "partial");
+        _ = h.cl.write(fid, unwritable_offset, "x") catch {};
+        try h.cl.clunk(fid);
+    }
+    const names = try listRoot(h);
+    defer testing.allocator.free(names);
+    try testing.expectEqualStrings("bad.txt ok.txt", names);
+    try expectDisk(h, "ok.txt", "new\n");
+}
+
+test "hostfs-native Q5-d: a new file is created 0666 & ~umask" {
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.put9p("fresh.txt", "x");
+    const st = try h.tmp.dir.statFile(testing.io, "fresh.txt", .{});
+    const mode: u32 = @intCast(st.permissions.toMode());
+    try testing.expectEqual(@as(u32, 0o666 & ~umaskNow()), mode & 0o777);
+    const names = try listRoot(h);
+    defer testing.allocator.free(names);
+    try testing.expectEqualStrings("fresh.txt", names);
+}
+
+test "hostfs-native Q5-d2: atomic replace preserves the existing file's mode" {
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("m.txt", "old\n");
+    var f = try h.tmp.dir.openFile(testing.io, "m.txt", .{});
+    try f.setPermissions(testing.io, .fromMode(0o640));
+    f.close(testing.io);
+    try h.put9p("m.txt", "new\n");
+    try expectDisk(h, "m.txt", "new\n");
+    const st = try h.tmp.dir.statFile(testing.io, "m.txt", .{});
+    const mode: u32 = @intCast(st.permissions.toMode());
+    try testing.expectEqual(@as(u32, 0o640), mode & 0o777);
+}
+
+test "hostfs-native Q5-e: rename blocked at clunk (dir locked mid-Put) still saves in place" {
+    // The gate's dirlock probe: the directory goes read-only AFTER the OTRUNC
+    // open, so the commit rename at clunk fails. The orchestrator fix copies
+    // the temp's bytes over the original in place — the save happens,
+    // non-atomically; a temp file may linger in the locked directory.
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("keep.txt", "old\n");
+    const fid = try h.walkFs("keep.txt");
+    _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    _ = try h.cl.write(fid, 0, "saved anyway\n");
+    try h.tmp.dir.setPermissions(testing.io, .fromMode(0o555));
+    defer h.tmp.dir.setPermissions(testing.io, .fromMode(0o700)) catch {};
+    try h.cl.clunk(fid);
+    try expectDisk(h, "keep.txt", "saved anyway\n");
 }
