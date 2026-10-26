@@ -6,6 +6,8 @@
 #   make serve      build, then serve (no browser)
 #   make native     build snarf-native + the bundled devdraw peer (ADR-0006, macOS)
 #   make run-native run native, then launch it: the editor in a devdraw window
+#   make install    install snarf-native + devdraw to $(PREFIX)/bin (default ~/.local/bin)
+#   make uninstall  remove them from $(PREFIX)/bin
 #   make test       full native test suite (core+draw+ninep, no browser)
 #   make smoke      node smoke test against the built wasm
 #   make check      test + fmt check
@@ -19,6 +21,7 @@ ZIG    ?= zig
 PORT   ?= 8017
 BIND   ?= 127.0.0.1
 EXPORT ?= $(CURDIR)
+PREFIX ?= $(HOME)/.local
 URL     = http://$(BIND):$(PORT)
 
 SERVE_FLAGS = -Dport=$(PORT) -Dbind=$(BIND) -Dexport=$(EXPORT)
@@ -29,7 +32,7 @@ else
   OPEN = xdg-open
 endif
 
-.PHONY: all build run serve native run-native test smoke fmt check clean small sizes
+.PHONY: all build run serve native run-native install uninstall test smoke fmt check clean small sizes
 
 all: build
 
@@ -57,6 +60,21 @@ native:
 # bundled devdraw beside it — a real window, no plan9port install required.
 run-native:
 	$(ZIG) build run-native
+
+# snarf-native + devdraw land in the SAME directory ($(PREFIX)/bin) because
+# the bundled-devdraw lookup is resolved relative to snarf-native's own
+# executable path (ADR-0006) — they can't be split across directories.
+install:
+	$(ZIG) build native --prefix $(PREFIX)
+	@echo "installed snarf-native + devdraw to $(PREFIX)/bin"
+	@case ":$$PATH:" in \
+	  *":$(PREFIX)/bin:"*) ;; \
+	  *) echo "note: $(PREFIX)/bin is not on your PATH" ;; \
+	esac
+
+uninstall:
+	rm -f $(PREFIX)/bin/snarf-native $(PREFIX)/bin/devdraw
+	@echo "removed snarf-native + devdraw from $(PREFIX)/bin"
 
 test:
 	$(ZIG) build test --summary all
