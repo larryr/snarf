@@ -21,9 +21,9 @@ one fact that had gone stale and wrong (PR creation — see below).
   (acme-like) + `/mnt/host` alias; atomic Put in `src/hostfs/` (PM Q5; dirlock
   rename-failure saves in place, Q5-e); Dump/Load work; 819 tests 0 fail. Correction
   recorded: synthetic mount points ARE listed in `/` (R-9P-16, pinned by NFS-01b) — the
-  contract's contrary claim was wrong. **PR #42 OPEN**: `make install` names the installed
-  binary `snarf` (build artifact stays `snarf-native`). Cosmetic nit on offer: the
-  startup line's hardcoded `snarf-native:` prefix.
+  contract's contrary claim was wrong. **PR #42 MERGED (2026-10-26)**: `make install` names the
+  installed binary `snarf` (build artifact stays `snarf-native`); startup/error log
+  prefix is now `snarf:`.
 - **Phase 19 MERGED (PR #38, `7dc412d`, 2026-10-26)**: ADR-0007 + implementation in one
   squash (#37 closed as superseded — its ADR commits rode inside #38). Four NH-mountain
   schemes in `src/core/Palette.zig` — `sunapee` default, `whiteface`, `monadnock` (dark),
