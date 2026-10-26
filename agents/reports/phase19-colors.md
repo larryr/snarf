@@ -5,7 +5,7 @@ Contract: `agents/contracts/phase19-colors.md` · Decision: ADR-0007 · Branch
 
 ## What landed
 
-- `src/core/Palette.zig` (new, 222 lines): 14 `Color` fields; `chocorua` (default),
+- `src/core/Palette.zig` (new, 222 lines): 14 `Color` fields; `sunapee` (default),
   `whiteface`, `monadnock`, `acme` with the R-P19-1 values; `default`, `names` (sorted),
   `fromName`. It also holds the pure flag parser: `Palette.parseFlag(arg) Flag`, where
   `Flag` is `{ other, palette, unknown }`. The `mix()` helper moved here, and its tests
@@ -77,7 +77,7 @@ They are kept as R-P19-2 directs.
 | FROZEN-ACCEPT-13B | 0x35f686fc5162d2cf | 0x3b4981b48586f66c |
 
 **Spot checks.** Each new hash landed in the same commit (8ec5c24) as its spot checks.
-`expectChocorua(hb, w)` asserts three pixels for a window: the tag back `EEEEFF`
+`expectSunapee(hb, w)` asserts three pixels for a window: the tag back `EEEEFF`
 (tag-frame top-right), the body back `FFF2E5` (body-frame bottom-right), and the body
 scrollbar BORD `A47F54` (the strip's rightmost column, scrl.c:73-76). Each scene calls it
 as follows:
@@ -91,8 +91,8 @@ as follows:
 | 13B | `/` dir window | (30,2) = `EEEEFF` |
 
 **Byte-exactness proof (not committed).** I temporarily set
-`Palette.default = &acme` and stubbed the chocorua checks. All five OLD hashes then
-passed, and the only failure was the default-is-chocorua unit test. So the refactor
+`Palette.default = &acme` and stubbed the sunapee checks. All five OLD hashes then
+passed, and the only failure was the default-is-sunapee unit test. So the refactor
 itself is draw-stream-identical, and the palette values are the only change.
 
 Untouched, as R-P19-7 requires: ACCEPT-6a/6b/7 and their local solids in `accept.zig`,
@@ -102,8 +102,8 @@ and all of `select.zig`. The `Editor.zig` write-stream hash did not move.
 
 - **Palette.zig:**
   - `fromName`: all four names resolve; bogus, empty and wrong-case names give null;
-    `default == &chocorua`; `names` is sorted.
-  - `mix` derivations: chocorua body = `mix(FFCC99)` and tag = `mix(BBBBFF)`; acme
+    `default == &sunapee`; `names` is sorted.
+  - `mix` derivations: sunapee body = `mix(FFCC99)` and tag = `mix(BBBBFF)`; acme
     body = `mix(FFFFAA)` and tag = `mix(AAFFFF)`; whiteface tag = `mix(9EEEEE)` =
     `E7FAFA`.
   - acme's draw.h values, and the but2/but3/rule values that are the same in every
@@ -140,7 +140,7 @@ and all of `select.zig`. The `Editor.zig` write-stream hash did not move.
 line, and were killed by recorded PID. Afterwards no stray process remained.
 
 **Failure launches.** `-colors=bogus`, `-colors=` and `-colors` each exit 2 with:
-`snarf-native: unknown color scheme "…"; -colors= takes one of: acme chocorua monadnock whiteface`.
+`snarf-native: unknown color scheme "…"; -colors= takes one of: acme monadnock sunapee whiteface`.
 
 No native screenshot was taken; pixel correctness rests on the headless spot checks.
 
@@ -164,3 +164,9 @@ No native screenshot was taken; pixel correctness rests on the headless spot che
    may be a stale `lastsr` memo, or a `coladd` back-fill after `scrDraw`, on the
    test-only `addWindow` path. It is worth a ticket. The smoke uses the non-dir boot
    plus `row.add` instead.
+6. **Rename (user direction, mid-phase):** the default scheme `chocorua` became
+   `sunapee` (Mt. Sunapee). Its values are unchanged and it is still the default; the
+   golden hashes are unaffected. `names` is now `acme monadnock sunapee whiteface`. The
+   rename landed as follow-up commits rather than rewritten history. All gates were
+   re-run after it: tests 776/792 passed (0 failed), smoke 40/40, and the native
+   `-colors=sunapee` launch stayed alive. `-colors=chocorua` now exits 2.

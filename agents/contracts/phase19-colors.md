@@ -11,11 +11,11 @@ tables) and §6 (migration table); acme facts:
 - **R-P19-1 — `src/core/Palette.zig`, new file, file-as-struct.** Fields (all
   `draw.proto.Color`): `body_back, body_high, body_bord, body_text, tag_back, tag_high,
   tag_bord, tag_text, mod, col_button, but2, but3, ground, rule`. Decls: the four preset
-  constants, `pub const default: *const Palette = &chocorua;`, `pub const names` (the
+  constants, `pub const default: *const Palette = &sunapee;`, `pub const names` (the
   four names, sorted), and `pub fn fromName([]const u8) ?*const Palette`. Values
   (0xRRGGBBFF; per ADR-0007 / proposal §2):
 
-  | field | chocorua | whiteface | monadnock | acme |
+  | field | sunapee | whiteface | monadnock | acme |
   |-------|----------|-----------|-----------|------|
   | body_back | FFF2E5 | FFFFFF | 22201C | FFFFEA |
   | body_high | F2D2A8 | CCCCCC | 4A4436 | EEEE9E |
@@ -66,7 +66,7 @@ tables) and §6 (migration table); acme facts:
   line 17). `main_wasm`/browser boot path uses `Palette.default` explicitly.
 
 - **R-P19-6 — goldens.** FROZEN-ACCEPT-8 (accept.zig:581), -9 (:690), -10 (:1063),
-  -12B (:866), -13B (:1328) re-freeze ONCE against chocorua. Pre-authorized by the
+  -12B (:866), -13B (:1328) re-freeze ONCE against sunapee. Pre-authorized by the
   orchestrator **only after** each scene gains (or already has) at least 3 permanent
   pixel assertions proving the new palette is actually in the frame (body back
   0xFFF2E5FF, tag back 0xEEEEFFFF, and one of high/bord where the scene shows one) —
@@ -78,10 +78,10 @@ tables) and §6 (migration table); acme facts:
   `agents/HANDOFF.md` and `agents/NEXT-PHASES.md` are off-limits to pipeline agents.
 
 - **R-P19-8 — new tests.** (a) `Palette.fromName`: all four names resolve, a bogus name
-  is null, `default == &chocorua`. (b) Value tests: chocorua/acme backs equal
+  is null, `default == &sunapee`. (b) Value tests: sunapee/acme backs equal
   `mix(nominal)` with the existing `mix()` helper (move it with the values or keep in
   Chrome tests — either, but it must still prove the tint derivation:
-  chocorua body = mix(0xFFCC99FF), tag = mix(0xBBBBFFFF); acme body = mix(0xFFFFAAFF),
+  sunapee body = mix(0xFFCC99FF), tag = mix(0xBBBBFFFF); acme body = mix(0xFFFFAAFF),
   tag = mix(0xAAFFFFFF)); whiteface tag_back = mix(0x9EEEEEFF) = 0xE7FAFAFF. (c) A
   monadnock smoke: assemble the boot scene with `&Palette.monadnock`, spot-check ≥4
   pixels (body back, tag back, ground, one text pixel ≠ black-on-dark). No golden hash
