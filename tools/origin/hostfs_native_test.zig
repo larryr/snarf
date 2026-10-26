@@ -9,31 +9,16 @@
 //! where #11 finally mounts it (PM Q1: per #11 spec text; checklist step 4
 //! conflict is TBD pending Larry). Paths are under the tree's `fs/`.
 //!
-//! EXPECTED-FAIL: `native_fs_landed` is false until #11 merges. `xfail`
-//! skips when the check fails and FAILS if it unexpectedly passes, so the
-//! landing PR must flip the flag.
+//! The one EXPECTED-FAIL test (`NFS-10b`, gated on a `native_fs_landed`
+//! flag) was replaced in phase 20 by a plain test of the orchestrator's
+//! ruling on the empty Put (see that test).
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const ninep = @import("ninep");
 const msg = ninep.msg;
-const HostFs = @import("hostfs.zig").HostFs;
+const HostFs = @import("hostfs").HostFs;
 const tree = @import("tree.zig");
-
-/// Flip to true in the PR that lands #11.
-const native_fs_landed = false;
-
-fn xfail(ok: bool) !void {
-    if (native_fs_landed) {
-        if (!ok) return error.TestUnexpectedResult;
-        return;
-    }
-    if (ok) {
-        std.debug.print("hostfs_native_test: now passes; set native_fs_landed = true\n", .{});
-        return error.UnexpectedPassFlipFlag;
-    }
-    return error.SkipZigTest;
-}
 
 fn pump(ctx: *anyopaque) anyerror!void {
     const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
@@ -281,19 +266,26 @@ test "hostfs-native NFS-16: a 5 MB file round-trips through 9P" {
     try testing.expect(std.mem.eql(u8, big, got));
 }
 
-test "hostfs-native NFS-10b: Put is atomic — an interrupted Put keeps the old file (PM Q5, expected-fail)" {
-    // Today Put is open(OTRUNC)+write: a client that dies after Topen and
-    // before the first Twrite leaves an EMPTY file. PM Q5 requires temp+rename,
-    // so the old contents must survive. Simulated by OTRUNC-open then clunk.
+test "hostfs-native NFS-10b: OTRUNC open + clunk with no write is an EMPTY Put, committed atomically" {
+    // Phase 20 ruling (orchestrator, contract clarification of PM Q5): an
+    // OTRUNC open followed by a clean clunk with ZERO writes is acme putting an
+    // empty buffer (exec.c:727 create + no writes + close), so the file ends
+    // EMPTY — exactly as acme leaves it. Atomicity protects against FAILED
+    // Puts (a failed Twrite poisons the fid: Q5-b), not against empty ones.
+    // This test previously asserted the old bytes survive (an xfail written
+    // before the ruling); that contradicted the contract and was corrected.
     const h = try TempExport.create();
     defer h.destroy();
     try h.seed("keep.txt", "precious\n");
     const fid = try h.walkFs("keep.txt");
     _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    const d0 = try h.disk("keep.txt");
+    defer testing.allocator.free(d0);
+    try testing.expectEqualStrings("precious\n", d0); // untouched until clunk
     try h.cl.clunk(fid);
     const d = try h.disk("keep.txt");
     defer testing.allocator.free(d);
-    try xfail(std.mem.eql(u8, d, "precious\n"));
+    try testing.expectEqualStrings("", d);
 }
 
 // ---------------------------------------------------------------------------

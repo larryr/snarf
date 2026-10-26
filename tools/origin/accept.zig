@@ -17,8 +17,8 @@ test {
     testing.refAllDecls(@This());
     _ = @import("http.zig");
     _ = @import("ws_transport.zig");
-    _ = @import("dirread.zig");
-    _ = @import("hostfs.zig");
+    // dirread.zig + hostfs.zig moved to the `hostfs` module (src/hostfs/,
+    // phase 20); their tests run under that module's own test root.
     _ = @import("hostfs_native_test.zig"); // #11 harness (SnarfDev2)
     _ = @import("log.zig");
     _ = services;

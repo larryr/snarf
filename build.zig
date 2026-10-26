@@ -71,6 +71,17 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // The host file system as 9P (phase 20, R-P20-1): `HostFs` + the atomic
+    // Put + a root-level tree. Shared by the origin server (`fs/`) and the
+    // native host (mounted at `/`). It touches the host file system, so it is
+    // a host-side layer like `host`: `core`/`draw`/`ninep` never import it.
+    const hostfs = b.addModule("hostfs", .{
+        .root_source_file = b.path("src/hostfs/root.zig"),
+        .imports = &.{
+            .{ .name = "ninep", .module = ninep },
+        },
+    });
+
     // --- snarf.wasm: freestanding, exports init/wake/tick (S-06 §2). ---
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -128,6 +139,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "ninep", .module = ninep },
                 .{ .name = "dev", .module = dev },
                 .{ .name = "host", .module = host },
+                .{ .name = "hostfs", .module = hostfs },
             },
         }),
     });
@@ -174,7 +186,7 @@ pub fn build(b: *std.Build) void {
     // --- zig build serve: the origin server (S-02 §5, S-06 §3) — static
     //     zig-out/www with application/wasm + COOP/COEP, plus 9P2000 over
     //     WebSocket at /9p exporting `-Dexport` (default: this repo). Host
-    //     tool, outside the editor module graph; std-only. ---
+    //     tool, outside the editor module graph; std + ninep + hostfs. ---
     const port = b.option(u16, "port", "Port for `zig build serve` (default 8017)") orelse 8017;
     const bind = b.option([]const u8, "bind", "Bind address for `zig build serve` (default 127.0.0.1; use 0.0.0.0 for all interfaces)") orelse "127.0.0.1";
     const export_dir = b.option([]const u8, "export", "Directory served read/write at /9p `fs/` (default: the repo root)") orelse b.build_root.path orelse ".";
@@ -191,6 +203,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "ninep", .module = ninep },
+                .{ .name = "hostfs", .module = hostfs },
                 .{ .name = "build_options", .module = serve_opts.createModule() },
             },
         }),
@@ -227,6 +240,10 @@ pub fn build(b: *std.Build) void {
     // The bundled-devdraw file table's count assertions (phase 18, §3c). A
     // build-time helper, std-only; testing it touches no dependency.
     addModuleTests(b, test_step, target, optimize, "build/devdraw_files.zig", &.{});
+    // The host file system as 9P, atomic Put included (phase 20).
+    addModuleTests(b, test_step, target, optimize, "src/hostfs/root.zig", &.{
+        .{ .name = "ninep", .module = ninep },
+    });
     // The `/mnt/origin` state machine over a scripted browser (R-P12-9a).
     addModuleTests(b, test_step, target, optimize, "src/origin/origin.zig", &.{
         .{ .name = "ninep", .module = ninep },
@@ -236,6 +253,7 @@ pub fn build(b: *std.Build) void {
     // (real listener, real WebSocket, real ninep.Client) rooted at accept.zig.
     addModuleTests(b, test_step, target, optimize, "tools/origin/accept.zig", &.{
         .{ .name = "ninep", .module = ninep },
+        .{ .name = "hostfs", .module = hostfs },
         .{ .name = "build_options", .module = serve_opts.createModule() },
     });
     // Cross-module acceptance tests (orchestrator-owned): the one root where
@@ -245,6 +263,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "draw", .module = draw },
         .{ .name = "ninep", .module = ninep },
         .{ .name = "dev", .module = dev },
+        .{ .name = "hostfs", .module = hostfs }, // phase 20: the real HostTree behind accept_hostfs.zig
         .{ .name = "shim", .module = shim }, // test_blit seam (phase-5); core's no-shim boundary is separately guarded
         .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
     });
