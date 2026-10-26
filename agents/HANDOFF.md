@@ -17,14 +17,17 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
-- **Papers + palette, PR #36 open** (`papers-pike-rsc-2026-10-26`): owns `docs/acme/{utf,9,p9p-changes}/`,
-  `docs/acme/PAPERS-INDEX.md`, `notes/claude/acme-color-research-2026-10-26.md`,
-  `notes/claude/snarf-color-scheme-proposal-2026-10-26.md`. Archive additions (pinned-fork MIT
-  only) + color research + a snarf palette proposal ("Manila" recommended — a PRODUCT DECISION
-  pending Larry; no code changed). Visual: https://claude.ai/artifact/EMLYDChSLzr9p6J5MGhr9S
-- **Still queued once Larry decides on the palette**: a short ADR for the palette divergence,
-  the `Chrome.zig` value change, 2 `accept.zig` pixel assertions, 5 golden re-freezes
-  (ACCEPT-8/9/10/12B/13B), `web/index.html:17` — see the proposal's §6 migration table.
+- **ADR-0007 + phase 19 colors, PRs #37 and #38 open** (#38 stacked on #37; merge #37 first):
+  `adr-0007-snarf-colors` owns `docs/spec/adr/0007-snarf-colors.md`; `phase19-colors` owns
+  `src/core/Palette.zig` (new), `Chrome.zig`, `main_native.zig`, `accept*.zig`, README,
+  `web/index.html`. Decision (Larry 2026-10-26): four NH-mountain schemes — `sunapee` default,
+  `whiteface`, `monadnock` (dark), `acme` (byte-exact original) — native flag `-colors=name`,
+  browser keeps default only. Pipeline fable→opus→sonnet gate PASS; goldens 8/9/10/12B/13B
+  re-frozen on sunapee. PR #36 (papers/research/proposal) MERGED. Visual + real renders:
+  https://claude.ai/artifact/EMLYDChSLzr9p6J5MGhr9S
+- **After #37+#38 merge**: Larry's native eyeball check (`zig build run-native`, also
+  `-colors=monadnock`); ticket the pre-existing `Tree.addWindow` dir_boot scrollbar-paint gap
+  (found in phase 19 gate, not caused by it).
 
 ## Current state (update in place)
 
