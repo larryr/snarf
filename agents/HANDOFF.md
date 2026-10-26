@@ -17,12 +17,12 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
-- **Phase 20 native file save (issue #11), branch `phase20-native-save`** (fable pipeline,
-  dispatched 2026-10-26): owns `src/main_native.zig` (ns mounts), `tools/origin/hostfs.zig`
-  (atomic-put growth, may move to `src/host/`), new `src/accept_hostfs.zig`,
-  `docs/spec/02-namespaces.md` revision note. Decisions: host fs mounted at `/` (acme-like,
-  Larry 2026-10-26; `/mnt/host` alias kept), atomic Put inside hostfs (PM Q5). Contract:
-  `agents/contracts/phase20-native-save.md`.
+- **Phase 20 native file save (issue #11), PR #41 OPEN** (`phase20-native-save`): full
+  pipeline done (fable → sonnet tests red-first → opus → sonnet gate PASS WITH NOTES →
+  fable fix: dirlock rename-failure now saves in place, test Q5-e). Host fs mounted at `/`
+  (acme-like, Larry 2026-10-26; `/mnt/host` alias), atomic Put in new `src/hostfs/` module
+  (PM Q5), Dump/Load came free. 818 tests 0 fail. Awaiting Larry's merge + post-merge
+  `make install` and a real-file Put check.
 - **Phase 19 MERGED (PR #38, `7dc412d`, 2026-10-26)**: ADR-0007 + implementation in one
   squash (#37 closed as superseded — its ADR commits rode inside #38). Four NH-mountain
   schemes in `src/core/Palette.zig` — `sunapee` default, `whiteface`, `monadnock` (dark),
