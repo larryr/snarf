@@ -301,7 +301,11 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
-    if (!ed.needs_flush) return;
+    // Flush when an editor action marked the tick dirty OR when the display
+    // still buffers commands from a tree-level draw that set no flag (the C
+    // flushes unconditionally per event-loop arm, acme.c:478,504; gating on
+    // `needs_flush` alone stranded such tails — issue #39).
+    if (!ed.needs_flush and !display.pending()) return;
     try display.flush();
     ed.needs_flush = false;
 }
