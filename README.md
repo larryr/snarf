@@ -25,6 +25,9 @@ run-native` runs it. It needs a `devdraw` to talk to:
   [`release/native-preview-2026-10-17`](https://github.com/larryr/snarf/raw/release/native-preview-2026-10-17/dist/snarf-native-preview-macos-arm64.zip)
   branch (see that branch's `dist/README.md` for the Gatekeeper quarantine step).
 
+`snarf-native -colors=NAME` picks a color scheme: `chocorua` (default), `whiteface`,
+`monadnock` (dark), or `acme` (the original palette) — see [ADR-0007](docs/spec/adr/0007-snarf-colors.md).
+
 `zig build test` runs everything natively, with no browser or devdraw dependency.
 
 ## Browser (frozen secondary)

@@ -108,6 +108,7 @@ src/
 │   ├── Row.zig              (~350) columns container, Dump/Load                 [rows.c]
 │   ├── Column.zig           (~300) window stack, drag/resize                    [cols.c]
 │   ├── Window.zig           (~350) tag+body, ctl format                         [wind.c]
+│   ├── Palette.zig          (~230) named color schemes, -colors=NAME parse      [acme.c iconinit; ADR-0007]
 │   ├── File.zig             (~250) buffer + undo/redo transactions              [file.c]
 │   ├── Buffer.zig           (~300) piece table                                  [buff.c + disk.c]
 │   ├── RuneIndex.zig        (~200) rune/line index tree for Buffer              [new]
@@ -218,6 +219,10 @@ Allowed imports (anything not listed is a review error; no cycles by constructio
 - `core/*` → `draw/*`, `ninep/client|mount|msg`, `std`; additionally
   `core/served/*` → `ninep/server` (§4 and §5 always planned `core/served/fsys.zig`
   riding `ninep/server.zig`; its omission from this list was an oversight)
+  - `core/Palette.zig` → `draw` (for `proto.Color`) + `std` only: pure data, no
+    `Image`s. `Chrome` allocates its solids from the selected `Palette`; the hosts
+    choose it (`main_native` from `-colors=NAME` via `Palette.parseFlag`, the browser
+    always `Palette.default`) and pass it through `boot.Options.palette` (ADR-0007).
 - `draw/*` → `ninep/client|msg`, `std`
 - `ninep/*` → `std` only
 - `dev/*` → `ninep/server|msg`, `shim/*`, `std`
