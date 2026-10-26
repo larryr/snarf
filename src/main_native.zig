@@ -114,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
     );
     defer dd_path.deinit(gpa);
     // R-P18-9: printed once, before the spawn's outcome is known.
-    std.debug.print("snarf-native: devdraw: {s} ({s})\n", .{ dd_path.path, dd_path.describe() });
+    std.debug.print("snarf: devdraw: {s} ({s})\n", .{ dd_path.path, dd_path.describe() });
 
     a.conn = Conn.init(gpa);
     defer a.conn.deinit();
@@ -125,7 +125,7 @@ pub fn main(init: std.process.Init) !void {
         .path = dd_path.path,
     }) catch |e| {
         std.debug.print(
-            \\snarf-native: cannot start devdraw ({t}).
+            \\snarf: cannot start devdraw ({t}).
             \\  Run `zig build native` to build the bundled devdraw (macOS), or set $DEVDRAW to a devdraw binary, or $PLAN9 to a plan9port tree.
             \\
         , .{e});
@@ -174,7 +174,7 @@ fn colorsFromArgs(args: std.process.Args) ?*const core.Palette {
         .other => {},
         .palette => |p| pal = p,
         .unknown => |name| {
-            std.debug.print("snarf-native: unknown color scheme \"{s}\"; -colors= takes one of:", .{name});
+            std.debug.print("snarf: unknown color scheme \"{s}\"; -colors= takes one of:", .{name});
             for (core.Palette.names) |n| std.debug.print(" {s}", .{n});
             std.debug.print("\n", .{});
             return null;
