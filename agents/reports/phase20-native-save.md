@@ -45,3 +45,79 @@ succeeds on a 0444 file.
   flag deliberately.
 - NFS-11..13 (Dump/Load, `$home`) are not written (contract R-P20-5 defers them).
 - NFS-17 is the normal gate.
+
+## Implementation (opus)
+
+### What changed, per area
+
+- **hostfs module (R-P20-1).** `tools/origin/hostfs.zig` → `src/hostfs/HostFs.zig`
+  (file-as-struct) and `tools/origin/dirread.zig` → `src/hostfs/dirread.zig`, in a new
+  `hostfs` build module (root `src/hostfs/root.zig`; imports `ninep` only). Consumed by
+  `snarf-origin`, `snarf-native`, the `tools/origin/accept.zig` test root and the
+  `src/accept.zig` test root; has its own test root in `zig build test`. `core`/`ninep`
+  cannot see it (build graph). Root is `root.zig`, not `hostfs.zig`: on macOS's
+  case-insensitive FS `hostfs.zig` and `HostFs.zig` are the same file. S-07 §4/§6 updated.
+- **Atomic Put (Q5, R-P20-3)** — `src/hostfs/Replace.zig`, used by BOTH trees:
+  OTRUNC open of an existing file → open the original `read_write` (a 0444 file fails
+  HERE with `permission denied`, as acme's `create` would), then exclusive-create
+  `<dir>/.<base>.snarf-put.<n>` with the original's mode (re-`fchmod`ed past the umask);
+  writes go to the temp; clunk renames over the original. Rulings as landed:
+  failed Twrite poisons the fid → clunk deletes the temp, original untouched (Q5-b);
+  OTRUNC + clean clunk with zero writes = empty Put → empty file; mode preserved (Q5-d2);
+  new files via Tcreate stay `0666 & ~umask`; no litter on success / failure / early
+  clunk (Q5-c, NFS-10). The target is the original's realpath, so Put through a symlink
+  replaces the linked file and keeps the link. Writable file in an unwritable directory
+  (no temp possible) falls back to acme's in-place truncate. A failed rename at clunk
+  deletes the temp (clunk can't report errors). DIVERGENCE comment cites exec.c:727 and
+  the contract.
+- **`src/hostfs/HostTree.zig`**: a `ninep.server.Ops` with the export dir as the root
+  (`..` at root stays at root). This is what native mounts.
+- **`tools/origin/tree.zig`**: new `Node.host_put` variant routes OTRUNC opens through
+  `Replace` (401 → 430 lines; the growth is exactly the new variant's switch arms).
+- **Native wiring (R-P20-2)**: `main_native.zig` opens `HostFs.open(io, "/")`, serves
+  `HostTree` over a Pipe/Server/Client with the DevInput9 pump, mounts the one root fid at
+  `/` and `/mnt/host` after `/dev` and `/mnt/snarf-self` and before the boot directory
+  window; `tick` polls the server. `io` is threaded from `init` into `boot`. The boot
+  window now lists the real `/`; `dev/`/`mnt/` are not in it (they are ns prefixes).
+- Docs: S-02 §1.3 revision log + §4 native note; S-07 §4 tree, §6 rule, revision log.
+  `core/Session.zig` doc comment no longer says native `Dump` warns NotMounted.
+
+### Test edits and justifications (R-P20-6)
+
+1. `hostfs_native_test.zig` **NFS-10b** rewritten: it asserted that OTRUNC-open + clunk
+   with no writes keeps the old file. The orchestrator's ruling (contract clarification)
+   is that this is an empty Put and leaves an empty file. **The test was wrong about the
+   contract.** It now asserts the original is untouched until clunk, then empty. The
+   unused `xfail`/`native_fs_landed` machinery (only NFS-10b used it) is removed.
+2. `accept_hostfs.zig` harness: the in-file `TmpFs` stand-in is replaced by the real
+   `hostfs.HostTree` over `HostFs` on the tmp dir. Its only reason to exist was that
+   hostfs wasn't a module. No assertion changed; the editor-level tests now also exercise
+   the atomic Put and the read-only refusal through the real code.
+3. `Rig.busy` also waits for `session.dump`/`session.load` (needed for the new tests).
+4. **NFS-11..13 added** (R-P20-5): they passed with zero extra plumbing. NFS-11 checks
+   that Dump writes `$home/acme.dump` (`$home` = `/home` = tmp/home). NFS-12: a fresh
+   editor's Load restores `/f.txt` and `/g.txt` with their contents. Load adds on top,
+   as rows.c:559 with `initing=FALSE` does, so the count is before+3 (the dump also holds
+   the scratch window). NFS-13: a missing dump and a truncated dump both warn and add no
+   window.
+
+### Gates
+
+| Gate | Result |
+|------|--------|
+| `zig fmt --check src build.zig tools` | clean |
+| `zig build` | ok |
+| `zig build test --summary all` | 24/24 steps; **817 tests, 802 pass, 15 skip, 0 fail** (stage one: 811 / 792 / 16 / 3). NFS-10b is no longer a skip. New: Replace, HostTree, hostfs root, NFS-11..13 |
+| `node tools/smoke_wasm.mjs` | 40 pass, 0 fail |
+| `zig build native` | ok |
+| 2 s `snarf-native` launch | alive at 2 s; bundled devdraw child spawned; both killed by recorded PID; nothing left running. Normal `$HOME`; no `acme.dump` and no `.snarf-put.*` created. The launch only reads `/`. |
+
+### Deviations / notes
+
+- The origin's `fs/` export now has the atomic Put too: the Q5 tests drive it through
+  `tools/origin/tree.zig`, and the contract puts atomicity "inside hostfs". The browser
+  wasm and `src/dev`/`src/shim` are untouched. A stale comment path in
+  `src/dev/opfs.zig:37` (`tools/origin/hostfs.zig`) is left as-is because `src/dev` is
+  frozen for this phase.
+- Commit split: the module move and the atomic Put are one commit, because the Q5 code
+  lives in the moved files.

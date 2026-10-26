@@ -104,6 +104,17 @@ it up, and a listing of `/mnt` reads `opfs/ snarf-self/`. Not yet mounted: `/dev
 `/dev/dom`, the browser feature files and `/mnt/host`. (`/mnt/snarf-self/ns` itself is
 SERVED as of phase 13b; `/mnt/opfs` as of phase 14b.)
 
+> Revision log: 2026-10-26 (phase 20) — **native root = the host file system** (decided
+> 2026-10-26 by Larry, contract `agents/contracts/phase20-native-save.md`). `snarf-native`
+> serves the real `/` in-process (`src/hostfs/HostTree.zig` over `HostFs`) and mounts it at
+> **`/`** — the fallthrough: longest prefix keeps `/dev`, `/dev/draw` and
+> `/mnt/snarf-self` winning — and again at **`/mnt/host`** (same client and root fid, the
+> §1.3 row's continuity). Native's boot directory window therefore lists the REAL root;
+> `dev/`/`mnt/` are mount-table prefixes, not host entries, so they are not in that
+> listing. Tags show bare paths (`/Users/larry/notes.txt`), as in acme. Put is atomic on
+> this server (§4 note). The browser's namespace and this section's browser table are
+> unchanged.
+>
 > Revision log: 2026-09-14 (phase 14b) — `/mnt/opfs` is BUILT and is the FOURTH
 > in-process 9P stack (§4 for the tree as built). It changes no existing listing:
 > `/` still reads `dev/ mnt/` with the origin down, because `opfs/` sits under `mnt/`.
@@ -167,6 +178,21 @@ the escape hatch that keeps tree-walking cheap.
 ## 4. `/mnt/host` and `/mnt/opfs` — host storage (R-9P-09) — Host: `/mnt/host` **both**, `/mnt/opfs` **browser**
 
 (The native host reaches the file system through a native 9P file server instead; ADR-0005.)
+
+**Native, as built (phase 20; decided 2026-10-26 by Larry).** The native host's root IS the
+host file system: `HostFs` rooted at the real `/`, served in-process, mounted at `/` and
+aliased at `/mnt/host` (§1.3 revision log). No grants, no ctl — it is the user's own
+machine. Writes have one property acme's do not: **Put is atomic** (PM Q5). acme's
+`create(name, OWRITE, 0666)` truncates at the open (`acme/exec.c:727` @337c6ac); this
+server instead redirects an OTRUNC open of an existing file to a same-directory temp file
+(keeping the original's mode) and renames it over the original at clunk, so readers see the
+old bytes or the new ones; a failed write discards the temp and leaves the original intact.
+New files are created `0666 & ~umask`. A clean OTRUNC-open + clunk with no writes is an
+empty Put and leaves an empty file, as acme would. The origin's `fs/` export (§5) shares
+this code, so the same holds there. Known costs of rename-over: hard links are split, the
+owner becomes the writer; a writable file in an unwritable directory falls back to acme's
+in-place truncate. The native `$home` is the real `$HOME`, so `Dump` writes
+`$HOME/acme.dump` through the root mount.
 
 - `/mnt/host`: appears **empty-with-a-ctl** until granted. Write `open` to
   `/mnt/host/ctl` → shim calls `showDirectoryPicker()` (must be within a user gesture —
