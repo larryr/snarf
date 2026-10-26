@@ -17,17 +17,17 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
-- **ADR-0007 + phase 19 colors, PRs #37 and #38 open** (#38 stacked on #37; merge #37 first):
-  `adr-0007-snarf-colors` owns `docs/spec/adr/0007-snarf-colors.md`; `phase19-colors` owns
-  `src/core/Palette.zig` (new), `Chrome.zig`, `main_native.zig`, `accept*.zig`, README,
-  `web/index.html`. Decision (Larry 2026-10-26): four NH-mountain schemes — `sunapee` default,
-  `whiteface`, `monadnock` (dark), `acme` (byte-exact original) — native flag `-colors=name`,
-  browser keeps default only. Pipeline fable→opus→sonnet gate PASS; goldens 8/9/10/12B/13B
-  re-frozen on sunapee. PR #36 (papers/research/proposal) MERGED. Visual + real renders:
+- **Phase 19 MERGED (PR #38, `7dc412d`, 2026-10-26)**: ADR-0007 + implementation in one
+  squash (#37 closed as superseded — its ADR commits rode inside #38). Four NH-mountain
+  schemes in `src/core/Palette.zig` — `sunapee` default, `whiteface`, `monadnock` (dark),
+  `acme` (byte-exact original); native startup flag `-colors=name`; browser keeps the
+  default only (ADR-0005 freeze). Goldens 8/9/10/12B/13B re-frozen on sunapee with pixel
+  spot-checks. Visual + real headless renders:
   https://claude.ai/artifact/EMLYDChSLzr9p6J5MGhr9S
-- **After #37+#38 merge**: Larry's native eyeball check (`zig build run-native`, also
-  `-colors=monadnock`); ticket the pre-existing `Tree.addWindow` dir_boot scrollbar-paint gap
-  (found in phase 19 gate, not caused by it).
+- **Still pending from phase 19**: Larry's native eyeball check (`zig build run-native`, also
+  `-colors=monadnock`; his installed `~/.local/bin` copy predates the palette — rerun
+  `make install`); ticket the pre-existing `Tree.addWindow` dir_boot scrollbar-paint gap
+  (found by the phase 19 gate, not caused by it).
 
 ## Current state (update in place)
 
