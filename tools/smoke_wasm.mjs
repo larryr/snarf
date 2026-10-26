@@ -172,7 +172,7 @@ check("dirty rect covers the full display", () =>
 check("blit ptr + fbW*fbH*4 <= memory size", () =>
   last ? last.ptr + last.fbW * last.fbH * 4 <= memory.buffer.byteLength : "pending");
 
-check("pixel (0,0) is the row-tag chocorua periwinkle (0xEEEEFF)", () => {
+check("pixel (0,0) is the row-tag sunapee periwinkle (0xEEEEFF)", () => {
   if (!last) return "pending";
   const p = pixelAt(last.ptr, last.fbW, 0, 0);
   return p.r === 238 && p.g === 238 && p.b === 255;

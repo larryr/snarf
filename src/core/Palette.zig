@@ -42,7 +42,7 @@ ground: Color,
 rule: Color,
 
 /// The default: manila body (mix 0xFFCC99), periwinkle tag (mix 0xBBBBFF).
-pub const chocorua: Palette = .{
+pub const sunapee: Palette = .{
     .body_back = 0xFFF2E5FF,
     .body_high = 0xF2D2A8FF,
     .body_bord = 0xA47F54FF,
@@ -114,15 +114,15 @@ pub const acme: Palette = .{
     .rule = 0x000000FF, // display->black cols.c:45
 };
 
-pub const default: *const Palette = &chocorua;
+pub const default: *const Palette = &sunapee;
 
 /// The selectable names, sorted.
-pub const names = [_][]const u8{ "acme", "chocorua", "monadnock", "whiteface" };
+pub const names = [_][]const u8{ "acme", "monadnock", "sunapee", "whiteface" };
 
 const table = [_]struct { name: []const u8, pal: *const Palette }{
     .{ .name = "acme", .pal = &acme },
-    .{ .name = "chocorua", .pal = &chocorua },
     .{ .name = "monadnock", .pal = &monadnock },
+    .{ .name = "sunapee", .pal = &sunapee },
     .{ .name = "whiteface", .pal = &whiteface },
 };
 
@@ -172,23 +172,23 @@ fn mix(c1: u32) u32 {
     return out;
 }
 
-test "palette: fromName resolves the four names, default is chocorua" {
+test "palette: fromName resolves the four names, default is sunapee" {
     for (names) |n| try testing.expect(fromName(n) != null);
     try testing.expectEqual(&acme, fromName("acme").?);
-    try testing.expectEqual(&chocorua, fromName("chocorua").?);
+    try testing.expectEqual(&sunapee, fromName("sunapee").?);
     try testing.expectEqual(&monadnock, fromName("monadnock").?);
     try testing.expectEqual(&whiteface, fromName("whiteface").?);
     try testing.expect(fromName("bogus") == null);
     try testing.expect(fromName("") == null);
     try testing.expect(fromName("Acme") == null);
-    try testing.expectEqual(&chocorua, default);
+    try testing.expectEqual(&sunapee, default);
     for (names[1..], 0..) |n, i| try testing.expect(std.mem.lessThan(u8, names[i], n));
     try testing.expectEqual(names.len, table.len);
 }
 
 test "palette: light backs are allocimagemix tints of their nominals" {
-    try testing.expectEqual(chocorua.body_back, mix(0xFFCC99FF));
-    try testing.expectEqual(chocorua.tag_back, mix(0xBBBBFFFF));
+    try testing.expectEqual(sunapee.body_back, mix(0xFFCC99FF));
+    try testing.expectEqual(sunapee.tag_back, mix(0xBBBBFFFF));
     try testing.expectEqual(acme.body_back, mix(0xFFFFAAFF)); // mix(DPaleyellow)
     try testing.expectEqual(acme.tag_back, mix(0xAAFFFFFF)); // mix(DPalebluegreen)
     try testing.expectEqual(@as(Color, 0xE7FAFAFF), mix(0x9EEEEEFF));
@@ -203,7 +203,7 @@ test "palette: acme is the iconinit palette; sweeps are invariant" {
     try testing.expectEqual(@as(Color, 0x99994CFF), acme.body_bord); // DYellowgreen
     try testing.expectEqual(@as(Color, 0x000099FF), acme.mod); // DMedblue
     try testing.expectEqual(@as(Color, 0x8888CCFF), acme.col_button); // DPurpleblue
-    inline for (.{ chocorua, whiteface, monadnock, acme }) |p| {
+    inline for (.{ sunapee, whiteface, monadnock, acme }) |p| {
         try testing.expectEqual(@as(Color, 0xAA0000FF), p.but2);
         try testing.expectEqual(@as(Color, 0x006600FF), p.but3);
         try testing.expectEqual(@as(Color, 0x000000FF), p.rule);

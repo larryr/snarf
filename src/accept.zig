@@ -15,10 +15,10 @@ fn pumpServer(ctx: *anyopaque) anyerror!void {
     _ = try s.poll();
 }
 
-/// R-P19-6: the default (chocorua) palette is in the frame — `w`'s tag back
+/// R-P19-6: the default (sunapee) palette is in the frame — `w`'s tag back
 /// (top-right corner), body back (bottom-right corner), and body scrollbar
 /// BORD edge (scrl.c:73-76: the strip's rightmost column is BORD everywhere).
-fn expectChocorua(hb: anytype, w: anytype) !void {
+fn expectSunapee(hb: anytype, w: anytype) !void {
     const tr = w.tag.fr.r;
     try testing.expectEqual(@as(u32, 0xEEEEFFFF), hb.pixelAt(@intCast(tr.max.x - 1), @intCast(tr.min.y)));
     const br = w.body.fr.r;
@@ -543,7 +543,7 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     ed.row = tree.row;
     try ed.frameEnd(d);
 
-    // Chrome spot-checks: row tag back (chocorua periwinkle) at (30,2); the
+    // Chrome spot-checks: row tag back (sunapee periwinkle) at (30,2); the
     // rule band below the row tag.
     try testing.expectEqual(@as(u32, 0xEEEEFFFF), hb.pixelAt(30, 2));
     const h: u32 = font.height; // 18
@@ -581,8 +581,8 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     try testing.expect(std.mem.indexOf(u8, w1.tag.file.buffer.read(0, w1.tag.file.buffer.len(), &tgbuf), " Undo") != null);
     try testing.expect(std.mem.indexOf(u8, win2.tag.file.buffer.read(0, win2.tag.file.buffer.len(), &tgbuf), " Undo") == null);
 
-    try expectChocorua(hb, w1);
-    try expectChocorua(hb, win2);
+    try expectSunapee(hb, w1);
+    try expectSunapee(hb, win2);
 
     // FROZEN-ACCEPT-8: full acme chrome — row tag, column tag+button, two
     // windows with tags/buttons/scrollbars, point-to-type edits in both.
@@ -593,8 +593,8 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     // from this one in exactly 212 pixels, all within rows [40,57] — w1's
     // tag band (y=[40,58)) — and nowhere else. Re-frozen 2026-07-20 (phase
     // 9d) before that for " Undo". Spot-checks above still hold (R-P2-7).
-    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): chocorua default; was 0xfd8b232d77d1f0bd,
-    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectChocorua.
+    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0xfd8b232d77d1f0bd,
+    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
     try testing.expectEqual(@as(u64, 0x50f4088420177753), hb.hash());
 }
 
@@ -698,16 +698,16 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     try testing.expect(!ed.warningsPending()); // the buffer is drained
     // The row has ONE column here, so "rightmost" is that column (util.c:98).
     try testing.expectEqual(col, errw.col.?);
-    try expectChocorua(hb, w1);
-    try expectChocorua(hb, errw);
+    try expectSunapee(hb, w1);
+    try expectSunapee(hb, errw);
 
     // FROZEN-ACCEPT-9: B2 exec scene — tag Snarf against the body selection,
     // live-tag Undo, two-strike Del, neighbor regrowth, AND (new in phase 12b)
     // the `+Errors` window the two-strike warning now opens. RE-FROZEN per
     // R-P12b-6; the previous hash was 0xb52b86b54d50d100 (phase 9 .. 12, when
     // `ed.warnings` was an invisible sink). Spot-checks immediately above.
-    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): chocorua default; was 0x8ca565d7961f44cf,
-    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectChocorua.
+    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x8ca565d7961f44cf,
+    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
     try testing.expectEqual(@as(u64, 0xed519e1281abe53d), hb.hash());
 }
 
@@ -873,8 +873,8 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     try testing.expect(!errw.filemenu); // util.c:99
     try testing.expect(!ed.warningsPending()); // the buffer is drained
     try testing.expectEqual(c2, errw.col.?); // the RIGHTMOST column, not c1
-    try expectChocorua(hb, w1);
-    try expectChocorua(hb, errw);
+    try expectSunapee(hb, w1);
+    try expectSunapee(hb, errw);
 
     // FROZEN-ACCEPT-12B: two-column scene, a two-strike Del warning on a
     // window in column 0, drained by frameEnd into a `+Errors` window minted
@@ -886,8 +886,8 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     // " Put". Spot-check (R-P2-7, see phase17 test report): with `putShown`
     // suppressed, the re-rendered frame differs in exactly 212 pixels, all
     // within rows [40,57] — w1's tag band (y=[40,58)) — and nowhere else.
-    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): chocorua default; was 0x86a3f4679b1b8d21,
-    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectChocorua.
+    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x86a3f4679b1b8d21,
+    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
     try testing.expectEqual(@as(u64, 0xa60814356ac917d4), hb.hash());
 }
 
@@ -1082,12 +1082,12 @@ test "phase-10: Edit via B2 scene — s-global, one undo, live tag" {
         w.body.file.buffer.read(0, w.body.file.buffer.len(), &rbuf),
     );
     try ed.frameEnd(d);
-    try expectChocorua(hb, w);
+    try expectSunapee(hb, w);
 
     // FROZEN-ACCEPT-10: the Edit-language scene — swept Edit s-global, live-tag
     // Undo appearing, single-step whole-transaction undo. NEW freeze (R-P2-7).
-    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): chocorua default; was 0xe9014ecfa82cbc4b,
-    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectChocorua.
+    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0xe9014ecfa82cbc4b,
+    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
     try testing.expectEqual(@as(u64, 0x2e5d14f8ee16c0be), hb.hash());
 }
 
@@ -1327,9 +1327,9 @@ test "phase-13b: acme boot — two columns, the root directory window rightmost 
     var tbuf: [128]u8 = undefined;
     try testing.expectEqualStrings("/ Del Snarf Get | Look ", w.tag.file.buffer.read(0, w.tag.file.buffer.len(), &tbuf));
 
-    // Row-tag back at the top-left corner (Chrome's standing pin, chocorua).
+    // Row-tag back at the top-left corner (Chrome's standing pin, sunapee).
     try testing.expectEqual(@as(u32, 0xEEEEFFFF), hb.pixelAt(30, 2));
-    try expectChocorua(hb, w);
+    try expectSunapee(hb, w);
 
     // The right column's body drew SOME ink — proves the dir load reached the
     // real draw pipeline (blit), not just the Text/File model underneath it.
@@ -1354,8 +1354,8 @@ test "phase-13b: acme boot — two columns, the root directory window rightmost 
     // (columnated, maxtab 27), tag "/ Del Snarf Get | Look ". Frozen
     // 2026-09-14 from a spot-check-verified render (R-P2-7); re-freeze ONLY
     // with orchestrator sign-off.
-    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): chocorua default; was 0x35f686fc5162d2cf,
-    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectChocorua.
+    // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x35f686fc5162d2cf,
+    // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
     try testing.expectEqual(@as(u64, 0x3b4981b48586f66c), hb.hash());
 }
 
