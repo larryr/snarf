@@ -31,7 +31,7 @@ schemes named after New Hampshire mountains.
 
    | Name | Was (proposal) | Character | body BACK | tag BACK |
    |------|----------------|-----------|-----------|----------|
-   | `chocorua` | A — "Manila" | **default** — manila-paper body, periwinkle tag; warm granite and alpenglow | `FFF2E5` (mix of `FFCC99`) | `EEEEFF` (mix of `BBBBFF`) |
+   | `sunapee` | A — "Manila" | **default** — manila-paper body, periwinkle tag; the sun is in the name | `FFF2E5` (mix of `FFCC99`) | `EEEEFF` (mix of `BBBBFF`) |
    | `whiteface` | B — "Rio" | rio's greys verbatim, white body, rio's title-bar tag family | `FFFFFF` | `E7FAFA` (mix of `9EEEEE`) |
    | `monadnock` | C — "Dusk" | dark; the burned-bare summit | `22201C` | `1C2228` |
    | `acme` | baseline | the original, byte-exact (`acme.c:1044-1085`) | `FFFFEA` | `EAFFFF` |
@@ -49,7 +49,7 @@ schemes named after New Hampshire mountains.
    variable, no runtime switching, no per-window palettes — all deferrable later without
    superseding this ADR.
 
-3. **The default is `chocorua`, on both hosts.** The palette constants live in shared
+3. **The default is `sunapee`, on both hosts.** The palette constants live in shared
    core, so the frozen browser host (ADR-0005) takes the new default as a core value
    change — but it does **not** grow the `-colors` selector (that would be a new browser
    feature, which the freeze forbids). `web/index.html`'s page ground (`#ffffea`) follows
@@ -62,7 +62,7 @@ schemes named after New Hampshire mountains.
    `display.white` — this is what makes `monadnock` pure data. `Chrome.init` takes the
    selected palette.
 
-5. **Goldens re-freeze once, against `chocorua`**: FROZEN-ACCEPT-8, -9, -10, -12B, -13B
+5. **Goldens re-freeze once, against `sunapee`**: FROZEN-ACCEPT-8, -9, -10, -12B, -13B
    (orchestrator-authorized in the phase 19 contract, with per-scene pixel spot-checks
    required before accepting each new hash, per R-P2-7). The palette-independent fixture
    tests (ACCEPT-6a/6b/7) allocate their own colors and stay untouched.
@@ -73,7 +73,7 @@ schemes named after New Hampshire mountains.
   DIVERGENCE comment points here. `-colors=acme` preserves byte-exact fidelity for
   comparison screenshots and paper-matching.
 - Contrast is documented, not folklore: every text pair in every scheme ≥ 7:1 (AAA);
-  `chocorua` is the only light scheme whose both scrollbars clear WCAG 1.4.11's 3:1
+  `sunapee` is the only light scheme whose both scrollbars clear WCAG 1.4.11's 3:1
   (acme: 3.0/3.1). `whiteface`'s 2.5:1 tag scrollbar is accepted as the price of rio
   verbatim. (Proposal §3.)
 - A future scheme is a `Palette` constant plus a name — no new ADR unless slot structure
