@@ -29,9 +29,16 @@ this archive, whether or not it was copied. Rules applied:
 | 5 | *8½, the Plan 9 Window System* (a variant appeared as *A Minimalist Global User Interface*, *Proc. Summer 1991 USENIX Conf.*) | Rob Pike | 1991 | [`8half/`](8half/README.md) (`8half.ms`, `.ps`) | **definitive (Pike)** for the device-file environment model; not about Acme itself |
 | 6 | Plan 9 manual pages: acme(1), acme(4), sam(1), plumb(1), plumb(2), plumber(4), plumb(6), rio(1), rio(4), draw(3), mouse(3), cons(3), keyboard(6), frame(2), event(2), regexp(6), regexp(2) | Plan 9 team (unattributed) | 2002 (4th Ed.), fork snapshot 2025 | [`man/plan9/`](man/README.md) | supplementary — not definitive (normative for *interfaces*) |
 | 7 | plan9port manual pages: acme(1), acme(4), acme(3), acmeevent(1), sam(1), ssam(1), plumb(1), plumb(3), plumber(4), plumb(7), 9term(1) | Russ Cox et al. (revisions of the Plan 9 pages) | 2003– (fork snapshot 2026) | [`man/plan9port/`](man/README.md) | supplementary — not definitive |
+| 11 | *Hello World or Καλημέρα κόσμε or こんにちは 世界* (Plan 9 `sys/doc/utf`; *Proc. Winter 1993 USENIX Conf.*, pp. 43–50) | Rob Pike, Ken Thompson | 1993 | [`utf/`](utf/README.md) (`utf.ms`, `.ps`) | **definitive (Pike, co-author)** — UTF-8/Runes; not about Acme behavior |
+| 12 | *Plan 9 from Bell Labs* (Plan 9 `sys/doc/9`) | Pike, Presotto, Dorward, Flandrena, Thompson, Trickey, Winterbottom | 1995 | [`9/`](9/README.md) (`9.ms`, `.ps`) | supplementary — system overview; Acme only in passing |
+| 20 | plan9port `CHANGES` (change log, incl. ~60 acme entries) | Russ Cox et al. | 2003– (fork snapshot) | [`p9p-changes/`](p9p-changes/README.md) | supplementary — not definitive |
 
-Total added: ≈ 2.2 MiB (`sam/` 660 KiB, `8half/` 812 KiB — 779 KiB of it PostScript, the
-only rendering in the fork — `plumb/` 440 KiB, `man/` 290 KiB).
+Numbers are stable IDs shared by both tables (#11, #12 moved here from "not copied" on
+2026-10-26 when they were archived; #20 is new).
+
+Total added: ≈ 3.2 MiB (`sam/` 660 KiB, `8half/` 812 KiB — 779 KiB of it PostScript, the
+only rendering in the fork — `plumb/` 440 KiB, `man/` 290 KiB, `utf/` 397 KiB, `9/` 579 KiB,
+`p9p-changes/` 46 KiB).
 
 ## Found but not copied
 
@@ -40,8 +47,6 @@ only rendering in the fork — `plumb/` 440 KiB, `man/` 290 KiB).
 | 8 | *Structural Regular Expressions* (*Proc. EUUG Spring 1987 Conf.*, pp. 21–28, Helsinki) | Rob Pike | 1987 | definitive (Pike) — for the `x`/`y`/`g`/`v` model underlying `Edit` | Not in either pinned fork. Publisher (EUUG) copyright; the copy at `http://doc.cat-v.org/bell_labs/structural_regexps/` (`se.pdf`) carries no license statement. The same model is fully described in the `sam` paper (#2), which we do hold. |
 | 9 | *Window Systems Should Be Transparent* (*Computing Systems* 1(3), pp. 279–296) | Rob Pike | 1988 | definitive (Pike) — background only (mux, Blit; pre-Plan 9) | Not in either fork; USENIX copyright. `https://www.usenix.org/legacy/publications/compsystems/1988/sum_pike.pdf`, mirror at `doc.cat-v.org/bell_labs/transparent_wsys/`. Superseded for our purposes by #5. |
 | 10 | *A Minimalist Global User Interface* (USENIX Summer 1991, pp. 267–279; revised *Graphics Interface '92*, pp. 282–293) | Rob Pike | 1991/92 | definitive (Pike) | Publisher copyright. The Plan 9 distribution's `8½.ms` (#5) is Pike's own later form of the same paper and is what we archive. |
-| 11 | *Hello World or Καλημέρα κόσμε or こんにちは 世界* (Plan 9 `sys/doc/utf.ms`; *Proc. Winter 1993 USENIX Conf.*, pp. 43–50) | Rob Pike, Ken Thompson | 1993 | co-authored by Pike; background (UTF-8, Runes in sam/8½) — not about Acme | Peripheral to Acme behavior; left out to keep the archive focused. Copyable at any time from the pinned fork (MIT): `sys/doc/utf.ms` (42 KiB). |
-| 12 | *Plan 9 from Bell Labs* (Plan 9 `sys/doc/9.ms`) | Pike, Presotto, Dorward, Flandrena, Thompson, Trickey, Winterbottom | 1995 | supplementary — system overview; mentions Acme only in passing | Peripheral. Copyable from the pinned fork (MIT), `sys/doc/9.ms` (85 KiB), if ever wanted. |
 | 13 | *A Tour of Acme* (blog post + 23-min screencast) | Russ Cox | 2012 | supplementary — not definitive | Personal site `https://research.swtch.com/acme` and YouTube; no license statement; the substance is a video. Excellent orientation for newcomers; not a reference. |
 | 14 | Inferno manual pages acme(1), acme(4) (Limbo re-implementation of Acme) | Vita Nuova / Bell Labs (unattributed) | 1996– | supplementary — not definitive (describes a *different* implementation) | Not in our pinned forks. `inferno-os/inferno-os` is MIT-licensed (`man/1/acme`, 29 KiB), so it *could* be copied on request; `https://www.vitanuova.com/inferno/man/4/acme.html`, `https://man.cat-v.org/inferno/1/acme`. |
 | 15 | *Program Development under Inferno* | Roger Peppé (Vita Nuova) | c. 2000 | supplementary — not definitive | Vita Nuova paper, Acme covered as the Inferno IDE; `https://inferno-os.org/inferno/papers/dev.pdf`; no explicit license found. |
@@ -49,6 +54,11 @@ only rendering in the fork — `plumb/` 440 KiB, `man/` 290 KiB).
 | 17 | Wily — user guide and *Acme vs. Wily* notes | Gary Capell (Univ. of Sydney) | 1995–98 | supplementary — not definitive | Not Bell Labs; an X11 work-alike whose behavior deliberately differs. Artistic License per `https://github.com/9wm/wily` (`Doc/`); `http://www.cs.yorku.ca/~oz/wily/AcmeVsWily.html`. Noted for contrast only. |
 | 18 | `acme.cat-v.org` — community collection of Acme links, tips and mailing-list lore | various | ongoing | supplementary — not definitive | Aggregator, not a publication; no license. |
 | 19 | Acme `Mail` client documentation | — | — | — | No paper or manual page exists in either fork: the client is documented only by its source (`sys/src/cmd/acme/mail/`, `src/cmd/acme/mail/`) and the two-line `mail/guide`. The Plan 9 `mail(1)`, `nedmail(1)`, `faces(1)` pages were read and do not describe it. |
+| 21 | Pike on 9fans, "Re: [9fans] sam chatter", 2003-07-05 — Pike answers a poster's request that Unix `samterm` adopt the Plan 9 version's colour scheme with "(3) is of course trivial and of course long since done in plan 9" (the "aesthetically pleasing" remark is the poster's, not Pike's; see `notes/claude/acme-color-research-2026-10-26.md`) | Rob Pike | 2003 | definitive (Pike) as a statement, but **says nothing about why Acme's palette was chosen** | Mailing-list post; no license statement found. `https://marc.info/?l=9fans&m=111558891922244`. |
+| 22 | *Rob Pike Responds* (Slashdot interview; mentions he writes in Acme, "much more radical" than `sam`) | Rob Pike | 2004 | definitive (Pike) as a statement; no colour content | Publisher page; no license statement found (copyright notice only). `https://interviews.slashdot.org/story/04/10/18/1153211/rob-pike-responds`. |
+| 23 | *Text editors II: Acme* — repeats the unsourced claim "Pike read somewhere that" the yellow and blue are best to stare at all day | David Yates | 2015 | supplementary — not definitive; folklore | Personal blog; no license statement found. `https://davidyat.es/2015/11/13/text-editors-ii-acme/`. Cited only to document the folklore. |
+| 24 | *Bitter Sweet Acme* — claims the palette is a "triad" scheme and causes least eye strain (no source given) | Satyajit Ranjeev | 2014 | supplementary — not definitive; folklore | Personal blog; no license statement found. `https://satran.in/b/bitter-sweet-acme`. |
+| 25 | Edwood (Go port of Acme; `-palette` option selecting `acme` or `vampira`) | Robert Kroege et al. | 2019– | supplementary — not definitive (different implementation) | **License found: BSD-3-Clause (Edwood and Project Serenity code) with Plan 9 Foundation MIT portions, per its `LICENSE` — this would permit copying; not copied per archive rule, user to decide.** `https://github.com/rjkroege/edwood` (`theme/`, `palette_convert.go`); not Bell Labs. |
 
 ## Licensing notes
 
