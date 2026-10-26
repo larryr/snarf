@@ -185,6 +185,7 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const ninep = @import("ninep"); // T9 only: mounts warp.MouseSink at /dev
 
 const rect = proto.Rect{ .min = .{ .x = 4, .y = 20 }, .max = .{ .x = 119, .y = 470 } };
@@ -342,7 +343,7 @@ const WinHarness = struct {
         const h = try a.create(WinHarness);
         errdefer a.destroy(h);
         h.fx = try Frame.TestFixture.init();
-        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font);
+        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font, Palette.default);
         h.body_file = File.init(a, try Buffer.initFromBytes(a, seed));
         try h.w.init(h.chrome, &h.body_file, 1, r);
         h.ed = Editor.init(a);

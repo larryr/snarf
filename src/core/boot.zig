@@ -22,6 +22,7 @@ const std = @import("std");
 const draw = @import("draw");
 const ninep = @import("ninep");
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const Editor = @import("Editor.zig");
 const Row = @import("Row.zig");
 const Column = @import("Column.zig");
@@ -60,6 +61,9 @@ pub const Options = struct {
     /// `win_name`/`body` are ignored when it is set. R-P13b-4: the default
     /// (false) path is the acceptance scenes' and stays byte-for-byte as it was.
     dir_boot: bool = false,
+    /// The color scheme `Chrome.init` allocates from (ADR-0007). The hosts pass
+    /// it explicitly — `snarf-native` from `-colors=NAME`, the browser the default.
+    palette: *const Palette = Palette.default,
 };
 
 /// The assembled window tree. Owns the `Chrome` and the heap `Row` (which owns
@@ -138,7 +142,7 @@ pub const Tree = struct {
     /// entry point, R-P12c-1), leaving exactly three C statements here:
     ///
     ///   * `draw(screen, screen->r, display->white, nil, ZP)` (acme.c:551) — the
-    ///     white ground under everything;
+    ///     ground under everything (`Palette.ground`, ADR-0007);
     ///   * `rowresize(&row, screen->clipr)` (acme.c:555) — `Row.resize`, which
     ///     scales the columns proportionally and re-lays every window;
     ///   * `iconinit()` (acme.c:552) and `scrlresize()` (acme.c:553) have NO
@@ -179,7 +183,7 @@ pub const Tree = struct {
         const chrome = tree.chrome;
         const rr = clampScreen(r, chrome.font.height);
         const screen = &chrome.display.image;
-        try screen.draw(rr, chrome.white, null, .{}); // acme.c:551
+        try screen.draw(rr, chrome.ground, null, .{}); // acme.c:551
         try tree.row.resize(rr); // acme.c:555 rowresize(&row, screen->clipr)
     }
 };
@@ -200,7 +204,7 @@ fn clampScreen(r: Rect, font_height: i32) Rect {
 }
 
 /// Assemble the tree over screen rect `r`: `Chrome.init` (the palette solids),
-/// a heap `Row` (rowtag + white ground), its first `Column` (columntag), and the
+/// a heap `Row` (rowtag + ground), its first `Column` (columntag), and the
 /// initial `Window`. The `Row`/`Column`/`Window` are individually heap-allocated
 /// for address stability (a `Text`'s `SelectState` aliases its `Frame`, a
 /// `Text.w` aliases its `Window`) — the Tree only moves by value, and nothing
@@ -212,7 +216,7 @@ pub fn boot(
     r: Rect,
     opts: Options,
 ) !Tree {
-    const chrome = try Chrome.init(a, display, font);
+    const chrome = try Chrome.init(a, display, font, opts.palette);
     errdefer chrome.deinit();
 
     const row = try a.create(Row);

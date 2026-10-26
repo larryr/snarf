@@ -19,6 +19,7 @@ pub const Window = @import("Window.zig");
 /// Window tag composition (`parsetag`/`winsettag1`/`winsettag`, wind.c:437-593)
 /// — carved out of `Window.zig` in phase 16a; `Window` forwards to it.
 pub const wintag = @import("wintag.zig");
+pub const Palette = @import("Palette.zig");
 pub const Chrome = @import("Chrome.zig");
 pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");

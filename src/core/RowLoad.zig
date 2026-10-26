@@ -178,12 +178,12 @@ fn placeColumns(row: *Row, pcts: []const f64) Text.Error!void {
             r1.max.x = x - bd;
             r2.min.x = x;
             if (r1.max.x - r1.min.x < 50 or r2.max.x - r2.min.x < 50) continue; // rows.c:627-628
-            try screen.draw(.{ .min = r1.min, .max = r2.max }, row.chrome.white, null, .{}); // rows.c:629
+            try screen.draw(.{ .min = r1.min, .max = r2.max }, row.chrome.ground, null, .{}); // rows.c:629
             try c1.resize(r1);
             try c2.resize(r2);
             r2.min.x = x - bd;
             r2.max.x = x;
-            try screen.draw(r2, row.chrome.black, null, .{}); // rows.c:632-634
+            try screen.draw(r2, row.chrome.rule, null, .{}); // rows.c:632-634
         } else {
             _ = try row.add(x); // rows.c:636-637 rowadd(row, nil, x)
         }

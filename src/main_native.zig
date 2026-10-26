@@ -83,6 +83,9 @@ fn pumpServer(ctx: *anyopaque) anyerror!void {
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
+    // ADR-0007 §2: resolved before anything is spawned, so a bad name never
+    // opens a window.
+    const pal = colorsFromArgs(init.minimal.args) orelse std.process.exit(2);
     const a = try gpa.create(App);
     defer gpa.destroy(a);
 
@@ -117,7 +120,7 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
 
-    try boot(gpa, a);
+    try boot(gpa, a, pal);
     defer a.tree.deinit();
     defer a.editor.deinit();
     // R-P17-5: the native `$home` is the real `$HOME` (acme.c:136), null when
@@ -149,6 +152,25 @@ fn existsOnDisk(ctx: *anyopaque, path: []const u8) bool {
     return true;
 }
 
+/// The scheme `-colors=NAME` selects (last one wins), or `Palette.default`.
+/// Null after reporting an unknown name and the valid ones on stderr.
+fn colorsFromArgs(args: std.process.Args) ?*const core.Palette {
+    var pal = core.Palette.default;
+    var it = args.iterate();
+    _ = it.skip(); // argv[0]
+    while (it.next()) |arg| switch (core.Palette.parseFlag(arg)) {
+        .other => {},
+        .palette => |p| pal = p,
+        .unknown => |name| {
+            std.debug.print("snarf-native: unknown color scheme \"{s}\"; -colors= takes one of:", .{name});
+            for (core.Palette.names) |n| std.debug.print(" {s}", .{n});
+            std.debug.print("\n", .{});
+            return null;
+        },
+    };
+    return pal;
+}
+
 /// `$winsize` is libdraw's own knob for the initial window geometry
 /// (`parsewinsize` accepts "WxH" or "x0,y0,x1,y1", mac-screen.m:253-258).
 /// Honoured here for the same reason: it is how a plan9port user says how big
@@ -158,7 +180,7 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
 }
 
 /// Build the whole stack in place (pointer-capture hazards — see `App`).
-fn boot(gpa: std.mem.Allocator, a: *App) !void {
+fn boot(gpa: std.mem.Allocator, a: *App, pal: *const core.Palette) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
     a.pipe = try ninep.chan.Pipe.init(gpa, 16384);
@@ -181,6 +203,7 @@ fn boot(gpa: std.mem.Allocator, a: *App) !void {
     a.tree = try core.boot.boot(gpa, a.display, &a.font, a.display.conn.clipr, .{
         .dir_boot = true,
         .ns = &a.ns,
+        .palette = pal,
     });
     a.editor = core.Editor.init(gpa);
     a.tree.bind(&a.editor);

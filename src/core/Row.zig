@@ -16,6 +16,7 @@
 const std = @import("std");
 const draw = @import("draw");
 const Chrome = @import("Chrome.zig");
+const Palette = @import("Palette.zig");
 const Text = @import("text/Text.zig");
 const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
@@ -59,7 +60,7 @@ pub fn init(row: *Row, chrome: *const Chrome, r: Rect) Error!void {
     row.col = .empty; // rows.c:33-34 row->col = nil / row->ncol = 0
     row.winid = 0; // the C's global winid seed (field default doesn't apply to create()+init)
 
-    try screen.draw(r, chrome.white, null, .{}); // rows.c:31 white fill
+    try screen.draw(r, chrome.ground, null, .{}); // rows.c:31 ground fill
 
     // rowtag over the top one-line strip (rows.c:35-39).
     var r1 = r;
@@ -72,7 +73,7 @@ pub fn init(row: *Row, chrome: *const Chrome, r: Rect) Error!void {
     // Border-px black band beneath the tag (rows.c:43-45).
     r1.min.y = r1.max.y;
     r1.max.y += Chrome.border;
-    try screen.draw(r1, chrome.black, null, .{}); // rows.c:45
+    try screen.draw(r1, chrome.rule, null, .{}); // rows.c:45
 
     // Header text + caret at the end (rows.c:46-47).
     try row.tag.insertAt(0, header, true); // textinsert
@@ -126,7 +127,7 @@ pub fn add(row: *Row, x_in: i32) Error!?*Column {
         const d = row.col.items[i - 1];
         r = d.r;
         if (dx(r) < 100) return null; // rows.c:74-75 refuse
-        try screen.draw(r, row.chrome.white, null, .{}); // rows.c:76
+        try screen.draw(r, row.chrome.ground, null, .{}); // rows.c:76
         var r1 = r;
         r1.max.x = @min(x - bd, r.max.x - 50); // rows.c:78
         if (dx(r1) < 50) r1.max.x = r1.min.x + 50; // rows.c:79-80
@@ -134,7 +135,7 @@ pub fn add(row: *Row, x_in: i32) Error!?*Column {
         // Border-px black vertical band beside d (rows.c:82-84).
         r1.min.x = r1.max.x;
         r1.max.x = r1.min.x + bd;
-        try screen.draw(r1, row.chrome.black, null, .{});
+        try screen.draw(r1, row.chrome.rule, null, .{});
         r.min.x = r1.max.x; // rows.c:85
     }
 
@@ -184,7 +185,7 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
 
     const ncol = row.col.items.len;
     if (ncol == 0) {
-        try screen.draw(r, row.chrome.white, null, .{}); // rows.c:223-225
+        try screen.draw(r, row.chrome.ground, null, .{}); // rows.c:223-225
         return;
     }
 
@@ -200,7 +201,7 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
         r.max.x = neighbor.r.max.x;
     }
 
-    try screen.draw(r, row.chrome.white, null, .{}); // rows.c:235
+    try screen.draw(r, row.chrome.ground, null, .{}); // rows.c:235
     try neighbor.resize(r); // rows.c:236
 }
 
@@ -254,7 +255,7 @@ pub fn resize(row: *Row, r: Rect) Error!void {
     _ = try row.tag.resize(r1, true); // rows.c:115 textresize TRUE
     r1.min.y = r1.max.y;
     r1.max.y += bd;
-    try screen.draw(r1, row.chrome.black, null, .{}); // rows.c:118 band
+    try screen.draw(r1, row.chrome.rule, null, .{}); // rows.c:118 band
 
     var rr = r;
     rr.min.y = r1.max.y; // rows.c:119
@@ -271,7 +272,7 @@ pub fn resize(row: *Row, r: Rect) Error!void {
         if (i > 0) { // border band between columns (rows.c:130-135)
             var r2 = r1;
             r2.max.x = r2.min.x + bd;
-            try screen.draw(r2, row.chrome.black, null, .{});
+            try screen.draw(r2, row.chrome.rule, null, .{});
             r1.min.x = r2.max.x;
         }
         // Snarf divergence (see the doc comment): never hand a column less than
@@ -341,7 +342,7 @@ const RowHarness = struct {
         const h = try a.create(RowHarness);
         errdefer a.destroy(h);
         h.fx = try Frame.TestFixture.init();
-        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font);
+        h.chrome = try Chrome.init(a, h.fx.disp, h.fx.font, Palette.default);
         h.row = try a.create(Row);
         try h.row.init(h.chrome, r);
         h.bodies = .empty;

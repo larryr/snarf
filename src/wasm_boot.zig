@@ -125,8 +125,8 @@ pub const App = struct {
 /// and hand it back; the root installs it as the module's one `app` pointer.
 pub fn boot(width: u32, height: u32, hooks: Hooks) !*App {
     const a = try alloc.create(App);
-    // The window tree fills the whole display (rowinit lays the rowtag + white
-    // ground; Chrome owns the acme palette solids).
+    // The window tree fills the whole display (rowinit lays the rowtag + its
+    // ground; Chrome owns the palette solids).
     const screen_rect = draw.proto.Rect.make(0, 0, @intCast(width), @intCast(height));
 
     // ---- draw stack: canvas ← devdraw ← server ← client ← Display ----
@@ -155,6 +155,7 @@ pub fn boot(width: u32, height: u32, hooks: Hooks) !*App {
     a.tree = try core.boot.boot(alloc, a.display, &a.font, screen_rect, .{
         .dir_boot = true,
         .ns = &a.ns,
+        .palette = core.Palette.default,
     });
 
     // Editor routing machine bound to the window tree (R-P8-9/10/11): keys
