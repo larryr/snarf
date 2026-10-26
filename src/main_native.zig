@@ -16,15 +16,21 @@
 //! objects the wasm build links, with no host switch anywhere inside them.
 //! That identity is the whole point of the spike (R-P15-2 / R-OV-03).
 //!
-//! Not here yet (later native waves, ADR-0005 §5): the host file system as a
-//! real 9P server, a process service, `/n/origin`, `/mnt/opfs`. The namespace
-//! is `/dev`, `/dev/draw` and `/mnt/snarf-self`, so the boot directory window
-//! for `/` lists `dev/ mnt/` exactly as the browser's does with the origin down.
+//! The namespace (phase 20, S-02 §4): the host file system, served
+//! in-process by `hostfs.HostTree` over `HostFs` rooted at the real `/`, is
+//! mounted at `/` — the fallthrough, since longest-prefix resolve keeps
+//! `/dev`, `/dev/draw` and `/mnt/snarf-self` winning — and again at
+//! `/mnt/host` (the S-02 alias). So the boot directory window lists the real
+//! root, and Put/Get/B3 on any absolute path reach the disk, as in acme. The
+//! synthetic prefixes (`dev/`, `mnt/`) are NOT in that listing: they are
+//! mount-table entries, not host entries. Not here yet (ADR-0005 §5): a
+//! process service, `/n/origin`, `/mnt/opfs`.
 const std = @import("std");
 const core = @import("core");
 const dev = @import("dev");
 const draw = @import("draw");
 const host = @import("host");
+const hostfs = @import("hostfs");
 const ninep = @import("ninep");
 const input_pump = @import("input_pump.zig");
 const ns_boot = @import("ns_boot.zig");
@@ -70,6 +76,12 @@ const App = struct {
     ticket_kbd: ninep.Client.ReadTicket,
     mouse_buf: [mouse_buf_len]u8,
     kbd_buf: [kbd_buf_len]u8,
+    // --- host file system stack: HostFs ← HostTree ← server ← client ---
+    host_fs: hostfs.HostFs,
+    host_tree: hostfs.HostTree,
+    pipe_fs: *ninep.chan.Pipe,
+    srv_fs: ninep.server.Server,
+    cl_fs: ninep.Client,
     // --- namespace ---
     ns: ninep.mount.Namespace,
     self_tree: ns_boot.SelfTree,
@@ -120,12 +132,12 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
 
-    try boot(gpa, a, pal);
+    try boot(gpa, init.io, a, pal);
     defer a.tree.deinit();
     defer a.editor.deinit();
-    // R-P17-5: the native `$home` is the real `$HOME` (acme.c:136), null when
-    // unset. Nothing is mounted there until the host file server mounts at
-    // `/`, so a `Dump` warns NotMounted until then — honestly, at the right path.
+    // R-P17-5 / PM Q6: the native `$home` is the real `$HOME` (acme.c:136),
+    // null when unset. It resolves through the root mount, so `Dump` writes
+    // `$HOME/acme.dump` on the real disk.
     a.editor.session.home = init.environ_map.get("HOME");
 
     // The two long polls, armed once and re-armed by `Conn.poll` from here on
@@ -180,7 +192,7 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
 }
 
 /// Build the whole stack in place (pointer-capture hazards — see `App`).
-fn boot(gpa: std.mem.Allocator, a: *App, pal: *const core.Palette) !void {
+fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
     a.pipe = try ninep.chan.Pipe.init(gpa, 16384);
@@ -234,6 +246,20 @@ fn boot(gpa: std.mem.Allocator, a: *App, pal: *const core.Palette) !void {
     try ns_boot.mountDevices(&a.ns, &a.cl, root.fid, &a.cl_input, iroot.fid);
     try a.self_tree.start(gpa, &a.editor, &a.ns);
 
+    // ---- host file system at `/` and `/mnt/host` (phase 20, R-P20-2) ----
+    // Same pipe/server/client pump as the input stack; one attach, mounted
+    // twice (the same client + root fid serve both prefixes).
+    a.host_fs = try hostfs.HostFs.open(io, "/");
+    a.host_tree = hostfs.HostTree.init(gpa, &a.host_fs);
+    a.pipe_fs = try ninep.chan.Pipe.init(gpa, 65536);
+    a.srv_fs = try ninep.server.Server.init(gpa, a.pipe_fs.serverEnd(), &hostfs.HostTree.ops, &a.host_tree, 8192);
+    a.cl_fs = try ninep.Client.init(gpa, a.pipe_fs.clientEnd(), 8192);
+    a.cl_fs.pump = .{ .ctx = &a.srv_fs, .run = pumpServer };
+    _ = try a.cl_fs.version(8192);
+    const froot = try a.cl_fs.attach("larry", "");
+    try a.ns.mount("/", &a.cl_fs, froot.fid);
+    try a.ns.mount("/mnt/host", &a.cl_fs, froot.fid);
+
     // ---- the boot directory window (acme.c:258-259, R-EDIT-03) ----
     {
         const cols = a.tree.row.col.items;
@@ -274,6 +300,7 @@ fn pumpWindowSystem(a: *App) !void {
 fn tick(a: *App) !void {
     _ = try a.srv.poll(); // draw stack
     try a.self_tree.poll(); // /mnt/snarf-self stack
+    _ = try a.srv_fs.poll(); // host file system stack (Load/Put jobs)
     try input_pump.drain(inputDevices(a), &a.editor); // input stack → Editor
     try a.editor.frameEnd(a.display);
 }

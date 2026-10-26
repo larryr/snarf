@@ -6,9 +6,8 @@
 //! is the default dump file `$home/acme.dump` (rows.c:477-479, :573-576). The
 //! HOST entry point sets `home`: the browser's is `/mnt/opfs` (the always-
 //! available private area, R-9P-09), the native host's is the real `$HOME`
-//! (null when unset). Nothing is mounted at `$HOME` natively until the host
-//! file server mounts at `/`, so a native `Dump` today warns `can't write dump
-//! …/acme.dump: NotMounted` — honest, and the path is right the day it is.
+//! (null when unset). Since phase 20 the host file system is mounted at `/`
+//! natively, so `$HOME/acme.dump` resolves to the real file.
 //!
 //! One dump and one load at a time; a second one while the first runs warns.
 //!
