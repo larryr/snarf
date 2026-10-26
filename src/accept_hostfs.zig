@@ -542,3 +542,20 @@ test "phase-20 NFS-13: Load of a missing or corrupt dump warns and leaves the ed
     try testing.expect(try r.bodiesContain("bad load file /home/acme.dump:"));
     try testing.expectEqual(before, fileWindows(r));
 }
+
+test "phase-20 NFS-01b: a dirwin on / lists synthetic mount points with the host root (R-9P-16)" {
+    // Corrects the contract's R-P20-2 claim: synthetic prefixes ARE listed —
+    // ListDirJob concatenates syntheticChildren with the union members'
+    // streams (S-02 §1.2, nsio.zig), so the boot window shows dev/ and mnt/
+    // alongside the real files.
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.seed("realfile.txt", "x");
+    const w = try r.openWin("/");
+    try testing.expect(w.isdir);
+    const b = try r.bodyBytes(w);
+    defer r.a.free(b);
+    try testing.expect(std.mem.indexOf(u8, b, "dev/") != null);
+    try testing.expect(std.mem.indexOf(u8, b, "mnt/") != null);
+    try testing.expect(std.mem.indexOf(u8, b, "realfile.txt") != null);
+}

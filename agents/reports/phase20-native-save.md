@@ -174,3 +174,12 @@ Accepted the gate's PASS WITH NOTES and closed its one real finding:
   the shared-core palette default under ADR-0005's freeze).
 - Final gates after the fix: 818 tests / 803 pass / 15 skip / 0 fail ·
   fmt clean · smoke 40/40 · wasm + native build clean.
+
+## Correction (fable, 2026-10-26)
+
+The contract's R-P20-2 claim that `/dev`/`/mnt` are absent from the root listing was the
+orchestrator's own untested assertion and is WRONG: a dirwin on `/` lists `dev/  mnt/`
+beside the host root entries (synthetic mount-point children per S-02 §1.2 / R-9P-16,
+`nsio.zig`'s ListDirJob, implemented phase 12d). The implementation and gate stages
+repeated the claim without testing it — a pipeline lesson: a contract assertion about
+OBSERVABLE behavior must be pinned by a test, not prose. Now pinned: NFS-01b.
