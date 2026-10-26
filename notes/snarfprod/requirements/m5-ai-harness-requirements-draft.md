@@ -31,6 +31,17 @@ Snarf already lets external programs drive the editor by reading and writing a f
 - An agent with the default grant cannot write any `body`, and cannot see `/n/local` or `/bin`. Each attempt shows up as a walk/open error in the audit log.
 - A grant adding `zig` lets B2-equivalent `ctl` execution run `zig build` as Larry, in the granted directory only.
 
+*Implementation anchor (added 2026-10-26, Larry's direction via the fable session):*
+R-AG-04's mechanism exists today and needs no new architecture: `ninep.mount.Namespace`
+is **instance-scoped** (the no-globals rule, S-07), so a per-agent namespace is simply
+*another constructed instance* — the `rfork(RFNAMEG)` move — and S-02 §1.1's ordered
+union mounts (`bind -a`/`-b`, MREPL/MBEFORE/MAFTER, R-9P-03, implemented phase 12d) plus
+synthetic mount-point directories (§1.2, R-9P-16) compose each agent's view: bind a
+scratch tree at `/`, omit `/mnt/host`, union a read-only toolbox at `/bin`. Phase 20's
+root-mounted host fs demonstrates the same machinery in production (test NFS-01b pins
+the union listing). The harness work is therefore grants + audit + transport, not
+namespace plumbing.
+
 ## 4. Visibility, attribution, audit
 
 | ID | Requirement (PROPOSED) |
