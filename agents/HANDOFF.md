@@ -17,16 +17,14 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1): owns `.github/workflows/ci.yml` only.
-- **Phase 18 built, PR #24 open** (`phase18-devdraw-build`): `build.zig`, `build.zig.zon`,
-  `build/`, `src/host/devdraw/{Conn,DevdrawPath}.zig`, `src/host/host.zig`,
-  `src/main_native.zig`. Full pipeline run (fable → opus → sonnet → fable, ACCEPT WITH NITS)
-  complete; all gates green on this Mac. Awaiting merge (classifier/credential friction on
-  `gh pr merge` — Larry merges via web UI, same as #2/#3/#5) and Larry's manual check (§5 of
-  the contract: `zig build native && zig build run-native` with `$PLAN9` set must print
-  `(bundled)`).
-- **`agents/NEXT-PHASES.md` re-tier, PR #6 open**: do not also edit this file until #6 lands —
-  phase 18's own "devdraw built in-tree" Parked→done update is queued behind it (see Current
-  state).
+- **Papers + palette, PR #36 open** (`papers-pike-rsc-2026-10-26`): owns `docs/acme/{utf,9,p9p-changes}/`,
+  `docs/acme/PAPERS-INDEX.md`, `notes/claude/acme-color-research-2026-10-26.md`,
+  `notes/claude/snarf-color-scheme-proposal-2026-10-26.md`. Archive additions (pinned-fork MIT
+  only) + color research + a snarf palette proposal ("Manila" recommended — a PRODUCT DECISION
+  pending Larry; no code changed). Visual: https://claude.ai/artifact/EMLYDChSLzr9p6J5MGhr9S
+- **Still queued once Larry decides on the palette**: a short ADR for the palette divergence,
+  the `Chrome.zig` value change, 2 `accept.zig` pixel assertions, 5 golden re-freezes
+  (ACCEPT-8/9/10/12B/13B), `web/index.html:17` — see the proposal's §6 migration table.
 
 ## Current state (update in place)
 
@@ -45,17 +43,20 @@ one fact that had gone stale and wrong (PR creation — see below).
   a sibling `zig-out/bin/devdraw`. Final resolution order (revised during review, not the
   earlier draft): `$DEVDRAW` → bundled (relative to the running executable's own path) →
   `$PLAN9/bin/devdraw` → bare `devdraw` on `$PATH`.
-- **Phase 18 built — PR #24 open, not yet merged**: implements ADR-0006. `devdraw` built
-  in-tree (372 KB, 0 warnings, cold build ~18s incl. fetch, warm ~0.5s); `zig build`/
-  `zig build test` verified network-free (`--system <empty dir>`); a real pre-existing
-  double-kill bug in `Conn.spawn` found and fixed along the way (regression-tested). Full
-  pipeline (fable contract → opus build → sonnet gate → fable review) complete, verdict ACCEPT
-  WITH NITS, all findings resolved or accepted as documented debt. See "In-flight claims"
-  above and `agents/reports/phase18-devdraw-build.md`.
+- **Phase 18 MERGED (PR #24, `743abe6`, 2026-10-17)**: `devdraw` builds in-tree per ADR-0006
+  (372 KB, 0 warnings; `zig build`/`zig build test` stay network-free). Detail:
+  `agents/reports/phase18-devdraw-build.md`. The 2026-10-17 batch also merged PRs #6 (NEXT-PHASES
+  re-tier), #7, #26/#27/#29/#30 (SnarfDev2 test PRs; #30 needed a conflict fix), #32 (README
+  native-primary rewrite). 2026-10-25/26: #33 `make native`/`run-native`, #34 `dist/` convention
+  (gitignored packaging output; committed-binary workaround branch deleted), #35 `make install`/
+  `uninstall` to `$(PREFIX)/bin`, default `~/.local/bin` (#35 re-landed content lost by #33's
+  squash-merge — check a squash-merge's actual diff before deleting its branch).
 - **docs/product/roadmap.md v0.2 promoted** (PR #5, merged `b92d825`): now the agreed baseline,
   superseding the v0.1 draft. Per its own "Process" rule: the roadmap is product prioritization,
   `agents/NEXT-PHASES.md` is the execution queue — they coexist, neither supersedes the other.
-  `NEXT-PHASES.md`'s re-tier for native-primary is PR #6 (open) — see "In-flight claims".
+- **Acme color history settled (2026-10-26)**: no Pike/Cox statement explaining the palette
+  exists; the eye-strain story is unsourced folklore. Verified palette record with pinned
+  citations: `notes/claude/acme-color-research-2026-10-26.md` (PR #36).
 - **GitHub PR creation now works (fixed 2026-10-11)** — corrects a prior wrong fact below:
   the repo owner had "Pull Requests" disabled at the repo level (Settings → General; not an
   API/token issue — every credential tested, OAuth/fine-grained-PAT/classic-PAT, 404'd
