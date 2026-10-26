@@ -6,8 +6,8 @@
 #   make serve      build, then serve (no browser)
 #   make native     build snarf-native + the bundled devdraw peer (ADR-0006, macOS)
 #   make run-native run native, then launch it: the editor in a devdraw window
-#   make install    install snarf-native + devdraw to $(PREFIX)/bin (default ~/.local/bin)
-#   make uninstall  remove them from $(PREFIX)/bin
+#   make install    install snarf + devdraw to $(PREFIX)/bin (default ~/.local/bin)
+#   make uninstall  remove them from $(PREFIX)/bin (and a stale snarf-native)
 #   make test       full native test suite (core+draw+ninep, no browser)
 #   make smoke      node smoke test against the built wasm
 #   make check      test + fmt check
@@ -61,20 +61,23 @@ native:
 run-native:
 	$(ZIG) build run-native
 
-# snarf-native + devdraw land in the SAME directory ($(PREFIX)/bin) because
-# the bundled-devdraw lookup is resolved relative to snarf-native's own
-# executable path (ADR-0006) — they can't be split across directories.
+# snarf + devdraw land in the SAME directory ($(PREFIX)/bin) because the
+# bundled-devdraw lookup is resolved relative to the running executable's own
+# path (ADR-0006) — they can't be split across directories. The build artifact
+# is still named snarf-native (build.zig); only the installed copy is renamed.
 install:
 	$(ZIG) build native --prefix $(PREFIX)
-	@echo "installed snarf-native + devdraw to $(PREFIX)/bin"
+	mv -f $(PREFIX)/bin/snarf-native $(PREFIX)/bin/snarf
+	@echo "installed snarf + devdraw to $(PREFIX)/bin"
 	@case ":$$PATH:" in \
 	  *":$(PREFIX)/bin:"*) ;; \
 	  *) echo "note: $(PREFIX)/bin is not on your PATH" ;; \
 	esac
 
+# snarf-native: stale copy from installs before the rename.
 uninstall:
-	rm -f $(PREFIX)/bin/snarf-native $(PREFIX)/bin/devdraw
-	@echo "removed snarf-native + devdraw from $(PREFIX)/bin"
+	rm -f $(PREFIX)/bin/snarf $(PREFIX)/bin/devdraw $(PREFIX)/bin/snarf-native
+	@echo "removed snarf + devdraw from $(PREFIX)/bin"
 
 test:
 	$(ZIG) build test --summary all
