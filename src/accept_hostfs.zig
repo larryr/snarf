@@ -3,15 +3,15 @@
 //! 16 of `agents/contracts/phase20-native-save.md`. Pulled into the
 //! `accept.zig` test root (same module imports).
 //!
-//! HARNESS (TDD stage one, no feature code): `accept`'s module graph cannot see
-//! `tools/origin/hostfs.zig` (S-07 §6; Zig forbids one file in two modules, and
-//! `tools/origin/accept.zig` already owns it), so this file serves a
-//! `std.testing.tmpDir` through a small 9P ops table of its own (`TmpFs`) —
-//! plain open(OTRUNC)/write/clunk semantics, like `HostFs` TODAY. It therefore
-//! pins the EDITOR-side contract over a host-fs mount; the hostfs-side
-//! atomicity (Q5) is pinned file-level in `tools/origin/hostfs_native_test.zig`.
-//! The `main_native.zig` wiring itself (R-P20-2) is not reachable from here and
-//! is covered by the manual launch gate.
+//! HARNESS: a `std.testing.tmpDir` served by the REAL `hostfs.HostTree` over
+//! `hostfs.HostFs` (the same ops table `main_native.zig` mounts at `/`), so
+//! these tests pin the editor side AND the hostfs side together — including
+//! the atomic Put (PM Q5) at the editor level. The file-level Q5 tests are in
+//! `tools/origin/hostfs_native_test.zig`. (TDD stage one used an in-file
+//! `TmpFs` because `hostfs` was not yet a module; phase 20's implementation
+//! made it one and swapped the real tree in — see the as-built report.)
+//! The `main_native.zig` wiring itself (R-P20-2) is not reachable from here:
+//! NFS-01w pins it in the source, and the launch gate exercises it.
 //!
 //! Never writes outside the tmp dir; never touches `$HOME`.
 const std = @import("std");
@@ -19,209 +19,12 @@ const builtin = @import("builtin");
 const core = @import("core");
 const draw = @import("draw");
 const ninep = @import("ninep");
+const hostfs = @import("hostfs");
 const ns_boot = @import("ns_boot.zig");
 
 const testing = std.testing;
 const Io = std.Io;
 const msg = ninep.msg;
-const Stat = ninep.stat;
-const OpError = ninep.errors.OpError;
-
-// ===========================================================================
-// TmpFs — a tmp directory behind a 9P ops table
-// ===========================================================================
-
-const TmpFs = struct {
-    io: Io,
-    dir: Io.Dir,
-    gpa: std.mem.Allocator,
-
-    const Node = struct { rel: []u8 };
-
-    const ops: ninep.server.Ops = .{
-        .attach = attach,
-        .walk1 = walk1,
-        .clone = clone,
-        .open = open,
-        .read = read,
-        .write = write,
-        .clunk = clunk,
-        .stat = statOp,
-        .create = create,
-    };
-
-    fn nodeOf(fid: *ninep.server.Fid) *Node {
-        return @ptrCast(@alignCast(fid.ctx.?));
-    }
-
-    fn setRel(self: *TmpFs, fid: *ninep.server.Fid, rel: []const u8) OpError!void {
-        const p = self.gpa.create(Node) catch return error.IoError;
-        errdefer self.gpa.destroy(p);
-        p.* = .{ .rel = self.gpa.dupe(u8, rel) catch return error.IoError };
-        fid.ctx = p;
-    }
-
-    fn sub(rel: []const u8) []const u8 {
-        return if (rel.len == 0) "." else rel;
-    }
-
-    fn mapErr(e: anyerror) OpError {
-        return switch (e) {
-            error.FileNotFound => error.FileDoesNotExist,
-            error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
-            error.IsDir => error.FileIsDirectory,
-            error.NotDir => error.WalkNoDir,
-            else => error.IoError,
-        };
-    }
-
-    fn seconds(t: Io.Timestamp) u32 {
-        const s = @divTrunc(t.nanoseconds, std.time.ns_per_s);
-        if (s <= 0) return 0;
-        return @intCast(@min(s, std.math.maxInt(u32)));
-    }
-
-    fn toStat(st: Io.File.Stat, name: []const u8) Stat {
-        const isdir = st.kind == .directory;
-        const mtime = seconds(st.mtime);
-        return .{
-            .qid = .{ .path = @intCast(st.inode), .vers = mtime, .qtype = .{ .dir = isdir } },
-            .mode = if (isdir) Stat.DMDIR | 0o755 else 0o644,
-            .atime = if (st.atime) |a| seconds(a) else mtime,
-            .mtime = mtime,
-            .length = if (isdir) 0 else st.size,
-            .name = name,
-        };
-    }
-
-    fn statRel(self: *TmpFs, rel: []const u8, name: []const u8) OpError!Stat {
-        const st = self.dir.statFile(self.io, sub(rel), .{}) catch |e| return mapErr(e);
-        if (st.kind != .directory and st.kind != .file) return error.FileDoesNotExist;
-        return toStat(st, name);
-    }
-
-    fn join(self: *TmpFs, rel: []const u8, name: []const u8) OpError![]u8 {
-        if (rel.len == 0) return self.gpa.dupe(u8, name) catch return error.IoError;
-        return std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ rel, name }) catch return error.IoError;
-    }
-
-    fn attach(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, _: []const u8) OpError!ninep.Qid {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        try self.setRel(fid, "");
-        return (try self.statRel("", "")).qid;
-    }
-
-    fn walk1(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, name: []const u8) OpError!ninep.Qid {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        const node = nodeOf(fid);
-        const next: []u8 = blk: {
-            if (std.mem.eql(u8, name, "..")) {
-                const cut = std.mem.lastIndexOfScalar(u8, node.rel, '/') orelse 0;
-                break :blk self.gpa.dupe(u8, node.rel[0..cut]) catch return error.IoError;
-            }
-            if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.indexOfScalar(u8, name, '/') != null)
-                return error.FileDoesNotExist;
-            if (!(try self.statRel(node.rel, "")).qid.qtype.dir) return error.WalkNoDir;
-            break :blk try self.join(node.rel, name);
-        };
-        errdefer self.gpa.free(next);
-        const st = try self.statRel(next, "");
-        self.gpa.free(node.rel);
-        node.rel = next;
-        return st.qid;
-    }
-
-    fn clone(ctx: *anyopaque, _: *ninep.server.Server, old: *ninep.server.Fid, new: *ninep.server.Fid) OpError!void {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        try self.setRel(new, nodeOf(old).rel);
-    }
-
-    fn open(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, mode: u8) OpError!ninep.Qid {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        const rel = nodeOf(fid).rel;
-        const st = try self.statRel(rel, "");
-        const acc = mode & 3;
-        const wants_write = acc == msg.OWRITE or acc == msg.ORDWR or (mode & msg.OTRUNC) != 0;
-        if (st.qid.qtype.dir) {
-            if (wants_write) return error.PermissionDenied;
-        } else if (wants_write) {
-            var f = self.dir.openFile(self.io, rel, .{ .mode = .read_write }) catch |e| return mapErr(e);
-            defer f.close(self.io);
-            if ((mode & msg.OTRUNC) != 0) f.setLength(self.io, 0) catch return error.IoError;
-        }
-        return st.qid;
-    }
-
-    fn create(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, name: []const u8, perm: u32, _: u8) OpError!ninep.server.CreateResult {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        if (perm & Stat.DMDIR != 0) return error.PermissionDenied;
-        const node = nodeOf(fid);
-        const child = try self.join(node.rel, name);
-        errdefer self.gpa.free(child);
-        var f = self.dir.createFile(self.io, child, .{ .exclusive = true }) catch |e| return switch (e) {
-            error.PathAlreadyExists => error.FileExists,
-            else => mapErr(e),
-        };
-        f.close(self.io);
-        const st = try self.statRel(child, "");
-        self.gpa.free(node.rel);
-        node.rel = child;
-        return .{ .qid = st.qid };
-    }
-
-    fn read(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, offset: u64, buf: []u8) ninep.server.ReadError!usize {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        const rel = nodeOf(fid).rel;
-        const st = try self.statRel(rel, "");
-        if (!st.qid.qtype.dir) {
-            var f = self.dir.openFile(self.io, rel, .{}) catch |e| return mapErr(e);
-            defer f.close(self.io);
-            return f.readPositionalAll(self.io, buf, offset) catch return error.IoError;
-        }
-        // Directory: whole stat records from `offset`, regenerated each read.
-        var d = self.dir.openDir(self.io, sub(rel), .{ .iterate = true }) catch |e| return mapErr(e);
-        defer d.close(self.io);
-        var it = d.iterate();
-        var pos: u64 = 0;
-        var written: usize = 0;
-        while (it.next(self.io) catch return error.IoError) |ent| {
-            const es = d.statFile(self.io, ent.name, .{}) catch continue;
-            if (es.kind != .directory and es.kind != .file) continue;
-            const rec = toStat(es, ent.name);
-            const n = rec.encodedSize();
-            const start = pos;
-            pos += n;
-            if (start < offset) continue;
-            if (written + n > buf.len) break;
-            _ = rec.encode(buf[written..]) catch break;
-            written += n;
-        }
-        return written;
-    }
-
-    fn write(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid, offset: u64, data: []const u8) OpError!usize {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        var f = self.dir.openFile(self.io, nodeOf(fid).rel, .{ .mode = .read_write }) catch |e| return mapErr(e);
-        defer f.close(self.io);
-        f.writePositionalAll(self.io, data, offset) catch return error.IoError;
-        return data.len;
-    }
-
-    fn clunk(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid) void {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        const p: *Node = @ptrCast(@alignCast(fid.ctx orelse return));
-        self.gpa.free(p.rel);
-        self.gpa.destroy(p);
-        fid.ctx = null;
-    }
-
-    fn statOp(ctx: *anyopaque, _: *ninep.server.Server, fid: *ninep.server.Fid) OpError!Stat {
-        const self: *TmpFs = @ptrCast(@alignCast(ctx));
-        const rel = nodeOf(fid).rel;
-        const cut = std.mem.lastIndexOfScalar(u8, rel, '/');
-        return self.statRel(rel, if (cut) |c| rel[c + 1 ..] else rel);
-    }
-};
 
 // ===========================================================================
 // Rig — headless boot + namespace {/ and /mnt/host → tmp, /dev → MemTree,
@@ -236,7 +39,8 @@ fn pumpServer(ctx: *anyopaque) anyerror!void {
 const Rig = struct {
     a: std.mem.Allocator,
     tmp: testing.TmpDir,
-    fs: TmpFs,
+    host: hostfs.HostFs,
+    fs: hostfs.HostTree,
     pipe: *ninep.chan.Pipe,
     srv: ninep.server.Server,
     cl: ninep.Client,
@@ -254,9 +58,12 @@ const Rig = struct {
         const r = try a.create(Rig);
         r.a = a;
         r.tmp = testing.tmpDir(.{ .iterate = true });
-        r.fs = .{ .io = testing.io, .dir = r.tmp.dir, .gpa = a };
+        const path = try r.tmp.dir.realPathFileAlloc(testing.io, ".", a);
+        defer a.free(path);
+        r.host = try hostfs.HostFs.open(testing.io, path);
+        r.fs = hostfs.HostTree.init(a, &r.host);
         r.pipe = try ninep.chan.Pipe.init(a, 65536);
-        r.srv = try ninep.server.Server.init(a, r.pipe.serverEnd(), &TmpFs.ops, &r.fs, 8192);
+        r.srv = try ninep.server.Server.init(a, r.pipe.serverEnd(), &hostfs.HostTree.ops, &r.fs, 8192);
         r.cl = try ninep.Client.init(a, r.pipe.clientEnd(), 8192);
         r.cl.pump = .{ .ctx = &r.srv, .run = pumpServer };
         _ = try r.cl.version(8192);
@@ -289,6 +96,7 @@ const Rig = struct {
         r.cl.deinit();
         r.srv.deinit();
         r.pipe.deinit();
+        r.host.close();
         r.tmp.cleanup();
         r.a.destroy(r);
     }
@@ -306,7 +114,8 @@ const Rig = struct {
     }
 
     fn busy(r: *Rig) bool {
-        return r.ed.loads.items.len != 0 or r.ed.puts.items.len != 0;
+        return r.ed.loads.items.len != 0 or r.ed.puts.items.len != 0 or
+            r.ed.session.dump != null or r.ed.session.load != null;
     }
 
     /// Phase-17 jobs are asynchronous: tick until every Load/Put has finished
@@ -642,4 +451,94 @@ test "phase-20 NFS-01w: main_native wires hostfs at / and /mnt/host (R-P20-2, so
     try testing.expect(std.mem.indexOf(u8, src, "HostFs.open(") != null);
     try testing.expect(std.mem.indexOf(u8, src, "\"/mnt/host\"") != null);
     try testing.expect(std.mem.indexOf(u8, src, ".mount(\"/\"") != null);
+}
+
+// ===========================================================================
+// NFS-11..13 — Dump/Load through the root mount (R-P20-5). Added by the
+// implementation stage: they pass with ZERO extra plumbing once `$home`
+// resolves through `/` (here `$home` = `/home`, i.e. tmp/home).
+// ===========================================================================
+
+/// Windows that are not `+Errors` (warnings make one; "unchanged" ignores it).
+fn fileWindows(r: *Rig) usize {
+    var n: usize = 0;
+    for (r.tree.row.col.items) |c| for (c.w.items) |w| {
+        if (!std.mem.endsWith(u8, w.body.file.name.items, "+Errors")) n += 1;
+    };
+    return n;
+}
+
+test "phase-20 NFS-11: Dump writes $home/acme.dump in acme's text format" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.createDirPath(testing.io, "home");
+    r.ed.session.home = "/home";
+    try r.seed("f.txt", "hello\n");
+    _ = try r.openWin("/f.txt");
+    try r.run(&r.tree.row.tag, "Dump");
+    try r.settle();
+    const d = try r.disk("home/acme.dump");
+    defer r.a.free(d);
+    try testing.expect(std.mem.startsWith(u8, d, "/\n")); // rows.c:481 wdir line
+    try testing.expect(std.mem.indexOf(u8, d, "/f.txt") != null);
+    try testing.expect(!r.ed.warningsPending());
+}
+
+test "phase-20 NFS-12: a fresh editor's Load restores the dumped windows, names and contents" {
+    var dumped: []u8 = undefined;
+    {
+        const r = try Rig.create();
+        defer r.destroy();
+        try r.tmp.dir.createDirPath(testing.io, "home");
+        r.ed.session.home = "/home";
+        try r.seed("f.txt", "hello\n");
+        try r.seed("g.txt", "world\n");
+        _ = try r.openWin("/f.txt");
+        _ = try r.openWin("/g.txt");
+        try r.run(&r.tree.row.tag, "Dump");
+        try r.settle();
+        dumped = try r.disk("home/acme.dump");
+    }
+    defer testing.allocator.free(dumped);
+
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.createDirPath(testing.io, "home");
+    r.ed.session.home = "/home";
+    try r.seed("f.txt", "hello\n");
+    try r.seed("g.txt", "world\n");
+    try r.seed("home/acme.dump", dumped);
+    const before = fileWindows(r); // the boot scratch window
+    try r.run(&r.tree.row.tag, "Load");
+    try r.settle();
+    try testing.expect(!r.ed.warningsPending());
+    // Load adds on top (rowload initing=FALSE, rows.c:559): the dump held the
+    // first editor's scratch window plus /f.txt and /g.txt.
+    try testing.expectEqual(before + 3, fileWindows(r));
+    var names: usize = 0;
+    for (r.tree.row.col.items) |c| for (c.w.items) |w| {
+        const n = w.body.file.name.items;
+        if (std.mem.eql(u8, n, "/f.txt") or std.mem.eql(u8, n, "/g.txt")) names += 1;
+    };
+    try testing.expectEqual(@as(usize, 2), names);
+    try testing.expect(try r.bodiesContain("hello\n"));
+    try testing.expect(try r.bodiesContain("world\n"));
+}
+
+test "phase-20 NFS-13: Load of a missing or corrupt dump warns and leaves the editor unchanged" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.createDirPath(testing.io, "home");
+    r.ed.session.home = "/home";
+    const before = fileWindows(r);
+    try r.run(&r.tree.row.tag, "Load");
+    try r.settle();
+    try testing.expect(try r.bodiesContain("can't open load file /home/acme.dump"));
+    try testing.expectEqual(before, fileWindows(r));
+
+    try r.seed("home/acme.dump", "/\n"); // header cut short: fails before any window
+    try r.run(&r.tree.row.tag, "Load");
+    try r.settle();
+    try testing.expect(try r.bodiesContain("bad load file /home/acme.dump:"));
+    try testing.expectEqual(before, fileWindows(r));
 }
