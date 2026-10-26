@@ -259,6 +259,14 @@ pub fn emit(self: *Display, op: proto.Op) Error!void {
     self.bufn += written.len;
 }
 
+/// Draw commands are buffered and not yet sent. The C has no analog: acme
+/// flushes unconditionally per event-loop arm (acme.c:478, 504), while snarf's
+/// `Editor.frameEnd` flushes at most once per tick — this is how it knows a
+/// tree-level draw (outside any editor action) still needs that flush.
+pub fn pending(self: *const Display) bool {
+    return self.bufn != 0;
+}
+
 /// Flush the buffer with the visible ('v') verb appended into the reserved
 /// byte (flushimage(d, 1), init.c:437-449). An empty buffer still sends the
 /// lone 'v'.

@@ -83,3 +83,40 @@ test "phase-19: monadnock boot scene — dark backs, light text, dark ground" {
     try testing.expect(anyPixel(&hb, tr, pal.tag_text));
     try testing.expect(!anyPixel(&hb, tr, 0x000000FF));
 }
+
+test "phase-19 follow-up: addWindow into dir_boot's empty column paints the scrollbar" {
+    const alloc = testing.allocator;
+    var hb = try dev.draw_backend.HeadlessBackend.init(alloc, 640, 480);
+    defer hb.deinit();
+    var dd = dev.draw.DevDraw.init(alloc, hb.backend());
+    defer dd.deinit();
+    const pipe = try ninep.chan.Pipe.init(alloc, 16384);
+    defer pipe.deinit();
+    var srv = try ninep.server.Server.init(alloc, pipe.serverEnd(), &dev.draw.DevDraw.ops, &dd, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(alloc, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = pumpServer };
+    _ = try cl.version(8192);
+    const root = try cl.attach("larry", "");
+    const d = try draw.Display.init(alloc, &cl, root.fid);
+    defer d.deinit();
+    var font = try draw.Font.init(alloc, d, draw.Font.default_subfont);
+    defer font.deinit();
+
+    var tree = try core.boot.boot(alloc, d, &font, draw.proto.Rect.make(0, 0, 640, 480), .{
+        .dir_boot = true,
+    });
+    defer tree.deinit();
+    const w = try tree.addWindow("scratch", "hello\n");
+    var ed = core.Editor.init(alloc);
+    defer ed.deinit();
+    ed.row = tree.row;
+    try ed.frameEnd(d);
+
+    const pal = tree.chrome.pal;
+    const sr = w.body.scrollr;
+    // The scrollbar track's right edge is body BORD (scrl.c:75-76); body BACK
+    // here means the bar was never painted.
+    try testing.expectEqual(@as(u32, pal.body_bord), hb.pixelAt(@intCast(sr.max.x - 1), @intCast(sr.min.y)));
+}
