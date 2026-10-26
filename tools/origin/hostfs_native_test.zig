@@ -417,3 +417,20 @@ test "hostfs-native Q5-d2: atomic replace preserves the existing file's mode" {
     const mode: u32 = @intCast(st.permissions.toMode());
     try testing.expectEqual(@as(u32, 0o640), mode & 0o777);
 }
+
+test "hostfs-native Q5-e: rename blocked at clunk (dir locked mid-Put) still saves in place" {
+    // The gate's dirlock probe: the directory goes read-only AFTER the OTRUNC
+    // open, so the commit rename at clunk fails. The orchestrator fix copies
+    // the temp's bytes over the original in place — the save happens,
+    // non-atomically; a temp file may linger in the locked directory.
+    const h = try TempExport.create();
+    defer h.destroy();
+    try h.seed("keep.txt", "old\n");
+    const fid = try h.walkFs("keep.txt");
+    _ = try h.cl.open(fid, msg.OWRITE | msg.OTRUNC);
+    _ = try h.cl.write(fid, 0, "saved anyway\n");
+    try h.tmp.dir.setPermissions(testing.io, .fromMode(0o555));
+    defer h.tmp.dir.setPermissions(testing.io, .fromMode(0o700)) catch {};
+    try h.cl.clunk(fid);
+    try expectDisk(h, "keep.txt", "saved anyway\n");
+}

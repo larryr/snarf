@@ -105,21 +105,40 @@ pub fn read(self: *Replace, fs: *HostFs, offset: u64, buf: []u8) OpError!usize {
 }
 
 /// The Tclunk: commit (rename over the original) or discard (delete the temp),
-/// then free. Clunk cannot report an error (`server.Ops.clunk` is void), so a
-/// failed rename also discards the temp — the original stays as it was and
-/// the client's re-stat (`Put.zig` restat, exec.c:790-799) sees no change.
+/// then free. Clunk cannot report an error (`server.Ops.clunk` is void,
+/// server.zig:97; `clunkFid` always replies Rclunk, server_mut.zig:178-185), so
+/// commit failures must not lose the Put silently: when the rename fails (e.g.
+/// the directory went read-only mid-Put — the gate's dirlock probe), the bytes
+/// are copied over the original IN PLACE instead (the file itself is usually
+/// still writable; non-atomic, but the save happens — orchestrator fix, phase
+/// 20 gate). Only if that too fails does the original stay as it was, and the
+/// client's re-stat (`Put.zig` restat, exec.c:790-799) sees no change. The
+/// temp's delete is best-effort: in a locked directory it cannot be removed.
 pub fn end(self: *Replace, fs: *HostFs, gpa: std.mem.Allocator) void {
     if (self.temp) |temp| {
-        const commit = !self.failed;
-        if (commit) {
-            fs.root.rename(temp, fs.root, self.target, fs.io) catch {
-                fs.root.deleteFile(fs.io, temp) catch {};
-            };
-        } else fs.root.deleteFile(fs.io, temp) catch {};
+        if (!self.failed) {
+            fs.root.rename(temp, fs.root, self.target, fs.io) catch copyInPlace(fs, temp, self.target);
+        }
+        fs.root.deleteFile(fs.io, temp) catch {};
         gpa.free(temp);
     }
     gpa.free(self.target);
     self.* = undefined;
+}
+
+/// Rename-failure fallback: stream the temp's bytes over the original
+/// (truncate + chunked copy). Errors are swallowed — there is no channel left
+/// to report them (see `end`), and the original is then simply unchanged.
+fn copyInPlace(fs: *HostFs, temp: []const u8, target: []const u8) void {
+    fs.truncate(target) catch return;
+    var buf: [16384]u8 = undefined;
+    var off: u64 = 0;
+    while (true) {
+        const n = fs.readFile(temp, off, &buf) catch return;
+        if (n == 0) return;
+        _ = fs.writeFile(target, off, buf[0..n]) catch return;
+        off += n;
+    }
 }
 
 test "Replace: commit renames over the original; discard leaves it" {

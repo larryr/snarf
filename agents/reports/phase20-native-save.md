@@ -154,3 +154,23 @@ The origin server's `fs/` export now has atomic Put via shared `Replace` (`tools
 2. `tools/origin/tree.zig` grew 401 to 430 lines (over the ~400 soft cap, justified in the report as the new variant's arms only).
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+## Orchestrator verify (fable, 2026-10-26)
+
+Accepted the gate's PASS WITH NOTES and closed its one real finding:
+
+- **Dirlock fix applied** (`Replace.end` + `copyInPlace`): a rename that fails at
+  clunk no longer loses the Put silently — the temp's bytes are streamed over the
+  original in place (non-atomic, but saved; the file is usually still writable
+  when only the directory is locked). Temp delete stays best-effort; in a locked
+  directory a `.name.snarf-put.N` file can linger — accepted, documented in the
+  code. Regression test `Q5-e` (dirlock mid-Put → content saved) is red without
+  the fix, green with it. Residual silent-loss window: rename AND in-place copy
+  both fail (e.g. file also unwritable) — accepted; the 9P framework cannot
+  return Rerror for Tclunk (server.zig:97, server_mut.zig:178-185).
+- **Freeze-adjacent change accepted**: the origin server's `fs/` export shares
+  `Replace` and gains atomic Put. It is a robustness change to shared host-side
+  code, not a browser feature; origin acceptance tests green (same reasoning as
+  the shared-core palette default under ADR-0005's freeze).
+- Final gates after the fix: 818 tests / 803 pass / 15 skip / 0 fail ·
+  fmt clean · smoke 40/40 · wasm + native build clean.
