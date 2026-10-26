@@ -1361,4 +1361,5 @@ test "phase-13b: acme boot — two columns, the root directory window rightmost 
 
 test {
     _ = @import("accept_colors.zig"); // phase 19 (R-P19-8c)
+    _ = @import("accept_hostfs.zig"); // phase 20 (R-P20-7)
 }
