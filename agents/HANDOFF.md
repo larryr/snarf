@@ -26,8 +26,12 @@ one fact that had gone stale and wrong (PR creation — see below).
   https://claude.ai/artifact/EMLYDChSLzr9p6J5MGhr9S
 - **Still pending from phase 19**: Larry's native eyeball check (`zig build run-native`, also
   `-colors=monadnock`; his installed `~/.local/bin` copy predates the palette — rerun
-  `make install`); ticket the pre-existing `Tree.addWindow` dir_boot scrollbar-paint gap
-  (found by the phase 19 gate, not caused by it).
+  `make install`).
+- **Flush bug FIXED (issue #39, PR #40, merged `f3a2126`, 2026-10-26)**: the phase-19 gate's
+  "addWindow scrollbar" find was a flush gap, not a draw bug — `frameEnd` gated its flush on
+  `ed.needs_flush` alone, stranding tree-level draws in `Display.buf`; the C flushes per
+  event-loop arm (acme.c:478,504). Now `frameEnd` also flushes on `Display.pending()`.
+  Regression test in `accept_colors.zig`; no goldens changed.
 
 ## Current state (update in place)
 
