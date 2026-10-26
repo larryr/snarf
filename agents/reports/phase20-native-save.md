@@ -121,3 +121,36 @@ succeeds on a 0444 file.
   frozen for this phase.
 - Commit split: the module move and the atomic Put are one commit, because the Q5 code
   lives in the moved files.
+
+## Gate (sonnet, 2026-10-26)
+
+**Verdict: PASS WITH NOTES.** Everything reproduced fresh in the worktree; the notes are
+accepted-risk documentation items, not contract failures.
+
+| Check | Result |
+|-------|--------|
+| Tree clean; forbidden files | clean. Diff vs merge-base touches none of HANDOFF/NEXT-PHASES/FROZEN-*/`select.zig`/`web/`/`src/shim` (a HANDOFF delta against `origin/main` tip is main moving, not this branch) |
+| `src/core`, `src/ninep` vs hostfs | `grep -rn hostfs src/core src/ninep` empty; build.zig gives `hostfs` only to native/origin/accept/test roots (lines 78-266) |
+| TDD integrity | `git diff b3fb3e0..HEAD` on `accept_hostfs.zig` + `hostfs_native_test.zig`: TmpFs to HostTree swap with no assertion edits; `Rig.busy` widened; NFS-10b rewritten per the documented ruling (xfail machinery removed); NFS-11..13 added. No undocumented weakening found. Q5-a/b/c/d tests unchanged since the test stage |
+| `zig fmt --check src build.zig tools` | clean |
+| `zig build` | ok |
+| `zig build test --summary all` | 24/24 steps; **817 tests, 802 pass, 15 skip, 0 fail** (matches report); origin acceptance suite included and green |
+| `node tools/smoke_wasm.mjs` | 40 pass / 0 fail |
+| `zig build native` | ok |
+| 2 s launch | alive at 2 s, devdraw child present, killed by my recorded PID, child gone |
+| Docs | S-02 revision entry (root mount, Larry 2026-10-26, `/mnt/host` alias) and §4 note accurate; S-07 §4/§6 list `src/hostfs/` accurately |
+
+### Behavioral probes (throwaway tests, reverted, nothing committed)
+- **Editor-level Put on real HostTree:** content exact, mode 0751 preserved, directory listing only `m.txt` (no temp siblings).
+- **Silent-rename-failure window (dir made 0555 after OTRUNC open + write, before clunk):** Tclunk returns Rclunk (success); old file content stays ("old\n"); **the temp `.f.txt.snarf-put.0` is LEFT BEHIND**, because the cleanup `deleteFile` fails in the same locked directory. So the user loses the Put silently AND gets litter, which is worse than the report states ("deletes the temp"). Can the framework return Rerror for Tclunk? **No**: `Ops.clunk` is `void` (`src/ninep/server.zig:97`) and `clunkFid` always replies `.rclunk` (`src/ninep/server_mut.zig:178-185`). ACCEPTED RISK; window is narrow (dir perms must change mid-Put).
+- **Symlink:** Put to `link.txt -> real.txt` writes through: `real.txt` has new bytes, `link.txt` is still a symlink. Matches acme/plan9port; no divergence.
+- **`..` paths:** `/a/../f.txt` and `/../../f.txt` clean to `/f.txt`; `/../etc/passwd` cleans to `/etc/passwd` and, with a tmp root, simply does not exist there (no escape). `HostTree` pins `..` at the export root.
+
+### Freeze-adjacent note (for the orchestrator)
+The origin server's `fs/` export now has atomic Put via shared `Replace` (`tools/origin/tree.zig` new `host_put` variant). Origin acceptance tests pass. Browser wasm and `src/dev`/`src/shim` untouched. Orchestrator to accept or reject this behavior change.
+
+### Discrepancies
+1. Report claims "A failed rename at clunk deletes the temp"; true only when the delete itself can succeed (see dirlock probe: litter remains).
+2. `tools/origin/tree.zig` grew 401 to 430 lines (over the ~400 soft cap, justified in the report as the new variant's arms only).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
