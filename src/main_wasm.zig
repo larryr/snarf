@@ -243,8 +243,3 @@ fn inputDevices(a: *App) input_pump.Devices {
         .kbd_buf = &a.kbd_buf,
     };
 }
-
-// THROWAWAY (#8 CI proof): deliberate wasm-only compile error; reverted next commit.
-comptime {
-    @compileError("deliberately broken WASM build (CI proof for #8)");
-}
