@@ -17,7 +17,7 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1, local only — not pushable until the `gh` token gets `workflow` scope): owns `.github/workflows/ci.yml` only.
-- **#9 return-after-Del warp, branch `snarfdev1/restoremouse`** (SnarfDev1): owns new `src/core/restoremouse.zig`; small edits to `Editor.zig` (two fields + `dropTextRefs`), `Column.zig` (`close`), `place.zig` (`mintWindow` signature), `exec/cmd_window.zig`, `errors.zig`, `openfile.zig`, `restoremouse_test.zig`, R-EDIT-25 log line.
+- **#9 return-after-Del warp, PR #43 open** (`snarfdev1/restoremouse`, SnarfDev1): new `src/core/restoremouse.zig`; `place.mintWindow` and `cmd_window.makeWindow` now take `ed: ?*Editor` (savemouse seam); `Column.close` restores; `Editor` gains `prevmouse`/`mousew`. RM-01..07 flipped to landed; 812/821 pass, 9 skip. Awaiting Larry merge + native manual check (RM-10).
 - **Phase 20 MERGED (PR #41, 2026-10-26)**: native file save — host fs mounted at `/`
   (acme-like) + `/mnt/host` alias; atomic Put in `src/hostfs/` (PM Q5; dirlock
   rename-failure saves in place, Q5-e); Dump/Load work; 819 tests 0 fail. Correction
