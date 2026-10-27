@@ -199,7 +199,7 @@ test "cmd_put: put — unnamed warns 'no file name', a dir window is silent, iss
     const col = tree.row.col.items[0];
 
     // Unnamed window ⇒ "no file name".
-    const unnamed = try place.mintWindow(col, 0, "");
+    const unnamed = try place.mintWindow(null, col, 0, "");
     try put(&ed, &unnamed.body, null, null, false, false, "");
     try testing.expectEqualStrings("no file name\n", ed.warningText());
     try ed.frameEnd(fx.disp); // drain
@@ -238,9 +238,9 @@ test "cmd_put: putall writes only the eligible dirty/named/non-scratch windows w
     // straight through instead of tripping the "not written; file already
     // exists" stale check — that is `Get`'s job, tested elsewhere (T9).
     const w_existing = try openfile.readFile(&ed, col, "/m/a");
-    const w_unnamed = try place.mintWindow(col, 0, ""); // unnamed ⇒ skipped
-    const w_errors = try place.mintWindow(col, 0, "+Errors"); // isscratch ⇒ skipped
-    const w_missing = try place.mintWindow(col, 0, "/m/b"); // dirty, missing ⇒ "no auto-Put"
+    const w_unnamed = try place.mintWindow(null, col, 0, ""); // unnamed ⇒ skipped
+    const w_errors = try place.mintWindow(null, col, 0, "+Errors"); // isscratch ⇒ skipped
+    const w_missing = try place.mintWindow(null, col, 0, "/m/b"); // dirty, missing ⇒ "no auto-Put"
     for (0..10) |_| { // let w_existing's Load finish before marking it dirty
         try ed.frameEnd(fx.disp);
         try m.poll();

@@ -28,7 +28,7 @@ const Frame = draw.Frame;
 const proto = draw.proto;
 
 /// Flip to true in the PR that lands #9.
-const restoremouse_landed = false;
+const restoremouse_landed = true;
 
 fn xfail(ok: bool) !void {
     if (restoremouse_landed) {
