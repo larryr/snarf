@@ -16,7 +16,7 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **#8 CI on push, branch `snarfdev1/ci-workflow`** (SnarfDev1, local only — not pushable until the `gh` token gets `workflow` scope): owns `.github/workflows/ci.yml` only.
+- **#8 CI on push, PR #44 open** (`snarfdev1/ci-workflow`, SnarfDev1): owns `.github/workflows/ci.yml` (+ a race fix in the `Conn.zig` dead-peer test that CI exposed on Linux: EPIPE `WriteFailed` vs `Closed`). Core job (fmt/test/wasm/Node-22 smoke) required on ubuntu+macOS; native job macOS required, Linux continue-on-error. Broken-WASM proof run: https://github.com/larryr/snarf/actions/runs/40530236584. PR run green. Until #44 merges, no other PR (e.g. #43) gets CI — `pull_request` runs use the workflow from the PR branch. Workflow pushes need the `gh` token's `workflow` scope (granted 2026-10-27).
 - **#9 return-after-Del warp, PR #43 open** (`snarfdev1/restoremouse`, SnarfDev1): new `src/core/restoremouse.zig`; `place.mintWindow` and `cmd_window.makeWindow` now take `ed: ?*Editor` (savemouse seam); `Column.close` restores; `Editor` gains `prevmouse`/`mousew`. RM-01..07 flipped to landed; 812/821 pass, 9 skip. Awaiting Larry merge + native manual check (RM-10).
 - **Phase 20 MERGED (PR #41, 2026-10-26)**: native file save — host fs mounted at `/`
   (acme-like) + `/mnt/host` alias; atomic Put in `src/hostfs/` (PM Q5; dirlock
