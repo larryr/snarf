@@ -200,3 +200,8 @@ test "warp: the request reaches /dev/mouse through the namespace" {
     try testing.expectEqual(@as(usize, 1), sink.writes);
     try testing.expectEqualStrings("m        100         200           0           0 ", &sink.last);
 }
+
+// THROWAWAY CI-10 (#8): deliberately failing test; never merge.
+test "THROWAWAY CI-10: deliberately failing test" {
+    try @import("std").testing.expect(false);
+}
