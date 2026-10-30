@@ -110,7 +110,7 @@ pub fn readFile(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window {
     const a = ed.allocator;
     const abs = try absName(a, name); // acme.c:291-294 + cleanrname
     defer a.free(abs);
-    const w = try place.mintWindow(c, -1, abs); // acme.c:290 + :295 winsetname
+    const w = try place.mintWindow(ed, c, -1, abs); // acme.c:290 + :295 winsetname
     _ = try Load.start(ed, w, abs, null, false); // acme.c:296 textload
     ed.needs_flush = true;
     return w;

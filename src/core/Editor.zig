@@ -37,6 +37,7 @@ const pendinglook = @import("pendinglook.zig");
 const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
 const wintag = @import("wintag.zig");
+const restoremouse = @import("restoremouse.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -87,6 +88,14 @@ seltext: ?*Text = null,
 /// by `getArg` (9c); written by the B1 press (9d) and Snarf; cleared by
 /// `dropTextRefs`.
 argtext: ?*Text = null,
+/// acme's `prevmouse` (util.c:15): the pointer when the last pop-up window was
+/// made (`savemouse`, util.c:386) — where `restoremouse` warps back to.
+/// Read/written only by `restoremouse.zig` (#9, R-EDIT-25).
+prevmouse: draw.Point = .{ .x = 0, .y = 0 },
+/// acme's `mousew` (util.c:16): the window `prevmouse` belongs to, or null.
+/// Cleared by `restoremouse.restore`/`.clear` and by `dropTextRefs` when the
+/// window dies, so it never dangles.
+mousew: ?*Window = null,
 /// acme's `activecol` (dat.c:37): the column a new window goes to when nobody
 /// pointed at one — read by `place.makeNewWindow` (util.c:454-455) and written by
 /// exactly three events in the C:
@@ -225,6 +234,7 @@ pub fn dropTextRefs(ed: *Editor, w: *Window) void {
         }
     }
     ed.gesture.dropTextRefs(tag, body); // `gesture_text` moved to Gesture.zig
+    if (ed.mousew == w) ed.mousew = null; // restoremouse's saved pop-up (#9)
     Load.dropWindow(ed, w); // and any load still filling this window (13b)
     Put.dropWindow(ed, w); // a Put outlives its window (R-P17-1)
 }
@@ -278,6 +288,7 @@ pub fn handleKey(ed: *Editor, r: u21) !void {
     if (r != typing.Kdown and r != typing.Kleft and r != typing.Kright) {
         if (place.colOf(t)) |c| ed.activecol = c;
     }
+    restoremouse.clear(ed); // rows.c:277 rowtype clearmouse
     try t.typeRune(ed, r);
     ed.needs_flush = true;
 }

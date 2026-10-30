@@ -169,7 +169,7 @@ pub fn errorWin(ed: *Editor, dir: []const u8) Text.Error!*Window {
         _ = (try row.add(-1)) orelse return error.IoError;
     }
     const c: *Column = row.col.items[row.col.items.len - 1]; // util.c:98 rightmost
-    const w = try place.mintWindow(c, -1, name); // util.c:98 coladd + :100 winsetname
+    const w = try place.mintWindow(ed, c, -1, name); // util.c:98 coladd + :100 winsetname
     w.filemenu = false; // util.c:99
     try w.setTag1(); // recompose without the Undo/Redo/Put menu (wind.c:505)
     return w;

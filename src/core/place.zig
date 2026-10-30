@@ -26,6 +26,7 @@ const Window = @import("Window.zig");
 const Column = @import("Column.zig");
 const Row = @import("Row.zig");
 const wintag = @import("wintag.zig");
+const restoremouse = @import("restoremouse.zig");
 
 /// `t->col` (dat.h): the Column a Text belongs to. A window text ⇒ the window's
 /// column; a columntag ⇒ its own Column (via `@fieldParentPtr`); anything else
@@ -65,7 +66,7 @@ pub fn rowOf(et: *Text) ?*Row {
 /// creation seam: `cmd_window.makeWindow` (New/Newcol), `makeNewWindow` below and
 /// `errors.errorWin` (+Errors) all go through it, so a future `openfile` replaces
 /// exactly one function.
-pub fn mintWindow(c: *Column, y: i32, name: []const u8) Text.Error!*Window {
+pub fn mintWindow(ed: ?*Editor, c: *Column, y: i32, name: []const u8) Text.Error!*Window {
     const a = c.chrome.allocator;
     const f = try a.create(File);
     var transferred = false;
@@ -76,6 +77,7 @@ pub fn mintWindow(c: *Column, y: i32, name: []const u8) Text.Error!*Window {
     const w = try c.add(&c.row.?.winid, f, y); // coladd (steal / split)
     w.owns_body = true; // the Window now owns and frees this body File
     transferred = true; // f is reachable from the tree; its deinit chain frees it
+    if (ed) |e| restoremouse.save(e, w); // cols.c:150 savemouse(w) (#9); null = no Editor (unit rigs)
 
     try wintag.setName(w, name); // winsetname: isscratch for `+Errors` (wind.c:387-391)
     try w.setTag1(); // setName is a no-op for "" (New): compose regardless
@@ -133,7 +135,7 @@ pub fn makeNewWindow(ed: *Editor, t: ?*Text) Text.Error!*Window {
 
     // --- no reference window, or an empty column (util.c:467-468) ----------
     const tw: ?*Window = if (t) |tt| tt.w else null;
-    if (tw == null or c.w.items.len == 0) return mintWindow(c, -1, "");
+    if (tw == null or c.w.items.len == 0) return mintWindow(ed, c, -1, "");
 
     // --- biggest window and biggest blank spot (util.c:471-481) ------------
     var emptyw: *Window = c.w.items[0];
@@ -159,7 +161,7 @@ pub fn makeNewWindow(ed: *Editor, t: ?*Text) Text.Error!*Window {
         }
         y = @divTrunc(victim.r.min.y + victim.r.max.y, 2); // util.c:491
     }
-    const w = try mintWindow(c, y, ""); // util.c:493 coladd(c, nil, nil, y)
+    const w = try mintWindow(ed, c, y, ""); // util.c:493 coladd(c, nil, nil, y)
     // util.c:494-495: a window that came out under two body lines is grown at
     // its neighbours' expense (R-P12b-3, ported in 16b — `core/colgrow.zig`).
     if (w.body.fr.maxlines < 2) try c.grow(w);
