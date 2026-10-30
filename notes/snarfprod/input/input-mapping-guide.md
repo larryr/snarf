@@ -207,6 +207,15 @@ flowchart TD
 - For example: left hand on Anvil, right hand on the trackpad. Jump, approve and back then never require lifting either hand.
 - The **key layout SHALL be mirrorable** for left- or right-handed use, by flipping the layout in firmware or the configurator. snarf sees the same key codes either way.
 
+**Same layout without Anvil: the left-hand laptop cluster (Larry, 2026-10-30):**
+- The off-hand layout SHALL also work **without Anvil**. A **left-hand key cluster on the laptop keyboard**, near Cmd, Option and Control, provides jump, approve, deny and back, while the right hand stays on the trackpad.
+- That cluster is the **default laptop binding**. Anvil is just a dedicated hardware version of the **same layout**: same actions, same relative positions, and ideally the same key codes, so muscle memory carries over.
+- Constraints:
+  - **Exact keys are TBD, decided with R-IN-06.** The cluster SHALL avoid common macOS shortcut conflicts, e.g. Cmd-Tab, Cmd-Space, Cmd-Q/W, Ctrl-arrow (Spaces) and the Option-letter characters people actually type.
+  - **No three-finger gestures.**
+  - It must coexist with the P2 modifier chords: Option = B2, Command = B3 and Control = B1 *during a sweep*.
+- A right-handed-trackpad / left-hand-keys default can be mirrored for a left-handed trackpad user (right-hand cluster), like Anvil.
+
 **Candidate keys:**
 
 | Anvil key | Action | Same action without Anvil (required) |
@@ -257,3 +266,4 @@ Possible future refinements, from the touchpad research **[I]**: an animated war
 - **2026-10-11:** first version (SnarfProdd).
 - **2026-10-30:** added §3a, *Anvil (parked): optional chord pad*. Larry chose the name. It is a key-code-only macro pad for agent-request jump/approve/deny/back, plus optional B1–B3. Laptop parity is a hard rule, and it has no three-finger gestures.
 - **2026-10-30:** §3a states that Anvil is an off-hand device, used by the hand opposite the mouse or trackpad (Larry), with a layout mirrorable for left- or right-handed use.
+- **2026-10-30:** §3a adds the left-hand laptop key cluster (Larry: the off-hand layout maps to non-Anvil use too). It is the default laptop binding for jump/approve/deny/back, with exact keys TBD with R-IN-06. Anvil is the dedicated hardware version of the same layout.
