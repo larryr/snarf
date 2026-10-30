@@ -468,6 +468,12 @@ test "conn: a dead peer during startup is killed once, not twice" {
     defer c.deinit();
     var env: std.process.Environ.Map = .init(testing.allocator);
     defer env.deinit();
-    try testing.expectError(error.Closed, c.spawn(testing.io, &env, .{ .path = "/usr/bin/true" }));
+    // Which error surfaces is a race: if `true` has already exited, the Tinit
+    // write hits EPIPE (`WriteFailed`, seen on CI's Linux runners); otherwise
+    // the write lands and the reply read sees EOF (`Closed`). Either proves
+    // the peer died during startup — the point here is the single kill.
+    if (c.spawn(testing.io, &env, .{ .path = "/usr/bin/true" })) |_| {
+        return error.TestUnexpectedResult;
+    } else |e| try testing.expect(e == error.Closed or e == error.WriteFailed);
     try testing.expect(c.child == null);
 }
