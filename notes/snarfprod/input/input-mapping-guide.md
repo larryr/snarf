@@ -202,6 +202,11 @@ flowchart TD
 
 **Lineage:** Engelbart's five-key chord keyset, used beside the mouse in the 1968 demo: the left hand chords commands while the right hand points.
 
+**Off-hand device (Larry, 2026-10-30):**
+- Anvil is used by the **hand opposite the mouse or trackpad**, which matches Engelbart's keyset-plus-mouse setup.
+- For example: left hand on Anvil, right hand on the trackpad. Jump, approve and back then never require lifting either hand.
+- The **key layout SHALL be mirrorable** for left- or right-handed use, by flipping the layout in firmware or the configurator. snarf sees the same key codes either way.
+
 **Candidate keys:**
 
 | Anvil key | Action | Same action without Anvil (required) |
@@ -251,3 +256,4 @@ Possible future refinements, from the touchpad research **[I]**: an animated war
 ## Revision log
 - **2026-10-11:** first version (SnarfProdd).
 - **2026-10-30:** added §3a, *Anvil (parked): optional chord pad*. Larry chose the name. It is a key-code-only macro pad for agent-request jump/approve/deny/back, plus optional B1–B3. Laptop parity is a hard rule, and it has no three-finger gestures.
+- **2026-10-30:** §3a states that Anvil is an off-hand device, used by the hand opposite the mouse or trackpad (Larry), with a layout mirrorable for left- or right-handed use.
