@@ -200,3 +200,6 @@ test "warp: the request reaches /dev/mouse through the namespace" {
     try testing.expectEqual(@as(usize, 1), sink.writes);
     try testing.expectEqualStrings("m        100         200           0           0 ", &sink.last);
 }
+
+// THROWAWAY CI-09 (#8): deliberately misformatted; never merge.
+const   ci09_misformatted=1;
