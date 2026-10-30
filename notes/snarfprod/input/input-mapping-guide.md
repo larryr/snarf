@@ -191,6 +191,44 @@ flowchart TD
 
 ---
 
+## 3a. Anvil (parked): optional chord pad
+
+*Larry named it on 2026-10-30, after the ACME company catalogue in the Looney Tunes cartoons, which is where acme's name comes from [L].* **Status: PARKED** until the M5 attention feature exists (R-AG-22..27 in the [M5 draft](../requirements/m5-ai-harness-requirements-draft.md) §5a). Anvil is an **optional input profile**, like P1–P5. It is never a requirement.
+
+**What it is:**
+- A small desk pad beside the trackpad. It could be an off-the-shelf USB or Bluetooth macro pad, or a custom QMK board.
+- It sends **ordinary key codes**, so snarf and macOS need **no drivers**. Each key just emits a binding that snarf already has.
+- Remapping happens in the pad's firmware or configurator, not in snarf.
+
+**Lineage:** Engelbart's five-key chord keyset, used beside the mouse in the 1968 demo: the left hand chords commands while the right hand points.
+
+**Candidate keys:**
+
+| Anvil key | Action | Same action without Anvil (required) |
+|---|---|---|
+| Jump | Go to the next pending agent request (R-AG-25) | The jump key or modifier+click chosen with R-IN-06 |
+| Approve | Approve the request the pointer is on (R-AG-22) | The keyboard or B2 binding defined with R-AG-22 (open question 10 in the M5 draft) |
+| Deny | Deny that request | Same as Approve |
+| Back | Return to the prior editing spot (R-AG-26) | `Del` on the request window, or the jump gesture after the newest request |
+| *Optional:* B1 / B2 / B3 | acme buttons and chords | P2 modifiers (Option = B2, Command = B3) and 2-finger click = B3 |
+
+On the optional button keys: plain key codes are **not** mouse buttons. B1/B2/B3 keys would need either the pad sending HID mouse-button reports (QMK can do this), or the key codes mapped onto the P2 modifiers **[I]**. How devdraw handles mouse buttons 3+ from a non-Apple device is untried **[I]**.
+
+**Hard rules:**
+1. **The laptop method stays complete.** Every Anvil action SHALL also be a keyboard or trackpad binding on a bare MacBook. No action may be Anvil-only.
+2. **No three-finger gestures** anywhere in the Anvil profile or its fallbacks, because Larry uses three-finger drag [L].
+3. No drivers and no private APIs. If a pad needs vendor software to emit plain key codes, that software runs outside snarf.
+
+**Pros:**
+- One-hand triage of agent requests without leaving the pointing hand.
+- Engelbart-style chording.
+- Cheap, and reversible.
+
+**Cons:**
+- More desk hardware.
+- Another layout to learn.
+- Useless until M5's attention queue exists.
+
 ## 4. Warp per device
 
 | Host / device | Warp | Notes |
@@ -209,3 +247,7 @@ Possible future refinements, from the touchpad research **[I]**: an animated war
 3. Is the Magic Mouse right-side secondary click on by default? Does `$mousebuttonmap` work as expected (for example, right = B2)? These need hands-on checks.
 4. P3: would an "anchor lock" (click and release to keep B1 held during long sweeps) help, or would it confuse?
 5. Should the eventual user guide ship one per-device "cheat card" alongside the Mac keyboard shortcuts?
+
+## Revision log
+- **2026-10-11:** first version (SnarfProdd).
+- **2026-10-30:** added §3a, *Anvil (parked): optional chord pad*. Larry chose the name. It is a key-code-only macro pad for agent-request jump/approve/deny/back, plus optional B1–B3. Laptop parity is a hard rule, and it has no three-finger gestures.

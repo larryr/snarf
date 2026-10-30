@@ -94,6 +94,8 @@ namespace plumbing.
 - **Binding:** whatever binding is chosen in R-IN-06 works on MacBook and Magic Trackpad with three-finger drag on.
 - All of the above run windowless (R-AG-20).
 
+*Parked (not a requirement): **Anvil**, an optional chord pad.* §3a of the [input mapping guide](../input/input-mapping-guide.md) describes an optional desk macro pad, *Anvil*. It sends ordinary key codes for jump (R-AG-25), approve, deny and back (R-AG-26). **Laptop-parity rule:** every R-AG-22..27 action SHALL remain fully usable from the keyboard and trackpad of a bare MacBook. Anvil only adds shortcuts; nothing is Anvil-only, and nothing uses three-finger gestures. It stays parked until §5a is built.
+
 ## 6. Concurrency, transport and auth
 
 | ID | Requirement (PROPOSED) |
@@ -164,3 +166,4 @@ Also touched: R-EDIT-17 (served tree completeness, which M4 delivers), R-9P-15 (
 ## 11. Revision log
 - **v0** (2026-10-11): PROPOSED starting draft by SnarfProdd, from roadmap M5, Fable's Finding 3, and the 2026-10-11 local-trust decision. Not yet reviewed.
 - **v0.1** (2026-10-30): added §5a, *Agent attention and jump-to* (R-AG-22..R-AG-27), agreed with Larry 2026-10-30. It covers the attention queue, the tag mark, the queue as a 9P file, a jump gesture (no three-finger gestures; binding per R-IN-06), return-to-work reusing the #9/PR #43 warp-back, and never moving the pointer or focus uninvited. It extends the #45 decision (warp to the focused item, acme's method). Open questions 9–10 added.
+- **v0.2** (2026-10-30): §5a gains a parked note cross-referencing **Anvil** (input guide §3a, an optional chord pad named by Larry) and stating the laptop-parity rule. No new numbered requirements.
