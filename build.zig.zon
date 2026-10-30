@@ -14,7 +14,7 @@
         // wasm build graph and `zig build test` never touch it. Hash from `zig fetch <url>`.
         .plan9port = .{
             .url = "https://github.com/larryr/plan9port/archive/337c6acbfed51d8d9f08598c6cd398f53abcca7d.tar.gz",
-            .hash = "N-V-__8AAJxZ3wK-9yFlPu40838vwp3xUVQhAt1ebgXEhI3F",
+            .hash = "N-V-__8AAJxZ3wK-9yFlPu40838vwp3xUVQhAt1ebgXEhI3E",
             .lazy = true,
         },
     },
