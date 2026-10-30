@@ -22,10 +22,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ steps.zv.outputs.version }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
       - name: zig fmt --check
         run: zig fmt --check .
       - name: zig build test (core+draw+ninep, no browser)
-        run: zig build test
+        run: zig build test --summary all
       - name: zig build (wasm32-freestanding still compiles)
         run: zig build
       - name: WASM artifact present
@@ -61,8 +62,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ steps.zv.outputs.version }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
       - name: zig build native
-        run: zig build native
+        run: zig build native --summary all
       - name: snarf-native built
         run: test -x zig-out/bin/snarf-native
       - name: bundled devdraw built (macOS)
