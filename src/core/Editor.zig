@@ -278,6 +278,10 @@ pub fn hitTest(ed: *Editor, p: Point) ?Gesture.Hit {
 /// B1 drag owns the gesture, so keys mid-sweep are FLAG-dropped (text.c: keyboard
 /// and mouse threads interlock on `row.lk`).
 pub fn handleKey(ed: *Editor, r: u21) !void {
+    // rows.c:277 rowtype: clearmouse() runs first, unconditionally — before the
+    // C even looks for a Text — so a key that takes either early return below
+    // still forgets a saved pop-up (#9).
+    restoremouse.clear(ed);
     if (ed.gesture.mouse_state != .idle) return; // FLAG: keys during a gesture are dropped
     const t = if (ed.hitTest(ed.gesture.mouse_pt)) |hit|
         hit.text
@@ -288,7 +292,6 @@ pub fn handleKey(ed: *Editor, r: u21) !void {
     if (r != typing.Kdown and r != typing.Kleft and r != typing.Kright) {
         if (place.colOf(t)) |c| ed.activecol = c;
     }
-    restoremouse.clear(ed); // rows.c:277 rowtype clearmouse
     try t.typeRune(ed, r);
     ed.needs_flush = true;
 }
