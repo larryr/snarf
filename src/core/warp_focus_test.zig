@@ -52,22 +52,6 @@ fn xfail(ok: bool) !void {
     return error.SkipZigTest; // expected-fail until #45
 }
 
-/// Flip to true once restoremouse drops PM Q3's pointer-inside gate (exact
-/// ACME, PM 2026-10-31; SnarfDev1 is removing it in #43).
-const acme_exact_restore_landed = false;
-
-fn acmeExact(ok: bool) !void {
-    if (acme_exact_restore_landed) {
-        if (!ok) return error.TestUnexpectedResult;
-        return;
-    }
-    if (ok) {
-        std.debug.print("warp_focus_test: exact-ACME restore now passes; set acme_exact_restore_landed = true\n", .{});
-        return error.UnexpectedPassFlipFlag;
-    }
-    return error.SkipZigTest;
-}
-
 fn pump(ctx: *anyopaque) anyerror!void {
     const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
     _ = try s.poll();
@@ -337,7 +321,7 @@ test "warp_focus WF-09: user left the new window before Del — still warps back
     const before = h.sink.writes;
     try h.del(w, away);
     const got = h.last();
-    try acmeExact(h.sink.writes == before + 1 and got != null and eqPt(got.?, P0));
+    try testing.expect(h.sink.writes == before + 1 and got != null and eqPt(got.?, P0)); // landed in #43 @ e303142
 }
 
 test "warp_focus WF-10: no /dev/mouse (browser/headless) — New, +Errors and Del never error" {
