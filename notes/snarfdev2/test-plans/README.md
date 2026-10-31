@@ -14,6 +14,8 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | [M0-08-ci.md](M0-08-ci.md) | #8 CI | M0 |
 | [M0-09-restoremouse.md](M0-09-restoremouse.md) | #9 Del warp-back | M0 |
 | [M0-10-walkthrough.md](M0-10-walkthrough.md) | #10 native walkthrough | M0 |
+| [M0-47-origin-port.md](M0-47-origin-port.md) | #47 origin busy-port bind (PR #62) | M0 |
+| [M0-57-undo-repaint.md](M0-57-undo-repaint.md) | #57 Undo/Redo repaint (PR #61) | M0 |
 | [M1-11-native-fs.md](M1-11-native-fs.md) | #11 native file server | M1 |
 | [M1-12-clipboard.md](M1-12-clipboard.md) | #12 native clipboard | M1 |
 | [M1-13-builtins.md](M1-13-builtins.md) | #13 Sort/Zerox/Kill/Exit | M1 |
@@ -38,6 +40,8 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-EDIT-25 | RM-01..10, WF-01..12, walkthrough 8, 12, 21 |
 | R-9P-07 | CB-01..08 |
 | R-9P-14 | NFS-11 |
+| R-P9-10 (Undo/Redo), #57 | UR-01..05, walkthrough 20 |
+| #47 (origin port) | OP-01..04 |
 | ADR-0005 §2 | NFS-01, NFS-15 |
 
 ## PM decisions (SnarfProdd, 2026-10-14)
