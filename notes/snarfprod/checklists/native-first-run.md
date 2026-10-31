@@ -69,8 +69,8 @@ The system clipboard isn't wired either: the `Trdsnarf`/`Twrsnarf` messages are 
 | 18 | 3-finger tap on a word | Unreliable for you with three-finger drag on (an earlier report). Note whether it ever registers as B2. It is not required | [ ] |
 | **Edit, undo, warp-back** | | | |
 | 19 | Execute `Edit ,s/a/A/g`, then `Edit ,x/A/ c/a/` | Substitutions apply (phase 10 Edit language) | [ ] |
-| 20 | `Undo` several times, then `Redo` | Undo walks back through the edits, Redo replays them. Typing runs group into one undo step | [ ] |
-| 21 | `Del` a window that just popped up (e.g. `+Errors`) | ⚠ **Expected missing today**: the pointer does *not* return to where it was. `savemouse`/`restoremouse` isn't ported yet (roadmap M0) | [ ] |
+| 20 | `Undo` several times, then `Redo` | Undo walks back through the edits, Redo replays them. Typing runs group into one undo step ⚠ **Known bug #57** in v0.M0-dev.1: the text may not repaint until you resize. Note whether you see it | [ ] |
+| 21 | `Del` a window that just popped up (e.g. `+Errors`) | The pointer returns to where it was before the pop-up (ported in #43, exact ACME: any `Del` clears the single saved slot). SnarfDev2 passed this on Linux with v0.M0-dev.1 | [ ] |
 | **Clipboard and keys** | | | |
 | 22 | Snarf in snarf, then Cmd-V in TextEdit. Then copy in TextEdit and Paste in snarf | ⚠ **Expected to fail today**: the snarf buffer is internal to snarf (native `/dev/snarf` isn't wired, roadmap M1) | [ ] |
 | 23 | Try Cmd-X / Cmd-C / Cmd-V / Cmd-Z inside snarf | Unknown: devdraw sends them as Command-key characters, and it isn't verified whether snarf maps them. Just note what happens | [ ] |
@@ -89,3 +89,5 @@ The system clipboard isn't wired either: the `Trdsnarf`/`Twrsnarf` messages are 
 
 ## Free notes
 
+## Revision log
+- 2026-10-31: Step 21 now expected to pass (#43 merged). Step 20 flags known bug #57. You can run this from the [v0.M0-dev.1 pre-release](https://github.com/larryr/snarf/releases/tag/v0.M0-dev.1) instead of building (first launch: `xattr -d com.apple.quarantine snarf-native devdraw`).
