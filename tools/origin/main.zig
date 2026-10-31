@@ -49,7 +49,8 @@ pub const Origin = struct {
         const address = try Io.net.IpAddress.parse(bind, port_num);
         // SO_REUSEADDR only, never SO_REUSEPORT: a second snarf-origin on a
         // busy port must fail with AddressInUse, not share it (#47).
-        const listener = try listenExclusive(io, address);
+        _ = listenExclusive; // SCRATCH: fix reverted to prove OP-01 goes red (do not merge)
+        const listener = try address.listen(io, .{ .reuse_address = true });
         return .{ .io = io, .gpa = gpa, .cfg = cfg, .listener = listener };
     }
 
