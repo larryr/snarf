@@ -4,8 +4,12 @@
 //! `notes/snarfdev2/test-plans/M0-09-restoremouse.md` (RM-01..08).
 //!
 //! PM decisions (SnarfProdd, 2026-10-14, Q3): restore ONLY if the pointer is
-//! still inside the pop-up when it is deleted; nested pop-ups restore to the
-//! innermost saved point.
+//! still inside the pop-up when it is deleted.
+//! Ruling (SnarfProdd, 2026-10-31): otherwise exact ACME. There is ONE save
+//! slot (`prevmouse`/`mousew`, util.c:15-16). `savemouse` overwrites it
+//! (util.c:383-388), and `restoremouse` warps only for the saved window but
+//! ALWAYS clears the slot (util.c:390-402). So deleting any window forgets the
+//! save (RM-03), and nested pop-ups don't stack (RM-06).
 //!
 //! EXPECTED-FAIL MECHANISM. `restoremouse_landed` is false until #9 merges.
 //! While false, a test whose behaviour isn't implemented yet calls `xfail`:
@@ -123,16 +127,19 @@ test "restoremouse RM-01/02: Del of a pop-up with the pointer still in it warps 
     try xfail(h.sink.writes > before and h.lastIs(P0));
 }
 
-test "restoremouse RM-03: deleting a different window does not restore" {
+test "restoremouse RM-03: deleting a different window does not warp AND clears the save (util.c:400)" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
     const pop = try h.popup("/home/larry", P0);
-    _ = pop;
     const other = try h.tree.addWindow("/tmp/other", "x\n");
     const before = h.sink.writes;
     try h.del(other, inside(other));
-    try testing.expect(!(h.sink.writes > before and h.lastIs(P0)));
+    try testing.expectEqual(before, h.sink.writes); // no warp at all
+    // The slot was cleared, so Del of the original pop-up, with the pointer
+    // inside it (which RM-01/02 shows would otherwise warp), does nothing.
+    try h.del(pop, inside(pop));
+    try xfail(h.sink.writes == before);
 }
 
 test "restoremouse RM-04: pointer moved out of the pop-up before Del means no restore (PM Q3)" {
@@ -160,16 +167,19 @@ test "restoremouse RM-05: saved window freed by Delcol leaves no dangling state;
     try testing.expect(!(h.sink.writes > before and h.lastIs(P0)));
 }
 
-test "restoremouse RM-06: nested pop-ups restore to the innermost saved point (PM Q3)" {
+test "restoremouse RM-06: single save slot — Del B warps to P1, then Del A does nothing (no stack)" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
     const P1: proto.Point = .{ .x = 222, .y = 111 };
-    _ = try h.popup("/home/larry", P0);
-    const inner = try h.popup("/tmp", P1);
+    const a = try h.popup("/home/larry", P0);
+    const b = try h.popup("/tmp", P1); // savemouse overwrites the one slot
     const before = h.sink.writes;
-    try h.del(inner, inside(inner));
-    try xfail(h.sink.writes > before and h.lastIs(P1));
+    try h.del(b, inside(b));
+    try xfail(h.sink.writes == before + 1 and h.lastIs(P1));
+    // restoremouse cleared the slot: A's P0 was overwritten, not stacked.
+    try h.del(a, inside(a));
+    try xfail(h.sink.writes == before + 1);
 }
 
 test "restoremouse RM-07: no /dev/mouse (browser/headless) — Del of a pop-up never errors" {
