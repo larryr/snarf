@@ -1,0 +1,78 @@
+# CI on push (issue #8; R-BLD-03, S-06 §5, ADR-0005 amendment Risks, ADR-0006 Risks).
+# `zig build` stays the only build entry point (ADR-0001); this file only calls it.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned Zig version
+        id: zv
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zv.outputs.version }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
+      - name: zig fmt --check
+        run: zig fmt --check .
+      - name: zig build test (core+draw+ninep, no browser)
+        run: zig build test --summary all
+      - name: zig build (wasm32-freestanding still compiles)
+        run: zig build
+      - name: WASM artifact present
+        run: test -s zig-out/www/snarf.wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Smoke test (Node >= 22)
+        run: node tools/smoke_wasm.mjs
+
+  # Separate job so a devdraw/native build failure never blocks the core job's
+  # green `zig build test` signal (ADR-0006 Risks). macOS native is required
+  # (it builds snarf-native + the bundled devdraw from the pinned plan9port);
+  # Linux native is allowed to fail (devdraw is macOS-only in-tree, phase 18).
+  # `run-native` is not run: it opens a devdraw window and CI has no display.
+  native:
+    name: native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            allow_fail: false
+          - os: ubuntu-latest
+            allow_fail: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_fail }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned Zig version
+        id: zv
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zv.outputs.version }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
+      - name: zig build native
+        run: zig build native --summary all
+      - name: snarf-native built
+        run: test -x zig-out/bin/snarf-native
+      - name: bundled devdraw built (macOS)
+        if: runner.os == 'macOS'
+        run: test -x zig-out/bin/devdraw
+      - name: make install into a scratch prefix (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          make install PREFIX="$RUNNER_TEMP/prefix"
+          test -x "$RUNNER_TEMP/prefix/bin/snarf"
+          test -x "$RUNNER_TEMP/prefix/bin/devdraw"

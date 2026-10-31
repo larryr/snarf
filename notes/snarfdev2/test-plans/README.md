@@ -17,6 +17,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | [M1-11-native-fs.md](M1-11-native-fs.md) | #11 native file server | M1 |
 | [M1-12-clipboard.md](M1-12-clipboard.md) | #12 native clipboard | M1 |
 | [M1-13-builtins.md](M1-13-builtins.md) | #13 Sort/Zerox/Kill/Exit | M1 |
+| [M3-45-warp-focus.md](M3-45-warp-focus.md) | #45 warp to focused window | M3 |
 | (todo) M2 #14–#18, M3 #19–#23 | | |
 
 ## Traceability matrix
@@ -34,7 +35,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-EDIT-15 | NFS-02, NFS-05..10, BI-09 |
 | R-EDIT-16 / R-P17-5 | NFS-11..13 |
 | R-EDIT-17 + process rule 1 | NFS-14, BI-12 |
-| R-EDIT-25 | RM-01..10, walkthrough 8, 12, 21 |
+| R-EDIT-25 | RM-01..10, WF-01..12, walkthrough 8, 12, 21 |
 | R-9P-07 | CB-01..08 |
 | R-9P-14 | NFS-11 |
 | ADR-0005 §2 | NFS-01, NFS-15 |
@@ -49,3 +50,6 @@ Default rule: when unsure, use ACME behaviour.
 - Q6 spec S-02 authoritative for R-P17-5.
 - Q7 Node 22 pinned; native build in a separate CI job.
 - #20 plans on hold (R-IN-06 undecided).
+
+## Product decisions (Larry via SnarfProdd, 2026-10-30)
+- #45: the pointer warps to the focused item. Opening or focusing a new window (`+Errors` included) warps into it, and Del warps back, giving a zero-travel round trip. The `+Errors` opt-out is out of scope. See M3-45-warp-focus.md.
