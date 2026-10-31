@@ -19,11 +19,10 @@
 //! The PACKING half below (cols.c:407-470) is shared by every arm in the C and
 //! is ported whole, so adding an arm later is the `if` above it, not a rewrite.
 //!
-//! DROPPED, as everywhere else in the port: `winmousebut(w)` (cols.c:471) warps
-//! the pointer onto the grown window's tag button. R-EDIT-25 (as amended in
-//! phase 15) makes a warp a `/dev/mouse` write from `core/warp.zig`, and
-//! `coladd`'s own `savemouse`/`moveto` arms are dropped for the same reason
-//! (R-P8-7).
+//! NOT YET PORTED: `winmousebut(w)` (cols.c:471) warps the pointer onto the
+//! grown window's tag button. Under R-EDIT-25 a warp is a `/dev/mouse` write
+//! from `core/warp.zig`; the warp-into-window arms land with #45. (`coladd`'s
+//! `savemouse` arms, cols.c:150/178, are ported in `core/restoremouse.zig`.)
 //!
 //! Ported from larryr/plan9port@337c6ac; cite as `cols.c:NN`.
 //!

@@ -198,7 +198,7 @@ fn loadWindow(ed: *Editor, row: *Row, p: *Parser, rec: dumpfmt.WinRec) Error!voi
     const dy: f64 = @floatFromInt(c.r.max.y - c.r.min.y);
     var y: i32 = c.r.min.y + @as(i32, @intFromFloat(rec.pct * dy / 100.0 + 0.5)); // rows.c:755
     if (y < c.r.min.y or y >= c.r.max.y) y = -1; // rows.c:756-757
-    const w = try place.mintWindow(c, y, ""); // rows.c:759 coladd(c, nil, nil, y)
+    const w = try place.mintWindow(ed, c, y, ""); // rows.c:759 coladd(c, nil, nil, y)
 
     // rows.c:767-789: the ctl+tag line — name up to the first blank, then the
     // user's suffix after the first '|'.

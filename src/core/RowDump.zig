@@ -192,16 +192,16 @@ test "RowDump: a clean loaded window dumps as f (no body), a dirty/never-Put win
     tree.bind(&ed);
 
     const col = tree.row.col.items[0];
-    const w_clean = try @import("place.zig").mintWindow(col, 0, "/a/clean");
+    const w_clean = try @import("place.zig").mintWindow(&ed, col, 0, "/a/clean");
     w_clean.body.file.disk = .{ .qid = .{ .path = 1, .vers = 1 }, .mtime = 1, .length = 0, .sha1 = [_]u8{0} ** 20 };
     w_clean.dirty = false;
 
-    const w_dirty = try @import("place.zig").mintWindow(col, 0, "/a/dirty");
+    const w_dirty = try @import("place.zig").mintWindow(&ed, col, 0, "/a/dirty");
     try w_dirty.body.insertAt(0, "unsaved\n", true);
     w_dirty.dirty = true;
     w_dirty.body.file.disk = null;
 
-    const w_dir = try @import("place.zig").mintWindow(col, 0, "/a/adir");
+    const w_dir = try @import("place.zig").mintWindow(&ed, col, 0, "/a/adir");
     w_dir.isdir = true;
     w_dir.dirty = true; // even dirty, a dir window dumps as f (R-P17-4)
     w_dir.body.file.disk = null;

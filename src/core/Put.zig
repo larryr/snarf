@@ -645,7 +645,7 @@ test "Put: an unread name warns 'not written; file already exists' on the first 
     // A freshly minted window, never Loaded, whose name is typed directly
     // (`unread` goes true, `disk` stays null) — not a Get.
     const col = tree.row.col.items[0];
-    const w = try place.mintWindow(col, 0, "");
+    const w = try place.mintWindow(&ed, col, 0, "");
     try wintag.setName(w, "/m/f");
     try testing.expect(w.body.file.unread);
     try testing.expect(w.body.file.disk == null);

@@ -26,8 +26,14 @@ pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
 pub const look = @import("look.zig");
 pub const warp = @import("warp.zig");
+/// Return-after-Del warp — acme `savemouse`/`restoremouse`/`clearmouse`
+/// (util.c:383-408, cols.c:150/178), issue #9, R-EDIT-25.
+pub const restoremouse = @import("restoremouse.zig");
 test {
     _ = @import("restoremouse_test.zig"); // #9 acceptance (SnarfDev2)
+}
+test {
+    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
 }
 test {
     _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)

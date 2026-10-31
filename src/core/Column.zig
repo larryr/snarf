@@ -4,9 +4,11 @@
 //!
 //! Ported from larryr/plan9port@337c6ac acme/cols.c; cite as `cols.c:NN`. This is
 //! the no-clone/no-warp `colinit` (cols.c:26-50), `coladd` (cols.c:52-158) and
-//! `colresize` (cols.c:235-272) plus `colwhich` (cols.c:558-580). The mouse-warp
-//! arms (`savemouse`/`moveto`, cols.c:150-154) are dropped (R-P8-7 — a browser
-//! can't move the pointer). `colgrow` arrived in phase 16b and lives in
+//! `colresize` (cols.c:235-272) plus `colwhich` (cols.c:558-580). `coladd`'s
+//! `moveto` into the new window (cols.c:152-154) is dropped (R-P8-7); its
+//! `savemouse` (cols.c:150) lives in `place.mintWindow`, which has the Editor,
+//! and `close` calls `restoremouse` (cols.c:178) — see `core/restoremouse.zig`
+//! (#9). `colgrow` arrived in phase 16b and lives in
 //! `core/colgrow.zig` (the `but == 1` arm only); `coladd`'s own "grow the
 //! landing window first" loop (cols.c:81-87) is still deferred, because it
 //! changes `coladd`'s geometry and the accept goldens pin it — the buggered
@@ -28,6 +30,7 @@ const Buffer = @import("Buffer.zig");
 const Window = @import("Window.zig");
 const Row = @import("Row.zig");
 const Editor = @import("Editor.zig");
+const restoremouse = @import("restoremouse.zig");
 
 const Column = @This();
 const Rect = draw.Rect;
@@ -205,6 +208,7 @@ pub fn close(c: *Column, ed: *Editor, w: *Window, dofree: bool) Error!void {
     };
 
     var r = w.r; // cols.c:177
+    _ = restoremouse.restore(ed, w); // cols.c:178 didmouse = restoremouse(w)
 
     if (dofree) {
         ed.dropTextRefs(w); // text.c:109/113, called before destruction (R-P9-3)

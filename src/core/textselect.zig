@@ -16,6 +16,7 @@ const Editor = @import("Editor.zig");
 const Gesture = @import("Gesture.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
+const restoremouse = @import("restoremouse.zig");
 
 const Point = draw.Point;
 const MouseEvent = Editor.MouseEvent;
@@ -238,7 +239,8 @@ fn chordStep(g: *Gesture, ed: *Editor, t: *Text, ev: MouseEvent) !void {
                 g.chord_state = .paste; // text.c:1088
             }
         }
-        try t.scrDraw(); // text.c:1091 textscrdraw (LIVE; no-op when w==null). clearmouse deferred.
+        try t.scrDraw(); // text.c:1091 textscrdraw (LIVE; no-op when w==null).
+        restoremouse.clear(ed); // text.c:1092 clearmouse
         ed.needs_flush = true;
     }
     g.chord_buttons = b; // text.c:1066/1095 advance the edge tracker

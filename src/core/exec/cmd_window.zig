@@ -33,8 +33,8 @@ const rowOf = place.rowOf;
 /// `makenewwindow(nil)`, so `served/fsys.zig` goes through `place.makeNewWindow`
 /// now. `New`/`Newcol` keep THIS path, faithfully: look.c:922 and exec.c:352-364
 /// both place into the EXECUTING tag's own column (R-P12b-2).
-pub fn makeWindow(c: *Column, name: []const u8) Text.Error!*Window {
-    return place.mintWindow(c, -1, name);
+pub fn makeWindow(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window {
+    return place.mintWindow(ed, c, -1, name);
 }
 
 /// `del` (exec.c:397-410), Del (flag1=false) and Delete (flag1=true). Close the
@@ -80,7 +80,7 @@ pub fn new(
     // selection. `narg==0` (no inline arg) ⇒ done.
     if (try exec.getArg(ed, argt)) |name| {
         defer ed.allocator.free(name);
-        _ = try makeWindow(c, name);
+        _ = try makeWindow(ed, c, name);
         made_any = true;
         if (arg.len == 0) return; // look.c:913-914
     }
@@ -88,11 +88,11 @@ pub fn new(
     // Inline arg words (look.c:917-941): a window per blank-separated word.
     var it = std.mem.tokenizeAny(u8, arg, " \t");
     while (it.next()) |word| {
-        _ = try makeWindow(c, word);
+        _ = try makeWindow(ed, c, word);
         made_any = true;
     }
     // No argument at all ⇒ one unnamed window (look.c:921-926).
-    if (!made_any) _ = try makeWindow(c, "");
+    if (!made_any) _ = try makeWindow(ed, c, "");
 }
 
 /// `newcol` (exec.c:349-365): add a column to the executing row, then one UNNAMED
@@ -107,10 +107,9 @@ pub fn newcol(
     _: bool,
     _: []const u8,
 ) Text.Error!void {
-    _ = ed;
     const r = rowOf(et) orelse return; // exec.c:362 et->row
     const c = (try r.add(-1)) orelse return; // rowadd(et->row, nil, -1)
-    _ = try makeWindow(c, ""); // coladd(c, nil, nil, -1) + winsettag
+    _ = try makeWindow(ed, c, ""); // coladd(c, nil, nil, -1) + winsettag
 }
 
 /// `delcol` (exec.c:370-392): close the executing column IF it is clean. The C's
@@ -193,9 +192,13 @@ test "cmd_window: makeWindow creates a named empty owned window" {
     });
     defer tree.deinit();
 
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    tree.bind(&ed);
+
     const c = tree.row.col.items[0];
     const before = c.w.items.len;
-    const w = try makeWindow(c, "fresh");
+    const w = try makeWindow(&ed, c, "fresh");
     try testing.expectEqual(before + 1, c.w.items.len);
     try testing.expectEqual(@as(usize, 0), w.body.file.buffer.len()); // empty body
     try testing.expect(w.owns_body); // the window frees its own body File
@@ -407,7 +410,10 @@ test "makeNewWindow: a squeezed new window is grown by colgrow, wired at util.c:
         const c = tree.row.col.items[0];
         const w1 = c.w.items[0];
         const mid = @divTrunc(w1.r.min.y + w1.r.max.y, 2);
-        const w = try place.mintWindow(c, mid, "");
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        ed.row = tree.row;
+        const w = try place.mintWindow(&ed, c, mid, "");
         try testing.expect(w.body.fr.maxlines < 2); // the scenario genuinely needs growth
     }
 
