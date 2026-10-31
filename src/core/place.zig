@@ -66,7 +66,7 @@ pub fn rowOf(et: *Text) ?*Row {
 /// creation seam: `cmd_window.makeWindow` (New/Newcol), `makeNewWindow` below and
 /// `errors.errorWin` (+Errors) all go through it, so a future `openfile` replaces
 /// exactly one function.
-pub fn mintWindow(ed: ?*Editor, c: *Column, y: i32, name: []const u8) Text.Error!*Window {
+pub fn mintWindow(ed: *Editor, c: *Column, y: i32, name: []const u8) Text.Error!*Window {
     const a = c.chrome.allocator;
     const f = try a.create(File);
     var transferred = false;
@@ -77,7 +77,7 @@ pub fn mintWindow(ed: ?*Editor, c: *Column, y: i32, name: []const u8) Text.Error
     const w = try c.add(&c.row.?.winid, f, y); // coladd (steal / split)
     w.owns_body = true; // the Window now owns and frees this body File
     transferred = true; // f is reachable from the tree; its deinit chain frees it
-    if (ed) |e| restoremouse.save(e, w); // cols.c:150 savemouse(w) (#9); null = no Editor (unit rigs)
+    restoremouse.save(ed, w); // cols.c:150 savemouse(w) (#9)
 
     try wintag.setName(w, name); // winsetname: isscratch for `+Errors` (wind.c:387-391)
     try w.setTag1(); // setName is a no-op for "" (New): compose regardless

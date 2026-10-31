@@ -33,7 +33,7 @@ const rowOf = place.rowOf;
 /// `makenewwindow(nil)`, so `served/fsys.zig` goes through `place.makeNewWindow`
 /// now. `New`/`Newcol` keep THIS path, faithfully: look.c:922 and exec.c:352-364
 /// both place into the EXECUTING tag's own column (R-P12b-2).
-pub fn makeWindow(ed: ?*Editor, c: *Column, name: []const u8) Text.Error!*Window {
+pub fn makeWindow(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window {
     return place.mintWindow(ed, c, -1, name);
 }
 
@@ -192,9 +192,13 @@ test "cmd_window: makeWindow creates a named empty owned window" {
     });
     defer tree.deinit();
 
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    tree.bind(&ed);
+
     const c = tree.row.col.items[0];
     const before = c.w.items.len;
-    const w = try makeWindow(null, c, "fresh");
+    const w = try makeWindow(&ed, c, "fresh");
     try testing.expectEqual(before + 1, c.w.items.len);
     try testing.expectEqual(@as(usize, 0), w.body.file.buffer.len()); // empty body
     try testing.expect(w.owns_body); // the window frees its own body File
@@ -406,7 +410,10 @@ test "makeNewWindow: a squeezed new window is grown by colgrow, wired at util.c:
         const c = tree.row.col.items[0];
         const w1 = c.w.items[0];
         const mid = @divTrunc(w1.r.min.y + w1.r.max.y, 2);
-        const w = try place.mintWindow(null, c, mid, "");
+        var ed = Editor.init(a);
+        defer ed.deinit();
+        ed.row = tree.row;
+        const w = try place.mintWindow(&ed, c, mid, "");
         try testing.expect(w.body.fr.maxlines < 2); // the scenario genuinely needs growth
     }
 
