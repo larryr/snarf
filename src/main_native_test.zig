@@ -85,6 +85,8 @@ const Rig = struct {
     peer: FakeDevdraw,
     tmp: std.testing.TmpDir,
     root: [:0]u8,
+    /// `App.exit_log`: what `shutdown` would have printed on stderr.
+    log: std.Io.Writer.Allocating,
 
     fn create() !*Rig {
         const a = testing.allocator;
@@ -96,6 +98,8 @@ const Rig = struct {
         r.root = try r.tmp.dir.realPathFileAlloc(testing.io, ".", a);
         r.app = try a.create(App);
         r.app.built = .{};
+        r.log = .init(a);
+        r.app.exit_log = &r.log.writer;
         r.app.conn = Conn.init(a);
         r.peer = FakeDevdraw.init(&r.app.conn);
         r.app.conn.useSink(r.peer.sink());
@@ -115,6 +119,7 @@ const Rig = struct {
         main_native.shutdown(r.app);
         r.app.conn.deinit();
         r.a.destroy(r.app);
+        r.log.deinit();
         r.a.free(r.root);
         r.tmp.cleanup();
         r.a.destroy(r);
@@ -214,8 +219,13 @@ const Rig = struct {
     }
 
     /// The unfinished Put was DISCARDED, not committed (HostTree.endSession):
-    /// the file keeps its old bytes and no temp file is left behind.
+    /// the file keeps its old bytes, no temp file is left behind, and the user
+    /// was told, once, by name (PM ruling 2026-10-31, SnarfProdd).
     fn expectPutDiscarded(r: *Rig) !void {
+        try testing.expectEqualStrings(
+            "snarf: Put of /big.txt not finished at exit; file left unchanged\n",
+            r.log.written(),
+        );
         const got = try r.disk("big.txt");
         defer r.a.free(got);
         try testing.expectEqualStrings("old\n", got);
@@ -245,6 +255,24 @@ test "main_native: shutdown frees a working session after devdraw hangs up (wind
     try r.expectPutDiscarded();
 }
 
+test "main_native: a Put that finished before exit is not reported (#58)" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.writeFile(testing.io, .{ .sub_path = "f.txt", .data = "old\n" });
+    try r.boot();
+    try r.settle();
+    const w = try core.openfile.readFile(&r.app.editor, r.app.tree.row.col.items[0], "/f.txt");
+    try r.settle();
+    try r.edit(w, "new\n");
+    try r.run(&w.tag, "Put");
+    try r.settle();
+    main_native.shutdown(r.app);
+    try testing.expectEqualStrings("", r.log.written());
+    const got = try r.disk("f.txt");
+    defer r.a.free(got);
+    try testing.expectEqualStrings("old\nnew\n", got);
+}
+
 test "main_native: a boot that fails part-way is torn down by the same shutdown (#58)" {
     const r = try Rig.create();
     defer r.destroy();
@@ -252,6 +280,8 @@ test "main_native: a boot that fails part-way is torn down by the same shutdown 
     r.root = try r.a.dupeZ(u8, "/nonexistent/snarf-58-host-root");
     try testing.expectError(error.FileNotFound, main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root));
     try testing.expect(r.app.built.self_tree and !r.app.built.host_fs);
+    main_native.shutdown(r.app);
+    try testing.expectEqualStrings("", r.log.written()); // nothing to discard
     // destroy → shutdown frees exactly the half that was built.
 }
 

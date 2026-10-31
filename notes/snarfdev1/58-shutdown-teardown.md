@@ -24,6 +24,12 @@ already freed. What leaked was everything `boot` builds *around* them:
   `boot` built (partial boot safe). `main` does `defer shutdown(a)` right
   after spawn, so it runs before `conn.deinit`.
 - No `std.process.exit` fallback was needed.
+- PM ruling 2026-10-31 (SnarfProdd): a Put discarded at shutdown prints one
+  stderr line, `snarf: Put of /path not finished at exit; file left
+  unchanged`. Decided in `HostTree.clunk` (hung_up && !p.failed), written
+  to the writer passed to `endSession`; native routes it via `App.exit_log`
+  (tests) or collects then `std.debug.print`s (no stderr lock held during
+  the fid release). Nothing printed when nothing is discarded.
 
 ## Open / for later
 - `Server`'s Tversion path also `clearFids()` without `ops.clunk` — same

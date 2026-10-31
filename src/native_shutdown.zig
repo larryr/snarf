@@ -2,6 +2,7 @@
 //! `main_native.boot` built, as recorded in `App.built`. Split out of
 //! `main_native.zig` along the boot/shutdown seam (S-07 P-2). `main` defers
 //! it right after the devdraw spawn; #13's `Exit` will call it too.
+const std = @import("std");
 const core = @import("core");
 const App = @import("main_native.zig").App;
 
@@ -42,7 +43,7 @@ pub fn shutdown(a: *App) void {
     const b = &a.built;
     if (b.tree) core.shutdown.teardown(&a.editor, &a.tree);
     // ---- host file system stack ----
-    if (b.srv_fs) a.host_tree.endSession(&a.srv_fs);
+    if (b.srv_fs) endHostSession(a);
     if (b.cl_fs) a.cl_fs.deinit();
     if (b.srv_fs) a.srv_fs.deinit();
     if (b.pipe_fs) a.pipe_fs.deinit();
@@ -65,4 +66,16 @@ pub fn shutdown(a: *App) void {
     if (b.srv) a.srv.deinit();
     if (b.pipe) a.pipe.deinit();
     a.built = .{};
+}
+
+/// `HostTree.endSession`, with each discarded Put reported (PM ruling
+/// 2026-10-31, SnarfProdd): to `a.exit_log` when set (the tests), else to
+/// stderr. The stderr case collects the lines first and prints after the
+/// release, so no stderr lock is held while the fids are torn down.
+fn endHostSession(a: *App) void {
+    if (a.exit_log) |w| return a.host_tree.endSession(&a.srv_fs, w);
+    var lines: std.Io.Writer.Allocating = .init(a.host_tree.gpa);
+    defer lines.deinit();
+    a.host_tree.endSession(&a.srv_fs, &lines.writer);
+    if (lines.written().len != 0) std.debug.print("{s}", .{lines.written()});
 }

@@ -62,6 +62,9 @@ pub const App = struct {
     /// What `boot` has built so far — `shutdown` frees exactly that, so a boot
     /// that fails part-way is torn down as cleanly as a finished session.
     built: Built = .{},
+    /// Where `shutdown` reports a discarded Put; null ⇒ stderr (#58 /
+    /// PM ruling 2026-10-31). The tests point it at a buffer.
+    exit_log: ?*std.Io.Writer = null,
     conn: Conn,
     // --- draw stack: devdraw ← dev_draw ← server ← client ← Display ---
     dd: DevDraw9,
@@ -109,6 +112,7 @@ pub fn main(init: std.process.Init) !void {
     const a = try gpa.create(App);
     defer gpa.destroy(a);
     a.built = .{};
+    a.exit_log = null;
 
     // ADR-0006 §4: $DEVDRAW → bundled (beside this executable) → $PLAN9/bin →
     // $PATH. No executable path just skips "bundled"; it is never fatal.

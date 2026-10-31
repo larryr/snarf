@@ -27,6 +27,9 @@ fs: *HostFs,
 /// teardown, not the client's "done writing" — a Put still in flight is
 /// DISCARDED rather than committed (#58; see `endSession`).
 hung_up: bool = false,
+/// Where `endSession` reports each Put it discards (PM ruling 2026-10-31,
+/// SnarfProdd): set only for the duration of `endSession`.
+discard_log: ?*std.Io.Writer = null,
 
 /// Per-fid state (`fid.ctx`): the path relative to the export root ("" is
 /// the root) and, between an OTRUNC open and the clunk, the Put in flight.
@@ -45,9 +48,27 @@ pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
 /// original stays as it was and the temp is deleted — because a half-written
 /// buffer must never be renamed over a user's file (PM Q5's promise: readers
 /// see the old bytes or the new ones). Call before `srv.deinit`.
-pub fn endSession(self: *HostTree, srv: *server.Server) void {
+///
+/// Each Put discarded HERE is reported to `log`, one line naming the file
+/// (PM ruling 2026-10-31, SnarfProdd: the user must know the save did not
+/// happen): `snarf: Put of /path not finished at exit; file left unchanged`.
+/// The path is the export-root path, i.e. the namespace path under the `/`
+/// mount (the real path on native, where the root is `/`). Nothing is written
+/// when nothing is discarded, nor for a Put that had already failed (the
+/// editor reported that failure itself). `log` is flushed before returning.
+pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) void {
     self.hung_up = true;
+    self.discard_log = log;
+    defer self.discard_log = null;
     srv.releaseFids();
+    if (log) |w| w.flush() catch {};
+}
+
+/// The one-line discard notice (see `endSession`). Best-effort: a failing
+/// log never stops the teardown.
+fn reportDiscard(self: *HostTree, rel: []const u8) void {
+    const w = self.discard_log orelse return;
+    w.print("snarf: Put of /{s} not finished at exit; file left unchanged\n", .{rel}) catch {};
 }
 
 pub const ops: server.Ops = .{
@@ -168,7 +189,10 @@ fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
     const self = self_(ctx);
     const node: *Node = @ptrCast(@alignCast(fid.ctx orelse return));
     if (node.put) |*p| {
-        if (self.hung_up) p.failed = true; // endSession: discard, never commit
+        if (self.hung_up) { // endSession: discard, never commit
+            if (!p.failed) self.reportDiscard(node.rel);
+            p.failed = true;
+        }
         p.end(self.fs, self.gpa); // commit or discard
     }
     self.gpa.free(node.rel);
@@ -249,8 +273,15 @@ test "HostTree: endSession frees every fid's node and discards an unfinished Put
     _ = try cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
     _ = try cl.write(f.fid, 0, "half");
 
-    // No Tclunk ever arrives: the session just ends.
-    tree.endSession(&srv);
+    // No Tclunk ever arrives: the session just ends. The discard is reported
+    // once, naming the file (PM ruling 2026-10-31, SnarfProdd).
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    tree.endSession(&srv, &log.writer);
+    try std.testing.expectEqualStrings(
+        "snarf: Put of /f not finished at exit; file left unchanged\n",
+        log.written(),
+    );
     try std.testing.expect(srv.lookupFid(root) == null);
     var buf: [8]u8 = undefined;
     try std.testing.expectEqualStrings("old", buf[0..try fs.readFile("f", 0, &buf)]);
@@ -261,4 +292,48 @@ test "HostTree: endSession frees every fid's node and discards an unfinished Put
     var n: usize = 0;
     while (try it.next(io)) |_| n += 1;
     try std.testing.expectEqual(@as(usize, 1), n);
+}
+
+test "HostTree: endSession reports nothing when no Put is discarded (#58)" {
+    const io = std.testing.io;
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "sub");
+    try tmp.dir.writeFile(io, .{ .sub_path = "sub/g", .data = "old" });
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var fs = try HostFs.open(io, path);
+    defer fs.close();
+    var tree = HostTree.init(a, &fs);
+
+    const pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try server.Server.init(a, pipe.serverEnd(), &HostTree.ops, &tree, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = struct {
+        fn run(p: *anyopaque) anyerror!void {
+            _ = try @as(*server.Server, @ptrCast(@alignCast(p))).poll();
+        }
+    }.run };
+    _ = try cl.version(8192);
+    const root = (try cl.attach("larry", "")).fid;
+    // A finished Put (its Tclunk arrived: committed, nothing to report) …
+    const done = try cl.walk(root, &.{ "sub", "g" });
+    _ = try cl.open(done.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try cl.write(done.fid, 0, "new");
+    try cl.clunk(done.fid);
+    // … and fids still open for reading: released, but no Put among them.
+    const rd = try cl.walk(root, &.{ "sub", "g" });
+    _ = try cl.open(rd.fid, msg.OREAD);
+
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    tree.endSession(&srv, &log.writer);
+    try std.testing.expectEqualStrings("", log.written());
+    try std.testing.expect(srv.lookupFid(root) == null);
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("new", buf[0..try fs.readFile("sub/g", 0, &buf)]);
 }
