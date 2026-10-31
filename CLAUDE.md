@@ -84,6 +84,10 @@ sessions, ask to attach the forks (`add larryr/plan9port`) and clone shallow.
   someone else's branch.
 - Known environment gotchas and account-specific facts (GitHub App permissions, network
   policy, fork locations) are maintained in `agents/HANDOFF.md`, not here — check it.
+- **PR review**: every PR is reviewed per [`agents/REVIEW-PROCESS.md`](agents/REVIEW-PROCESS.md)
+  (the snarf mapping of the global 5-stage process — prior art → risk lanes → synthesis →
+  precheck + blind arbiter → staged draft). Agents draft; Larry alone submits review
+  verdicts and merges.
 
 ## Session handoff protocol (`agents/HANDOFF.md`)
 
