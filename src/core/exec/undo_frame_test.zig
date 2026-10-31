@@ -114,7 +114,7 @@ fn execTag(h: *Scene, word: []const u8) !void {
     try exec.execute(&h.ed, &w.tag, rng[0], rng[1], null);
 }
 
-test "undo_repaint (#57): Edit ,s/a/A/g then Undo/Redo/Undo/Undo repaint the body frame" {
+test "undo_frame (#57): Edit ,s/a/A/g then Undo/Redo/Undo/Undo repaint the body frame" {
     const h = try Scene.init();
     defer h.deinit();
     const w = h.win();
@@ -148,7 +148,7 @@ test "undo_repaint (#57): Edit ,s/a/A/g then Undo/Redo/Undo/Undo repaint the bod
     try expectShown(&w.body, typed);
 }
 
-test "undo_repaint (#57): undo of a mid-body delete and insert repaints in place" {
+test "undo_frame (#57): undo of a mid-body delete and insert repaints in place" {
     const h = try Scene.init();
     defer h.deinit();
     const w = h.win();
