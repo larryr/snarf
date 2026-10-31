@@ -3,9 +3,9 @@
 //! Requirement: R-EDIT-25. Test plan:
 //! `notes/snarfdev2/test-plans/M0-09-restoremouse.md` (RM-01..08).
 //!
-//! PM decisions (SnarfProdd, 2026-10-14, Q3): restore ONLY if the pointer is
-//! still inside the pop-up when it is deleted.
-//! Ruling (SnarfProdd, 2026-10-31): otherwise exact ACME. There is ONE save
+//! Ruling (PM/SnarfProdd, 2026-10-31): exact ACME. Q3's 2026-10-14 "restore
+//! only if the pointer is still inside the pop-up" is SUPERSEDED: restore
+//! happens whenever the deleted window is the saved one (util.c:396). There is ONE save
 //! slot (`prevmouse`/`mousew`, util.c:15-16). `savemouse` overwrites it
 //! (util.c:383-388), and `restoremouse` warps only for the saved window but
 //! ALWAYS clears the slot (util.c:390-402). So deleting any window forgets the
@@ -28,6 +28,7 @@ const warp = @import("warp.zig");
 const errors = @import("errors.zig");
 const Editor = @import("Editor.zig");
 const Window = @import("Window.zig");
+const Gesture = @import("Gesture.zig");
 const Frame = draw.Frame;
 const proto = draw.proto;
 
@@ -44,6 +45,22 @@ fn xfail(ok: bool) !void {
         return error.UnexpectedPassFlipFlag;
     }
     return error.SkipZigTest; // expected-fail until #9
+}
+
+/// Flip to true when restoremouse drops PM Q3's pointer-inside gate (exact
+/// ACME, PM 2026-10-31). #43 as of ee82794 still has the gate.
+const acme_exact_restore_landed = false;
+
+fn acmeExact(ok: bool) !void {
+    if (acme_exact_restore_landed) {
+        if (!ok) return error.TestUnexpectedResult;
+        return;
+    }
+    if (ok) {
+        std.debug.print("restoremouse_test: exact-ACME restore now passes; set acme_exact_restore_landed = true\n", .{});
+        return error.UnexpectedPassFlipFlag;
+    }
+    return error.SkipZigTest; // expected-fail until the gate is removed
 }
 
 fn pump(ctx: *anyopaque) anyerror!void {
@@ -142,14 +159,16 @@ test "restoremouse RM-03: deleting a different window does not warp AND clears t
     try xfail(h.sink.writes == before);
 }
 
-test "restoremouse RM-04: pointer moved out of the pop-up before Del means no restore (PM Q3)" {
+test "restoremouse RM-04: Del of the saved pop-up warps back even after the pointer left it (exact ACME, util.c:396)" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
     const w = try h.popup("/home/larry", P0);
+    const away: proto.Point = .{ .x = 1, .y = 1 }; // row tag, outside w.r
+    try testing.expect(!Gesture.ptInRect(w.r, away.x, away.y)); // really outside
     const before = h.sink.writes;
-    try h.del(w, .{ .x = 1, .y = 1 }); // row tag, outside w.r
-    try testing.expect(!(h.sink.writes > before and h.lastIs(P0)));
+    try h.del(w, away); // e.g. a Del typed elsewhere and executed on w's tag
+    try acmeExact(h.sink.writes == before + 1 and h.lastIs(P0));
 }
 
 test "restoremouse RM-05: saved window freed by Delcol leaves no dangling state; later Del does not warp" {
