@@ -135,14 +135,17 @@ test "restoremouse RM-03: deleting a different window does not restore" {
     try testing.expect(!(h.sink.writes > before and h.lastIs(P0)));
 }
 
-test "restoremouse RM-04: pointer moved out of the pop-up before Del means no restore (PM Q3)" {
+// RM-04 per the PM correction on 2026-10-31: the Q3 gate is dropped, exact acme
+// parity (util.c:396) — Del of the saved window warps back even with the
+// pointer moved out of it.
+test "restoremouse RM-04: pointer moved out of the pop-up before Del still restores (acme parity)" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
     const w = try h.popup("/home/larry", P0);
     const before = h.sink.writes;
     try h.del(w, .{ .x = 1, .y = 1 }); // row tag, outside w.r
-    try testing.expect(!(h.sink.writes > before and h.lastIs(P0)));
+    try testing.expect(h.sink.writes > before and h.lastIs(P0));
 }
 
 test "restoremouse RM-05: saved window freed by Delcol leaves no dangling state; later Del does not warp" {
