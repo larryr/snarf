@@ -52,6 +52,22 @@ fn xfail(ok: bool) !void {
     return error.SkipZigTest; // expected-fail until #45
 }
 
+/// Flip to true once restoremouse drops PM Q3's pointer-inside gate (exact
+/// ACME, PM 2026-10-31; SnarfDev1 is removing it in #43).
+const acme_exact_restore_landed = false;
+
+fn acmeExact(ok: bool) !void {
+    if (acme_exact_restore_landed) {
+        if (!ok) return error.TestUnexpectedResult;
+        return;
+    }
+    if (ok) {
+        std.debug.print("warp_focus_test: exact-ACME restore now passes; set acme_exact_restore_landed = true\n", .{});
+        return error.UnexpectedPassFlipFlag;
+    }
+    return error.SkipZigTest;
+}
+
 fn pump(ctx: *anyopaque) anyerror!void {
     const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
     _ = try s.poll();
@@ -245,32 +261,38 @@ test "warp_focus WF-06: focusing with an invalid address suppresses the warp (lo
     try testing.expectEqual(before, h.sink.writes);
 }
 
-test "warp_focus WF-07: zero-travel round trip — New, then Del, returns exactly to P0" {
+test "warp_focus WF-07: zero-travel round trip — New warps in, Del returns exactly to P0" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
     const P0 = h.p0();
     h.ed.gesture.mouse_pt = P0;
+    const w0 = h.sink.writes;
     const w = try h.new();
-    h.followWarp(); // no warp yet ⇒ the pointer stays at P0, outside w
-    const before = h.sink.writes;
-    try h.del(w, h.ed.gesture.mouse_pt);
-    const got = h.last();
-    try xfail(h.sink.writes > before and got != null and eqPt(got.?, P0));
-}
-
-test "warp_focus WF-08: zero-travel round trip — +Errors, then Del, returns exactly to P0" {
-    var h: Rig = undefined;
-    try h.init();
-    defer h.deinit();
-    const P0 = h.p0();
-    h.ed.gesture.mouse_pt = P0;
-    const w = try errors.errorWin(&h.ed, "/home/larry");
+    // Exact-ACME restore has no pointer-inside gate, so Del alone would land on
+    // P0 even with no warp-in. The round trip needs both halves.
+    const warped_in = h.lastInside(w, w0);
     h.followWarp();
     const before = h.sink.writes;
     try h.del(w, h.ed.gesture.mouse_pt);
     const got = h.last();
-    try xfail(h.sink.writes > before and got != null and eqPt(got.?, P0));
+    try xfail(warped_in and h.sink.writes > before and got != null and eqPt(got.?, P0));
+}
+
+test "warp_focus WF-08: zero-travel round trip — +Errors warps in, Del returns exactly to P0" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    const P0 = h.p0();
+    h.ed.gesture.mouse_pt = P0;
+    const w0 = h.sink.writes;
+    const w = try errors.errorWin(&h.ed, "/home/larry");
+    const warped_in = h.lastInside(w, w0);
+    h.followWarp();
+    const before = h.sink.writes;
+    try h.del(w, h.ed.gesture.mouse_pt);
+    const got = h.last();
+    try xfail(warped_in and h.sink.writes > before and got != null and eqPt(got.?, P0));
 }
 
 test "warp_focus WF-13: nested round trip uses ACME's single save slot — Del inner returns to the outer pop-up, Del outer then stays put" {
@@ -281,10 +303,14 @@ test "warp_focus WF-13: nested round trip uses ACME's single save slot — Del i
     try h.init();
     defer h.deinit();
     h.ed.gesture.mouse_pt = h.p0();
+    const we = h.sink.writes;
     const e = try errors.errorWin(&h.ed, "/home/larry");
+    const e_in = h.lastInside(e, we);
     h.followWarp(); // pointer now in +Errors (after #45)
     const pe = h.ed.gesture.mouse_pt;
+    const wn = h.sink.writes;
     const n = try h.new();
+    const n_in = h.lastInside(n, wn);
     h.followWarp(); // pointer now in the New window (after #45)
     const w0 = h.sink.writes;
     try h.del(n, h.ed.gesture.mouse_pt);
@@ -295,19 +321,23 @@ test "warp_focus WF-13: nested round trip uses ACME's single save slot — Del i
     const w1 = h.sink.writes;
     try h.del(e, h.ed.gesture.mouse_pt); // frees e
     const outer_ok = h.sink.writes == w1; // slot already cleared: no warp to P0
-    try xfail(inner_ok and outer_ok and pe_in_e);
+    try xfail(e_in and n_in and inner_ok and outer_ok and pe_in_e);
 }
 
-test "warp_focus WF-09: user left the new window before Del — no warp-back (PM Q3)" {
+test "warp_focus WF-09: user left the new window before Del — still warps back to P0 (exact ACME, no gate)" {
     var h: Rig = undefined;
     try h.init();
     defer h.deinit();
-    h.ed.gesture.mouse_pt = h.p0();
+    const P0 = h.p0();
+    h.ed.gesture.mouse_pt = P0;
     const w = try h.new();
     h.followWarp();
+    const away: proto.Point = .{ .x = 1, .y = 1 }; // row tag, outside w
+    try testing.expect(!ptIn(w.r, away));
     const before = h.sink.writes;
-    try h.del(w, h.p0()); // pointer back in the main window, outside w
-    try testing.expectEqual(before, h.sink.writes);
+    try h.del(w, away);
+    const got = h.last();
+    try acmeExact(h.sink.writes == before + 1 and got != null and eqPt(got.?, P0));
 }
 
 test "warp_focus WF-10: no /dev/mouse (browser/headless) — New, +Errors and Del never error" {
