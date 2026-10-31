@@ -27,17 +27,13 @@
 //! reached from `Column.add`, `Row.add`, `Row.resize` and `Row.close`, and
 //! `boot.boot` builds the tree (calling both) before any Editor exists. The
 //! effect: a pop-up saved before a column resize, Newcol or screen resize
-//! still warps back on a later Del. The PM Q3 check below bounds it: the warp
-//! fires only if the pointer is still inside the pop-up, i.e. the user went to
-//! it and deleted it, which is the case the warp exists for.
+//! still warps back on a later Del of that pop-up, wherever the pointer is
+//! (exact acme parity, below), where acme would have forgotten the save.
 //!
-//! DIVERGENCE (SnarfProdd, 2026-10-14, PM Q3; R-EDIT-25): restore ONLY if the
-//! pointer is still inside the dying window. The C restores whenever
-//! `mousew == w` — safe there because `coladd` also warps the pointer INTO the
-//! new window (cols.c:153-154), a warp this port does not issue (R-P8-7). With
-//! the pointer left where it was, warping back from Del somewhere else would be
-//! a surprise, so the check keeps the warp to the case the paper describes:
-//! the user went to the pop-up and deleted it.
+//! EXACT ACME PARITY (SnarfProdd PM correction, 2026-10-31; R-EDIT-25): restore
+//! whenever `mousew == w`, with no check of where the pointer is now
+//! (util.c:396). The earlier PM Q3 gate (2026-10-14: restore only if the
+//! pointer is still inside the dying window) is removed.
 //!
 //! Like every warp, the write is best effort (`warp.to`): no `/dev/mouse`, or a
 //! host that refuses it (browser), and nothing happens.
@@ -46,7 +42,6 @@
 const Editor = @import("Editor.zig");
 const Window = @import("Window.zig");
 const warp = @import("warp.zig");
-const Gesture = @import("Gesture.zig");
 
 /// `savemouse` (util.c:383-388): remember where the pointer is now and which
 /// window just popped up.
@@ -55,13 +50,13 @@ pub fn save(ed: *Editor, w: *Window) void {
     ed.mousew = w; // util.c:387
 }
 
-/// `restoremouse` (util.c:390-402): if `w` is the saved window (and, PM Q3, the
-/// pointer is still inside it), warp back to the saved point. Always forgets
-/// the save (util.c:400). Returns the C's `did`.
+/// `restoremouse` (util.c:390-402): if `w` is the saved window, warp back to the
+/// saved point, wherever the pointer is now. Always forgets the save
+/// (util.c:400). Returns the C's `did`.
 pub fn restore(ed: *Editor, w: *Window) bool {
     var did = false;
     if (ed.mousew) |mw| {
-        if (mw == w and Gesture.ptInRect(w.r, ed.gesture.mouse_pt.x, ed.gesture.mouse_pt.y)) { // util.c:396 + PM Q3
+        if (mw == w) { // util.c:396
             warp.to(ed, ed.prevmouse); // util.c:397 moveto(mousectl, prevmouse)
             did = true;
         }
