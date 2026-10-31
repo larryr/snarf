@@ -1,0 +1,84 @@
+# Pre-release builds (profile: publish native binary per milestone, e.g. v0.M0-dev.1).
+# Push a tag `v*` and this builds snarf-native on macOS arm64 (with the bundled
+# devdraw, ADR-0006) and Linux x86_64 (snarf-native only; needs plan9port's
+# devdraw via $PLAN9 or $DEVDRAW), then publishes a GitHub pre-release.
+# `zig build` stays the only build entry point (ADR-0001).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.asset }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: macos-arm64
+          - os: ubuntu-latest
+            asset: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned Zig version
+        id: zv
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zv.outputs.version }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
+      - name: zig build test
+        run: zig build test --summary all
+      - name: zig build native (ReleaseSafe)
+        run: zig build native -Doptimize=ReleaseSafe --summary all
+      - name: Package
+        run: |
+          name="snarf-${GITHUB_REF_NAME}-${{ matrix.asset }}"
+          mkdir -p "dist/$name"
+          cp zig-out/bin/snarf-native "dist/$name/"
+          if [ -x zig-out/bin/devdraw ]; then cp zig-out/bin/devdraw "dist/$name/"; fi
+          cp LICENSE* README* "dist/$name/" 2>/dev/null || true
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  publish:
+    needs: build
+    # Publish even if the Linux build fails; macOS is the required target.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Require the macOS asset
+        run: ls dist/*macos-arm64.tar.gz
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
