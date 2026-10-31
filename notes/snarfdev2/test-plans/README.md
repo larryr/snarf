@@ -44,7 +44,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 Default rule: when unsure, use ACME behaviour.
 - Q1 mount point: follow #11 spec text; conflicts with checklist step 4 → test TBD pending Larry.
 - Q2 clipboard: test native devdraw Trdsnarf/Twrsnarf; browser keeps Clipboard API; PM fixes R-9P-07 wording.
-- Q3 Del warp-back: restore only if pointer still in pop-up. ~~nested → innermost saved point~~. **Superseded 2026-10-31:** a single ACME save slot (see below).
+- Q3 Del warp-back: ~~restore only if pointer still in pop-up~~; ~~nested → innermost saved point~~. **Superseded 2026-10-31 in full:** exact ACME (see below).
 - Q4 Exit two-strike, ACME Sort order, Zerox as ACME allows.
 - Q5 Put atomic temp+rename, old file kept on failure; new files 0666 &~ umask.
 - Q6 spec S-02 authoritative for R-P17-5.
@@ -57,4 +57,4 @@ Default rule: when unsure, use ACME behaviour.
 ## Product ruling (SnarfProdd, 2026-10-31): restoremouse is exact ACME (util.c:383-408)
 - Deleting ANY window clears the saved pointer state, so a later Del of the original pop-up does not warp (RM-03).
 - There is one save slot. A from P0, then B from P1: Del B warps to P1, then Del A does nothing (RM-06). This replaces "innermost / stack".
-- The RM-04 pointer-inside gate (Q3) is kept unless the PM rules otherwise.
+- **Second ruling (2026-10-31):** RM-04's pointer-inside gate is dropped. Restore happens whenever the deleted window is the saved one, with no check on whether the pointer is still inside it (util.c:390-402). Q3's "pointer still inside" wording is superseded.
