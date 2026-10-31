@@ -31,6 +31,13 @@ pub const warp = @import("warp.zig");
 pub const restoremouse = @import("restoremouse.zig");
 test {
     _ = @import("restoremouse_test.zig"); // #9 acceptance (SnarfDev2)
+    _ = @import("warp_focus_test.zig"); // #45 acceptance (SnarfDev2)
+}
+test {
+    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
+}
+test {
+    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
 }
 test {
     _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
