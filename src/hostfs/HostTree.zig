@@ -20,6 +20,7 @@ const Stat = ninep.stat;
 const OpError = ninep.errors.OpError;
 const HostFs = @import("HostFs.zig");
 const Replace = @import("Replace.zig");
+const Recovery = @import("Recovery.zig");
 
 gpa: std.mem.Allocator,
 fs: *HostFs,
@@ -30,6 +31,10 @@ hung_up: bool = false,
 /// Where `endSession` reports each Put it discards (PM ruling 2026-10-31,
 /// SnarfProdd): set only for the duration of `endSession`.
 discard_log: ?*std.Io.Writer = null,
+/// Where a discarded Put's bytes are kept (Owner decision 2026-10-31,
+/// Larry). The host sets `recovery.tmp_dir` from `$TMPDIR`; tests point it
+/// (and `pid`) at a scratch directory.
+recovery: Recovery,
 
 /// Per-fid state (`fid.ctx`): the path relative to the export root ("" is
 /// the root) and, between an OTRUNC open and the clunk, the Put in flight.
@@ -39,7 +44,7 @@ const Node = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
-    return .{ .gpa = gpa, .fs = fs };
+    return .{ .gpa = gpa, .fs = fs, .recovery = Recovery.init() };
 }
 
 /// The session is over (the editor is shutting down, or its peer vanished):
@@ -49,13 +54,19 @@ pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
 /// buffer must never be renamed over a user's file (PM Q5's promise: readers
 /// see the old bytes or the new ones). Call before `srv.deinit`.
 ///
-/// Each Put discarded HERE is reported to `log`, one line naming the file
-/// (PM ruling 2026-10-31, SnarfProdd: the user must know the save did not
-/// happen): `snarf: Put of /path not finished at exit; file left unchanged`.
-/// The path is the export-root path, i.e. the namespace path under the `/`
-/// mount (the real path on native, where the root is `/`). Nothing is written
-/// when nothing is discarded, nor for a Put that had already failed (the
-/// editor reported that failure itself). `log` is flushed before returning.
+/// Each Put discarded HERE keeps its bytes in a recovery file (`Recovery`:
+/// Owner decision 2026-10-31 (Larry): keep partial Put in a recovery file,
+/// vim-style) and is reported to `log` (PM ruling 2026-10-31, SnarfProdd):
+///
+///     snarf: Put of /path not finished at exit; file left unchanged
+///     snarf: partial contents saved in /dir/.name.snarf-partial
+///
+/// (second line instead `snarf: could not save partial contents (<error>)`,
+/// or absent for a Put of zero bytes). Paths are absolute namespace paths
+/// under the `/` mount — the real paths on native, where the root is `/` —
+/// so a B3 on either opens it. Nothing is written or printed when nothing is
+/// discarded, nor for a Put that had already failed (the editor reported
+/// that failure itself). `log` is flushed before returning.
 pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) void {
     self.hung_up = true;
     self.discard_log = log;
@@ -64,11 +75,32 @@ pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) vo
     if (log) |w| w.flush() catch {};
 }
 
-/// The one-line discard notice (see `endSession`). Best-effort: a failing
-/// log never stops the teardown.
-fn reportDiscard(self: *HostTree, rel: []const u8) void {
+/// A Put discarded by `endSession` (see there): keep its bytes in a
+/// recovery file (`Recovery.save`) and say so, one line on `discard_log`.
+/// Best-effort throughout: nothing here can fail the teardown.
+fn keepPartial(self: *HostTree, p: *Replace, rel: []const u8) void {
+    // Formatted for B3 (Larry, 2026-10-31): every path is a bare absolute
+    // path, followed by a space or the newline — no quotes, no trailing
+    // punctuation, nothing `expandfile` (look.c:592-729) would fold into it
+    // or read as an `:addr` — and the recovery path gets its own line.
+    // The in-place fallback (no temp: the directory refused one) has already
+    // truncated and part-written the original — there is no untouched
+    // original to promise, and the partial bytes ARE the file.
+    const temp = p.temp orelse
+        return self.note("snarf: Put of /{s} not finished at exit; written in place and may be incomplete\n", .{rel});
+    const saved = self.recovery.save(self.fs, self.gpa, temp, rel);
+    defer saved.deinit(self.gpa);
+    self.note("snarf: Put of /{s} not finished at exit; file left unchanged\n", .{rel});
+    switch (saved) {
+        .empty => {},
+        .saved => |path| self.note("snarf: partial contents saved in {s}\n", .{path}),
+        .failed => |e| self.note("snarf: could not save partial contents ({t})\n", .{e}),
+    }
+}
+
+fn note(self: *HostTree, comptime fmt: []const u8, args: anytype) void {
     const w = self.discard_log orelse return;
-    w.print("snarf: Put of /{s} not finished at exit; file left unchanged\n", .{rel}) catch {};
+    w.print(fmt, args) catch {};
 }
 
 pub const ops: server.Ops = .{
@@ -190,7 +222,7 @@ fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
     const node: *Node = @ptrCast(@alignCast(fid.ctx orelse return));
     if (node.put) |*p| {
         if (self.hung_up) { // endSession: discard, never commit
-            if (!p.failed) self.reportDiscard(node.rel);
+            if (!p.failed) self.keepPartial(p, node.rel);
             p.failed = true;
         }
         p.end(self.fs, self.gpa); // commit or discard
@@ -273,25 +305,30 @@ test "HostTree: endSession frees every fid's node and discards an unfinished Put
     _ = try cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
     _ = try cl.write(f.fid, 0, "half");
 
-    // No Tclunk ever arrives: the session just ends. The discard is reported
-    // once, naming the file (PM ruling 2026-10-31, SnarfProdd).
+    // No Tclunk ever arrives: the session just ends. The discard is reported,
+    // naming the file (PM ruling 2026-10-31, SnarfProdd), and its bytes are
+    // kept beside it (Owner decision 2026-10-31, Larry).
     var log: std.Io.Writer.Allocating = .init(a);
     defer log.deinit();
     tree.endSession(&srv, &log.writer);
     try std.testing.expectEqualStrings(
-        "snarf: Put of /f not finished at exit; file left unchanged\n",
+        "snarf: Put of /f not finished at exit; file left unchanged\n" ++
+            "snarf: partial contents saved in /.f.snarf-partial\n",
         log.written(),
     );
+    const kept = try tmp.dir.readFileAlloc(io, ".f.snarf-partial", a, .limited(64));
+    defer a.free(kept);
+    try std.testing.expectEqualStrings("half", kept);
     try std.testing.expect(srv.lookupFid(root) == null);
     var buf: [8]u8 = undefined;
     try std.testing.expectEqualStrings("old", buf[0..try fs.readFile("f", 0, &buf)]);
-    // The temp is gone: the directory holds exactly the original.
+    // The temp is gone: the directory holds the original and the recovery file.
     var d = try tmp.dir.openDir(io, ".", .{ .iterate = true });
     defer d.close(io);
     var it = d.iterate();
     var n: usize = 0;
     while (try it.next(io)) |_| n += 1;
-    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(@as(usize, 2), n);
 }
 
 test "HostTree: endSession reports nothing when no Put is discarded (#58)" {

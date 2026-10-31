@@ -7,6 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const core = @import("core");
+const draw = @import("draw");
 const host = @import("host");
 const main_native = @import("main_native.zig");
 
@@ -87,6 +88,8 @@ const Rig = struct {
     root: [:0]u8,
     /// `App.exit_log`: what `shutdown` would have printed on stderr.
     log: std.Io.Writer.Allocating,
+    /// The Put's temp-file bytes just before shutdown (`workSession`).
+    partial: ?[]u8 = null,
 
     fn create() !*Rig {
         const a = testing.allocator;
@@ -99,6 +102,7 @@ const Rig = struct {
         r.app = try a.create(App);
         r.app.built = .{};
         r.log = .init(a);
+        r.partial = null;
         r.app.exit_log = &r.log.writer;
         r.app.conn = Conn.init(a);
         r.peer = FakeDevdraw.init(&r.app.conn);
@@ -109,6 +113,7 @@ const Rig = struct {
     fn boot(r: *Rig) !void {
         try main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root);
         r.app.editor.session.home = "/";
+        r.app.host_tree.recovery.tmp_dir = r.root; // as main sets $TMPDIR
         try r.app.conn.armMouse();
         try r.app.conn.armKbd();
     }
@@ -120,6 +125,7 @@ const Rig = struct {
         r.app.conn.deinit();
         r.a.destroy(r.app);
         r.log.deinit();
+        if (r.partial) |b| r.a.free(b);
         r.a.free(r.root);
         r.tmp.cleanup();
         r.a.destroy(r);
@@ -214,24 +220,92 @@ const Rig = struct {
         try r.ticks(2);
         try testing.expect(ed.puts.items.len != 0); // still writing
         try testing.expectEqual(@as(usize, 3), try r.entries()); // + the temp file
+        r.partial = try r.tempBytes();
         _ = try core.openfile.readFile(ed, tree.row.col.items[1], "/notes.txt");
         try testing.expect(ed.loads.items.len != 0);
     }
 
+    /// The in-flight Put's temp file (`.big.txt.snarf-put.N`), read raw.
+    fn tempBytes(r: *Rig) ![]u8 {
+        var d = try r.tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+        defer d.close(testing.io);
+        var it = d.iterate();
+        while (try it.next(testing.io)) |e| {
+            if (std.mem.startsWith(u8, e.name, ".big.txt.snarf-put.")) return r.disk(e.name);
+        }
+        return error.NoTempFile;
+    }
+
     /// The unfinished Put was DISCARDED, not committed (HostTree.endSession):
-    /// the file keeps its old bytes, no temp file is left behind, and the user
-    /// was told, once, by name (PM ruling 2026-10-31, SnarfProdd).
+    /// the file keeps its old bytes and no temp file is left behind; its
+    /// bytes so far are kept in `.big.txt.snarf-partial` (Owner decision
+    /// 2026-10-31, Larry), and the user is told both paths (PM ruling
+    /// 2026-10-31, SnarfProdd) in a form B3 opens.
     fn expectPutDiscarded(r: *Rig) !void {
         try testing.expectEqualStrings(
-            "snarf: Put of /big.txt not finished at exit; file left unchanged\n",
+            "snarf: Put of /big.txt not finished at exit; file left unchanged\n" ++
+                "snarf: partial contents saved in /.big.txt.snarf-partial\n",
             r.log.written(),
         );
         const got = try r.disk("big.txt");
         defer r.a.free(got);
         try testing.expectEqualStrings("old\n", got);
-        try testing.expectEqual(@as(usize, 2), try r.entries());
+        const kept = try r.disk(".big.txt.snarf-partial");
+        defer r.a.free(kept);
+        const partial = r.partial.?;
+        try testing.expect(partial.len != 0 and partial.len < 4 + (1 << 20)); // really unfinished
+        try testing.expectEqualSlices(u8, partial, kept); // exactly what had arrived
+        try testing.expectEqual(@as(usize, 3), try r.entries()); // + the recovery file, no temp
+        try expectB3Paths(r.log.written(), &.{ "/big.txt", "/.big.txt.snarf-partial" });
     }
 };
+
+/// Larry (2026-10-31): a B3 on each path in the shutdown notice must open
+/// it. Lay `out` into a Text, as the +Errors window would show it, and B3
+/// at the first, a middle and the last rune of each `want` path: acme's own
+/// expansion (`expandfile`, look.c:592-729, then `dirname`'s rooting) must
+/// yield the WHOLE path — no `:addr` split off, nothing glued on.
+fn expectB3Paths(out: []const u8, want: []const []const u8) !void {
+    const a = testing.allocator;
+    var fx = try draw.Frame.TestFixture.init();
+    defer fx.deinit();
+    var file = core.File.init(a, core.Buffer.initEmpty(a));
+    defer file.deinit();
+    const w = &fx.disp.white;
+    var text = try core.Text.init(&file, a, draw.proto.Rect.make(0, 0, 656, 470), fx.font, &fx.disp.image, .{ w, w, w, w, w });
+    defer text.deinit();
+    try text.insertAt(0, out, true);
+    var ed = core.Editor.init(a);
+    defer ed.deinit();
+    for (want) |path| {
+        const at = std.mem.indexOf(u8, out, path) orelse return error.PathNotInOutput; // ASCII: bytes == runes
+        for ([_]usize{ at, at + path.len / 2, at + path.len - 1 }) |click| {
+            const c = core.expand.expandFile(&text, click, click, false) orelse return error.NotAFileName;
+            try testing.expectEqual(core.expand.Kind.file, c.kind);
+            try testing.expect(!c.has_addr);
+            try testing.expectEqual(at, c.q0);
+            try testing.expectEqual(at + path.len, c.q1);
+            const name = try core.expand.runeText(a, &text, c.name_q0, c.name_q1);
+            defer a.free(name);
+            const abs = try core.expand.absolute(&ed, a, &text, name);
+            defer a.free(abs);
+            try testing.expectEqualStrings(path, abs);
+        }
+    }
+}
+
+test "main_native: the other notice forms are B3-able too (tmp fallback, failure, in place) (#58)" {
+    // The exact formats HostTree.keepPartial prints (src/hostfs/HostTree.zig),
+    // with a $TMPDIR fallback path that has a pid and a numbered suffix.
+    try expectB3Paths(
+        "snarf: Put of /home/larry/src/a-b_c.zig not finished at exit; file left unchanged\n" ++
+            "snarf: partial contents saved in /tmp/snarf-partial-4242-a-b_c.zig.1\n" ++
+            "snarf: Put of /etc/ro/g not finished at exit; file left unchanged\n" ++
+            "snarf: could not save partial contents (AccessDenied)\n" ++
+            "snarf: Put of /mnt/x/y not finished at exit; written in place and may be incomplete\n",
+        &.{ "/home/larry/src/a-b_c.zig", "/tmp/snarf-partial-4242-a-b_c.zig.1", "/etc/ro/g", "/mnt/x/y" },
+    );
+}
 
 test "main_native: shutdown frees a working session with devdraw still up (#13 Exit path) (#58)" {
     const r = try Rig.create();

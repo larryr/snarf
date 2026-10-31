@@ -11,10 +11,12 @@
 pub const HostFs = @import("HostFs.zig");
 pub const Replace = @import("Replace.zig");
 pub const HostTree = @import("HostTree.zig");
+pub const Recovery = @import("Recovery.zig");
 pub const DirReader = @import("dirread.zig").DirReader;
 pub const qid_tag = HostFs.qid_tag;
 
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("dirread.zig");
+    _ = @import("recovery_test.zig"); // #58: partial Put kept at shutdown
 }

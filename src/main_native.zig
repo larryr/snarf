@@ -154,6 +154,9 @@ pub fn main(init: std.process.Init) !void {
     // null when unset. It resolves through the root mount, so `Dump` writes
     // `$HOME/acme.dump` on the real disk.
     a.editor.session.home = init.environ_map.get("HOME");
+    // #58 (Owner decision 2026-10-31, Larry): where a Put cut off by exit
+    // keeps its bytes when its own directory refuses (`hostfs.Recovery`).
+    a.host_tree.recovery.tmp_dir = init.environ_map.get("TMPDIR") orelse "/tmp";
 
     // The two long polls, armed once and re-armed by `Conn.poll` from here on
     // (drawclient.c keeps exactly one of each outstanding).
