@@ -179,12 +179,15 @@ pub const Tree = struct {
     /// Clamping keeps a 3-line minimum — row tag, column tag, one window line —
     /// which is the smallest layout that is still acme. A browser window smaller
     /// than that simply sees the top-left corner of a minimum-size editor.
-    pub fn resize(tree: *Tree, r: Rect) !void {
+    ///
+    /// `ed` is the bound Editor: `rowresize`'s `colresize`s forget any saved
+    /// pop-up (cols.c:242, #53).
+    pub fn resize(tree: *Tree, ed: *Editor, r: Rect) !void {
         const chrome = tree.chrome;
         const rr = clampScreen(r, chrome.font.height);
         const screen = &chrome.display.image;
         try screen.draw(rr, chrome.ground, null, .{}); // acme.c:551
-        try tree.row.resize(rr); // acme.c:555 rowresize(&row, screen->clipr)
+        try tree.row.resize(ed, rr); // acme.c:555 rowresize(&row, screen->clipr)
     }
 };
 
@@ -225,13 +228,15 @@ pub fn boot(
     errdefer row.deinit();
 
     // First column fills the row (rowadd with no prior column, rows.c:87-90).
-    const c = (try row.add(-1)) orelse return error.ColumnTooNarrow;
+    // `addAtBoot`: no Editor exists yet, so there is no saved pop-up for
+    // rows.c:99's `clearmouse` to forget (#53).
+    const c = (try row.addAtBoot(-1)) orelse return error.ColumnTooNarrow;
 
     var tree = Tree{ .allocator = a, .chrome = chrome, .row = row, .ns = opts.ns };
     if (opts.dir_boot) {
         // acme.c:249-257 `for(i=0; i<ncol; i++) rowadd(&row, nil, -1)` with
         // ncol == 2; the window itself is the caller's (see `Options.dir_boot`).
-        _ = (try row.add(-1)) orelse return error.ColumnTooNarrow;
+        _ = (try row.addAtBoot(-1)) orelse return error.ColumnTooNarrow;
         return tree;
     }
     _ = try tree.addWinTo(c, opts.win_name, opts.body);
@@ -459,7 +464,9 @@ test "boot: resize grows the tree to fill a larger screen (T6)" {
     const w = c.w.items[0];
     const bottom_before = w.body.fr.r.max.y;
 
-    try tree.resize(proto.Rect.make(0, 0, 1024, 768));
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    try tree.resize(&ed, proto.Rect.make(0, 0, 1024, 768));
 
     try testing.expectEqual(proto.Rect.make(0, 0, 1024, 768), tree.row.r);
 
@@ -497,12 +504,14 @@ test "boot: shrink with two columns, two windows in one column (T7)" {
     // Second column, then a second window stacked into the FIRST column (so
     // one column carries both windows and the other carries none — the more
     // demanding shape for the shrink).
-    _ = (try tree.row.add(-1)).?;
+    _ = (try tree.row.addAtBoot(-1)).?;
     _ = try tree.addWinTo(tree.row.col.items[0], "two", "world\n");
     try testing.expectEqual(@as(usize, 2), tree.row.col.items.len);
     try testing.expectEqual(@as(usize, 2), tree.row.col.items[0].w.items.len);
 
-    try tree.resize(proto.Rect.make(0, 0, 400, 300));
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    try tree.resize(&ed, proto.Rect.make(0, 0, 400, 300));
 
     try testing.expectEqual(proto.Rect.make(0, 0, 400, 300), tree.row.r);
 
@@ -537,7 +546,9 @@ test "boot: degenerate resize clamps to the usable minimum (T8)" {
     defer tree.deinit();
 
     // No error: clamping, not rejection.
-    try tree.resize(proto.Rect.make(0, 0, 50, 20));
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    try tree.resize(&ed, proto.Rect.make(0, 0, 50, 20));
 
     // 100 px wide, 3*font.height + 2*Border tall — 18*3 + 2*2 = 58 at the 9x18
     // font (min_screen_width / clampScreen in this file).

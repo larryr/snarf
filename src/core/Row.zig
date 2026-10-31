@@ -7,7 +7,8 @@
 //! `rowinit` (rows.c:25-48), `rowadd` (rows.c:50-101), `rowresize`
 //! (rows.c:103-138), `rowwhich` (rows.c:255-266) and `rowwhichcol`
 //! (rows.c:242-253). `rowtype`/`rowdragcol`/`rowclose`/`Dump`/`Load` are phases
-//! 9/10; the `clearmouse`/warp calls are dropped (R-P8-7).
+//! 9/10. `rowadd`'s `clearmouse` (rows.c:99) and `colresize`'s (cols.c:242) are
+//! ported (#53); `rowdragcol`'s (rows.c:150) waits for `rowdragcol`.
 //!
 //! Columns are individually HEAP-allocated (`allocator.create`) and stored as
 //! pointers for address stability (contract §7-8), owned by the Row.
@@ -22,6 +23,7 @@ const File = @import("File.zig");
 const Buffer = @import("Buffer.zig");
 const Column = @import("Column.zig");
 const Editor = @import("Editor.zig");
+const restoremouse = @import("restoremouse.zig");
 
 const Row = @This();
 const Rect = draw.Rect;
@@ -100,7 +102,24 @@ pub fn deinit(row: *Row) void {
 /// `null`) when the landing column is narrower than 100px. Otherwise shrink the
 /// landing column to the left of the split and carve the new one out of the
 /// remainder.
-pub fn add(row: *Row, x_in: i32) Error!?*Column {
+///
+/// Ends by forgetting any saved pop-up (`clearmouse`, rows.c:99, #53), as does
+/// the `colresize` of the landing column (cols.c:242).
+pub fn add(row: *Row, ed: *Editor, x_in: i32) Error!?*Column {
+    const c = (try row.addImpl(ed, x_in)) orelse return null; // rows.c:74-75 returns before :99
+    restoremouse.clear(ed); // rows.c:99 clearmouse()
+    return c;
+}
+
+/// `rowadd` for building a tree before any Editor (and so any saved pop-up)
+/// exists: `boot.boot`, and test fixtures that finish their tree before they
+/// create their Editor. Identical layout, no `clearmouse` (#53). Every runtime
+/// path (Newcol, `makenewwindow`, `+Errors`, Load) calls `add`.
+pub fn addAtBoot(row: *Row, x_in: i32) Error!?*Column {
+    return row.addImpl(null, x_in);
+}
+
+fn addImpl(row: *Row, ed: ?*Editor, x_in: i32) Error!?*Column {
     const a = row.chrome.allocator;
     const screen = &row.chrome.display.image;
     const bd = Chrome.border;
@@ -131,7 +150,7 @@ pub fn add(row: *Row, x_in: i32) Error!?*Column {
         var r1 = r;
         r1.max.x = @min(x - bd, r.max.x - 50); // rows.c:78
         if (dx(r1) < 50) r1.max.x = r1.min.x + 50; // rows.c:79-80
-        try d.resize(r1); // rows.c:81 colresize
+        if (ed) |e| try d.resize(e, r1) else try d.relayout(r1); // rows.c:81 colresize
         // Border-px black vertical band beside d (rows.c:82-84).
         r1.min.x = r1.max.x;
         r1.max.x = r1.min.x + bd;
@@ -202,7 +221,7 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
     }
 
     try screen.draw(r, row.chrome.ground, null, .{}); // rows.c:235
-    try neighbor.resize(r); // rows.c:236
+    try neighbor.resize(ed, r); // rows.c:236 (colresize ⇒ clearmouse, cols.c:242)
 }
 
 /// The narrowest rectangle a `Column` may be laid out in (see the divergence
@@ -238,7 +257,10 @@ fn minColWidth(font_height: i32) i32 {
 /// away by `drawclip` (draw.c:236-245) — a tree tiling more than the screen is
 /// ugly, a dead module is not. `Tree.resize` (core/boot.zig) separately clamps
 /// the SCREEN rect, which is what protects the row tag itself.
-pub fn resize(row: *Row, r: Rect) Error!void {
+///
+/// Every `colresize` here clears any saved pop-up (cols.c:242, #53), so a
+/// screen resize forgets the save, as in acme.
+pub fn resize(row: *Row, ed: *Editor, r: Rect) Error!void {
     const font = row.chrome.font;
     const fh: i32 = font.height;
     const screen = &row.chrome.display.image;
@@ -280,7 +302,7 @@ pub fn resize(row: *Row, r: Rect) Error!void {
         // column's own rect, and it cascades — the next column starts where this
         // one really ends.
         if (dx(r1) < min_col) r1.max.x = r1.min.x + min_col;
-        try c.resize(r1); // rows.c:136 colresize
+        try c.resize(ed, r1); // rows.c:136 colresize (⇒ clearmouse, cols.c:242)
     }
 }
 
@@ -336,6 +358,8 @@ const RowHarness = struct {
     row: *Row,
     bodies: std.ArrayList(*File),
     winid: u32 = 0,
+    /// For `add`/`resize`, which forget a saved pop-up (#53).
+    ed: Editor,
 
     fn init(r: Rect) !*RowHarness {
         const a = testing.allocator;
@@ -347,6 +371,7 @@ const RowHarness = struct {
         try h.row.init(h.chrome, r);
         h.bodies = .empty;
         h.winid = 0;
+        h.ed = Editor.init(a);
         return h;
     }
 
@@ -365,6 +390,7 @@ const RowHarness = struct {
 
     fn deinit(h: *RowHarness) void {
         const a = testing.allocator;
+        h.ed.deinit();
         h.row.deinit();
         a.destroy(h.row);
         for (h.bodies.items) |f| {
@@ -397,12 +423,12 @@ test "row: add steals 3/5 split and refuses <100px" {
         defer h.deinit();
         const row = h.row;
 
-        const c0 = (try row.add(0)).?; // first column fills the region (0..600)
+        const c0 = (try row.add(&h.ed, 0)).?; // first column fills the region (0..600)
         try testing.expectEqual(@as(i32, 600), c0.r.max.x);
 
         // x<min ⇒ split c0 at min.x + 3*Dx/5 = 360; c0 keeps 0..358 (360-Border),
         // the new column takes 360..600.
-        const c1 = (try row.add(-1)).?;
+        const c1 = (try row.add(&h.ed, -1)).?;
         try testing.expectEqual(@as(usize, 2), row.col.items.len);
         try testing.expectEqual(@as(i32, 358), c0.r.max.x);
         try testing.expectEqual(@as(i32, 360), c1.r.min.x);
@@ -415,11 +441,11 @@ test "row: add steals 3/5 split and refuses <100px" {
         defer h.deinit();
         const row = h.row;
 
-        _ = (try row.add(0)).?; // c0: 0..150
-        const c1 = (try row.add(75)).?; // split at 75 → c0 0..73, c1 75..150 (Dx 75)
+        _ = (try row.add(&h.ed, 0)).?; // c0: 0..150
+        const c1 = (try row.add(&h.ed, 75)).?; // split at 75 → c0 0..73, c1 75..150 (Dx 75)
         try testing.expectEqual(@as(i32, 75), c1.r.min.x);
         // Landing on the 75px-wide c1 (<100) refuses.
-        try testing.expect((try row.add(100)) == null);
+        try testing.expect((try row.add(&h.ed, 100)) == null);
         try testing.expectEqual(@as(usize, 2), row.col.items.len);
     }
 }
@@ -429,13 +455,13 @@ test "row: resize scales columns in x with row tag strip" {
     defer h.deinit();
     const row = h.row;
 
-    _ = (try row.add(0)).?; // c0: 0..600
-    _ = (try row.add(300)).?; // split at 300 → c0 0..298, c1 300..600
+    _ = (try row.add(&h.ed, 0)).?; // c0: 0..600
+    _ = (try row.add(&h.ed, 300)).?; // split at 300 → c0 0..298, c1 300..600
 
     // Double the width: Dx(r)/Dx(or) = 1200/600 = 2, deltax = 0. c0's right edge
     // 298 → 596; c1 takes 598..1200 (past the 2px band). The tag strip spans the
     // new width.
-    try row.resize(proto.Rect.make(0, 0, 1200, 400));
+    try row.resize(&h.ed, proto.Rect.make(0, 0, 1200, 400));
     try testing.expectEqual(proto.Rect.make(0, 20, 596, 400), row.col.items[0].r);
     try testing.expectEqual(proto.Rect.make(598, 20, 1200, 400), row.col.items[1].r);
     try testing.expectEqual(proto.Rect.make(0, 0, 1200, 400), row.r);
@@ -447,7 +473,7 @@ test "row: which finds rowtag/columntag/tag/body" {
     defer h.deinit();
     const row = h.row;
 
-    const c0 = (try row.add(0)).?; // c0: (0,20)..(600,400); its columntag at y 20..38
+    const c0 = (try row.add(&h.ed, 0)).?; // c0: (0,20)..(600,400); its columntag at y 20..38
     const win = try h.addWin(c0, 40, 20); // window: tag 40..58, body from 59
 
     // rowtag (the row's own top strip).
@@ -474,8 +500,8 @@ test "row: close removes a column and the neighbor grows back" {
         const h = try RowHarness.init(proto.Rect.make(0, 0, 600, 400));
         defer h.deinit();
         const row = h.row;
-        const c0 = (try row.add(0)).?; // 0..600
-        const c1 = (try row.add(-1)).?; // split at 360: c0 0..358, c1 360..600
+        const c0 = (try row.add(&h.ed, 0)).?; // 0..600
+        const c1 = (try row.add(&h.ed, -1)).?; // split at 360: c0 0..358, c1 360..600
 
         try row.close(&ed, c0, true);
         try testing.expectEqual(@as(usize, 1), row.col.items.len);
@@ -490,8 +516,8 @@ test "row: close removes a column and the neighbor grows back" {
         const h = try RowHarness.init(proto.Rect.make(0, 0, 600, 400));
         defer h.deinit();
         const row = h.row;
-        const c0 = (try row.add(0)).?;
-        const c1 = (try row.add(-1)).?;
+        const c0 = (try row.add(&h.ed, 0)).?;
+        const c1 = (try row.add(&h.ed, -1)).?;
 
         const f = try testing.allocator.create(File);
         f.* = File.init(testing.allocator, try Buffer.initFromBytes(testing.allocator, "x"));
