@@ -26,7 +26,7 @@ const Text = @import("../text/Text.zig");
 const cmd_edit = @import("cmd_edit.zig");
 
 /// Flip when Undo/Redo repaint the body frame (issue #57, SnarfDev1).
-const undo_repaint_fixed = false;
+const undo_repaint_fixed = true;
 
 const win_rect = proto.Rect.make(0, 20, 300, 380);
 const seed = "banana alpha gamma\nsecond line (paren text) here\n";
