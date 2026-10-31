@@ -273,6 +273,31 @@ test "warp_focus WF-08: zero-travel round trip — +Errors, then Del, returns ex
     try xfail(h.sink.writes > before and got != null and eqPt(got.?, P0));
 }
 
+test "warp_focus WF-13: nested round trip uses ACME's single save slot — Del inner returns to the outer pop-up, Del outer then stays put" {
+    // SnarfProdd 2026-10-31: restoremouse is exact ACME (util.c:383-402). One
+    // slot, no stack: opening N from inside +Errors overwrites +Errors' save,
+    // so only the innermost Del warps back, and the outer Del does nothing.
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    h.ed.gesture.mouse_pt = h.p0();
+    const e = try errors.errorWin(&h.ed, "/home/larry");
+    h.followWarp(); // pointer now in +Errors (after #45)
+    const pe = h.ed.gesture.mouse_pt;
+    const n = try h.new();
+    h.followWarp(); // pointer now in the New window (after #45)
+    const w0 = h.sink.writes;
+    try h.del(n, h.ed.gesture.mouse_pt);
+    const back = h.last();
+    const inner_ok = h.sink.writes == w0 + 1 and back != null and eqPt(back.?, pe);
+    h.followWarp();
+    const pe_in_e = ptIn(e.r, pe); // the pointer is back inside +Errors
+    const w1 = h.sink.writes;
+    try h.del(e, h.ed.gesture.mouse_pt); // frees e
+    const outer_ok = h.sink.writes == w1; // slot already cleared: no warp to P0
+    try xfail(inner_ok and outer_ok and pe_in_e);
+}
+
 test "warp_focus WF-09: user left the new window before Del — no warp-back (PM Q3)" {
     var h: Rig = undefined;
     try h.init();
