@@ -13,12 +13,23 @@
 //!   * `save`    — every new window (`coladd`, cols.c:150), via
 //!                 `place.mintWindow`, the single runtime creation seam.
 //!   * `restore` — `Column.close` (`colclose`, cols.c:178).
-//!   * `clear`   — typing (`rowtype`, rows.c:277) and the B1 chord
-//!                 (text.c:1092). The C's other `clearmouse` sites
-//!                 (`colresize` cols.c:242, `colsort` :303, `coldragwin` :484,
-//!                 `rowadd` rows.c:99, `rowdragcol` :150) have no Editor in
-//!                 this port's signatures or no port yet; `colcloseall`
-//!                 (cols.c:226) is covered by `dropTextRefs` per window.
+//!   * `clear`   — typing (`rowtype`, rows.c:277, first thing in
+//!                 `Editor.handleKey`) and the B1 chord (text.c:1092).
+//!                 `colcloseall` (cols.c:226) is covered by `dropTextRefs` per
+//!                 window (`Row.close`).
+//!
+//! KNOWN GAP (R-EDIT-25, PR #43 review item 5): the C's other `clearmouse`
+//! sites are NOT ported. `colsort` (cols.c:303), `coldragwin` (:484) and
+//! `rowdragcol` (rows.c:150) have no port yet, so they will clear when they
+//! land. `colresize` (cols.c:242 → `Column.resize`) and `rowadd` (rows.c:99 →
+//! `Row.add`) are ported but take no Editor, and threading one through is not
+//! small: `Row.add` has ~27 call sites (most of them tests), `Column.resize` is
+//! reached from `Column.add`, `Row.add`, `Row.resize` and `Row.close`, and
+//! `boot.boot` builds the tree (calling both) before any Editor exists. The
+//! effect: a pop-up saved before a column resize, Newcol or screen resize
+//! still warps back on a later Del. The PM Q3 check below bounds it: the warp
+//! fires only if the pointer is still inside the pop-up, i.e. the user went to
+//! it and deleted it, which is the case the warp exists for.
 //!
 //! DIVERGENCE (SnarfProdd, 2026-10-14, PM Q3; R-EDIT-25): restore ONLY if the
 //! pointer is still inside the dying window. The C restores whenever

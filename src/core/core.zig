@@ -34,6 +34,9 @@ test {
     _ = @import("warp_focus_test.zig"); // #45 acceptance (SnarfDev2)
 }
 test {
+    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
+}
+test {
     _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)
 }
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
