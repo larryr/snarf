@@ -19,4 +19,5 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("dirread.zig");
     _ = @import("recovery_test.zig"); // #58: partial Put kept at shutdown
+    _ = @import("recovery_snarfdev2_test.zig"); // #58: SnarfDev2 extra coverage
 }
