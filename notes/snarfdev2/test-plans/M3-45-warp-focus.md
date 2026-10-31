@@ -21,6 +21,7 @@ Requirement: R-EDIT-25 (the paper's warps). Builds on #9 (`core/restoremouse.zig
 | WF-06 | regression | Focus an already-open window with an invalid address (`jump` suppressed) | No warp (look.c:887) | look.c:887 |
 | WF-07 | unit | **Zero-travel round trip, New:** pointer at P0; New; pointer is where the warp put it; `Del` (the builtin) | Last write == P0 exactly; net pointer travel zero | #45 + #9 |
 | WF-08 | unit | **Zero-travel round trip, +Errors:** same with `+Errors` | Last write == P0 exactly | #45 + #9 |
+| WF-13 | unit | **Nested round trip, single slot:** P0 → `+Errors` (pointer follows the warp to pe) → New from there → Del New → Del `+Errors` | Del New warps back to pe; Del `+Errors` does **not** warp to P0, because the slot was overwritten and then cleared (exact ACME, SnarfProdd 2026-10-31) | #45 + #9, util.c:383-402 |
 | WF-09 | unit | Round trip after the user moved out of the new window before Del | No warp-back (PM Q3 retained) | PM Q3 |
 | WF-10 | unit | No `/dev/mouse` (`ed.ns == null`, browser/headless): New, +Errors, Del | No error surfaces | R-EDIT-25 per-host |
 | WF-11 | deferred | Layout focus (`colgrow`/drag) warps to the tag button (`winmousebut`) | n/a until the layout box is ported | wind.c:292 |
@@ -29,5 +30,5 @@ Requirement: R-EDIT-25 (the paper's warps). Builds on #9 (`core/restoremouse.zig
 ## Notes for whoever lands #45
 - acme skips the creation warp while a button is held (`!mousectl->m.buttons`). snarf dispatches commands at all-buttons-up (R-P9-2), so this guard is not unit-tested. Keep it if the warp can fire mid-gesture.
 - `openfile.zig` test T12 ("out-of-order or invalid :addr ... issues NO /dev/mouse write") asserts `sink.writes == 0` after opening a NEW window. With #45 the creation warp makes that one write, so T12 must change to "no *selection* warp".
-- Nested pop-ups: acme has a single save slot, so New-in-+Errors-then-Del-both restores only the innermost (PM Q3; covered by RM-06).
+- Nested pop-ups: acme has a single save slot, so New-in-+Errors-then-Del-both restores only the innermost; the outer Del does not warp (SnarfProdd ruling 2026-10-31; RM-06, WF-13). Zero travel holds per pop-up, not for a nested chain.
 - The WF-01..04 and WF-07/08 checks are hard assertions once `warp_focus_landed = true`. WF-05, WF-06, WF-09 and WF-10 already hold, so they always run.
