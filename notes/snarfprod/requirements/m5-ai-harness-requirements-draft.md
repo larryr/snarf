@@ -67,6 +67,35 @@ namespace plumbing.
 
 *Acceptance:* during a running agent edit loop, `Stop` freezes further writes within one event-loop tick. Typing in the window being edited is never interleaved. Detach leaves no orphaned processes.
 
+## 5a. Agent attention and jump-to (agreed with Larry, 2026-10-30)
+
+**Rationale:** this extends the 2026-10-30 decision on [#45](https://github.com/larryr/snarf/issues/45): the pointer warps to the item that currently has focus, which is acme's method. When an agent needs the human, it waits in a queue and marks its window. The human chooses when to go there with one gesture, and the same warp-back that `Del` uses ([#9](https://github.com/larryr/snarf/issues/9) / [PR #43](https://github.com/larryr/snarf/pull/43), acme `savemouse`/`restoremouse`) brings them back.
+
+| ID | Requirement (PROPOSED) |
+|----|-----------|
+| R-AG-22 | **Attention queue.** An agent request that needs the human, such as *approve this command* or *answer this question*, SHALL be entered into a single **attention queue**, oldest first. Each entry holds an id, the session name, the window it concerns (its `+Agent/<name>` window if none), the kind (`approve` / `question`), a one-line summary and a timestamp. The requesting agent waits for the answer; it does not proceed by default. An entry leaves the queue only when the human answers or dismisses it, or when the session detaches (R-AG-14). |
+| R-AG-23 | **Tag mark.** While a request is pending, the tag of its window SHALL show an **attention mark**, distinct from the agent-edit mark (R-AG-09). The mark clears when the window's last pending request is resolved. |
+| R-AG-24 | **Queue as a file.** The queue SHALL be readable as a line-oriented text file in the served tree, e.g. **`/mnt/snarf-self/attention`** (R-9P-12, R-9P-14). It has one line per pending request, oldest first: `id session window kind summary`. Scripts and agents with read access in their grant (R-AG-04/05) may read it. An agent may add requests only for its own session, through its session `ctl`. It SHALL NOT resolve or remove another session's requests. |
+| R-AG-25 | **Jump gesture.** A dedicated **jump** gesture SHALL warp the pointer into the window of the **oldest** pending request, at its request text. It may be a dedicated key or modifier+click; the exact binding is decided with **R-IN-06**. It SHALL NOT be a three-finger trackpad gesture, because Larry uses macOS three-finger drag. Repeating the gesture SHALL cycle through the pending requests in queue order. With an empty queue, the gesture does nothing and the pointer stays put. |
+| R-AG-26 | **Return to work.** The first jump SHALL save the pointer's prior editing position, using the same mechanism as the return-after-`Del` warp (#9 / PR #43). Cycling between requests does not overwrite that saved position. Two actions SHALL warp the pointer back to it and clear it: (a) `Del` on the request window, and (b) the jump gesture repeated after the newest pending request (cycle order: oldest → … → newest → back to work). |
+| R-AG-27 | **Never uninvited.** A new or updated request SHALL NOT move the pointer, change keyboard focus, raise, reorder or resize windows, or scroll the human's current window. It only adds the queue entry and the tag mark (and any optional, non-modal indicator). The pointer moves only on the human's jump gesture (R-AG-25), the return action (R-AG-26), or the existing human-initiated warps (R-EDIT-25, #45). This is consistent with human-input-wins (R-AG-13). |
+
+*Acceptance:*
+- **Queue and mark:** a scripted agent files two requests, an `approve` in window A and then a `question` in window B. Reading `/mnt/snarf-self/attention` shows two lines in that order, and the tags of A and B show the attention mark.
+- **No uninvited movement:** while the human is typing in window C, filing a request changes neither the pointer position, nor the focus, nor C's scroll or layout. This is checked through the `MouseSink` `/dev/mouse` stand-in (`src/core/warp.zig`): no warp is written.
+- **Jump and cycle:**
+  - The first jump warps to A's request.
+  - The second warps to B's.
+  - The third warps back to the original spot in C, and the saved position is cleared.
+  - With an empty queue, the jump writes no warp.
+- **`Del` returns:** jump to A, then `Del` window A. The pointer returns to C, not to an intermediate request window.
+- **Resolving clears:** answering A's request removes its line from the attention file and clears A's mark, while B's entry remains.
+- **Isolation:** agent X's attempt to resolve agent Y's request via `ctl` fails, and the attempt is recorded in the audit log (R-AG-11).
+- **Binding:** whatever binding is chosen in R-IN-06 works on MacBook and Magic Trackpad with three-finger drag on.
+- All of the above run windowless (R-AG-20).
+
+*Parked (not a requirement): **Anvil**, an optional chord pad.* §3a of the [input mapping guide](../input/input-mapping-guide.md) describes an optional desk macro pad, *Anvil*. It sends ordinary key codes for jump (R-AG-25), approve, deny and back (R-AG-26). **Laptop-parity rule:** every R-AG-22..27 action SHALL remain fully usable from the keyboard and trackpad of a bare MacBook. Anvil only adds shortcuts; nothing is Anvil-only, and nothing uses three-finger gestures. It stays parked until §5a is built.
+
 ## 6. Concurrency, transport and auth
 
 | ID | Requirement (PROPOSED) |
@@ -131,6 +160,10 @@ Also touched: R-EDIT-17 (served tree completeness, which M4 delivers), R-9P-15 (
 6. **Audit retention:** keep the log in memory per session, or persist it to `$home`? It may contain file contents.
 7. Is **`kbd hold`** ever wanted for agents (co-pilot on typed commands), or permanently out?
 8. **Dependency order:** M5 requires M4's served tree, external attach and `Tauth`. Should M4's scheduling (deferred 2026-10-11) be revisited when M5 is greenlit?
+9. **Jump binding (R-AG-25):** a dedicated key, or modifier+click? Pick it alongside R-IN-06, with no three-finger gestures.
+10. **Answering (R-AG-22):** how does the human answer once they have jumped? B2 on `Approve`/`Deny` words in the request text, or typing in the `+Agent` window? And should the queue file also show requests resolved recently?
 
 ## 11. Revision log
 - **v0** (2026-10-11): PROPOSED starting draft by SnarfProdd, from roadmap M5, Fable's Finding 3, and the 2026-10-11 local-trust decision. Not yet reviewed.
+- **v0.1** (2026-10-30): added §5a, *Agent attention and jump-to* (R-AG-22..R-AG-27), agreed with Larry 2026-10-30. It covers the attention queue, the tag mark, the queue as a 9P file, a jump gesture (no three-finger gestures; binding per R-IN-06), return-to-work reusing the #9/PR #43 warp-back, and never moving the pointer or focus uninvited. It extends the #45 decision (warp to the focused item, acme's method). Open questions 9–10 added.
+- **v0.2** (2026-10-30): §5a gains a parked note cross-referencing **Anvil** (input guide §3a, an optional chord pad named by Larry) and stating the laptop-parity rule. No new numbered requirements.
