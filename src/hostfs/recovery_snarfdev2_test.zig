@@ -118,7 +118,7 @@ fn isRoot() bool {
 }
 
 /// Flip to true in the PR that reports a cut-off Put of a NEW file (Tcreate path).
-const create_put_notice_fixed = false;
+const create_put_notice_fixed = false; // #70
 
 fn altEmpty(r: *Rig) !bool {
     var d = try r.alt.dir.openDir(io, ".", .{ .iterate = true });
