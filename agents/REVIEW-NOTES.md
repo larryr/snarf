@@ -11,6 +11,29 @@ amendment accepted, native host is now the primary target).
 
 ---
 
+## Review wave + phases 19/20 backfill (2026-10-26..31)
+
+**What changed for you:**
+- `snarf` is the installed binary (#42); **sunapee** palette default, `-colors=name`
+  selects sunapee/whiteface/monadnock/acme (phase 19, ADR-0007).
+- **File save works on native** (phase 20, #41/issue #11): host fs at `/` (acme-like),
+  atomic Put (temp+rename), Get/Putall/Dump/Load — you validated it by hand.
+- **Del warps the pointer back** (#43/#9, exact ACME per your 2026-10-31 ruling), CI runs
+  on every push/PR (#44+#49), warp-to-focus test stubs staged for #45 (#46+#50).
+- Flush bug fixed (#40): tree-level draws no longer strand in the display buffer.
+
+**Decisions made on your behalf:** empty Put commits an empty file; dirlock rename-failure
+falls back to in-place write (save never silently lost); #46/#50 stacked branches
+flattened/merge-resolved after #43's squash. **Open questions:** #51 (slot stack vs acme
+single slot — SnarfProdd), #45 implementation is SnarfDev1's next.
+
+**Try it:** `make install`, `snarf`, Del an `+Errors` window — pointer returns.
+
+Review process now governs PRs: `agents/REVIEW-PROCESS.md` (5 stages, blind arbiter;
+first exercise was #43/#44/#46 → issues #52/#53/#54).
+
+---
+
 ## Phase 18 — `devdraw` built in-tree (PR #24 open, not yet merged, 2026-10-11)
 
 **For you — try it, after merging:** with `PLAN9` still set as today, `zig build native &&
