@@ -16,6 +16,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | [M0-10-walkthrough.md](M0-10-walkthrough.md) | #10 native walkthrough | M0 |
 | [M0-47-origin-port.md](M0-47-origin-port.md) | #47 origin busy-port bind (PR #62) | M0 |
 | [M0-57-undo-repaint.md](M0-57-undo-repaint.md) | #57 Undo/Redo repaint (PR #61) | M0 |
+| [M0-58-put-at-quit.md](M0-58-put-at-quit.md) | #58 quit leaks + Put recovery file (PR #68) | M0 |
 | [M1-11-native-fs.md](M1-11-native-fs.md) | #11 native file server | M1 |
 | [M1-12-clipboard.md](M1-12-clipboard.md) | #12 native clipboard | M1 |
 | [M1-13-builtins.md](M1-13-builtins.md) | #13 Sort/Zerox/Kill/Exit | M1 |
