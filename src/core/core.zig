@@ -40,6 +40,9 @@ test {
     _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
 }
 test {
+    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
+}
+test {
     _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)
 }
 /// Directory windows — `textload`'s QTDIR arm and `textcolumnate`
