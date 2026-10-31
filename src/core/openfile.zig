@@ -626,7 +626,7 @@ const MouseHarness = struct {
     }
 };
 
-test "openfile: an out-of-order or invalid :addr opens the file, warns, and issues NO /dev/mouse write (T12)" {
+test "openfile: an out-of-order or invalid :addr opens the file, warns, and issues no jump warp, only the new-window warp-in (T12, #45)" {
     const a = testing.allocator;
     var h: MouseHarness = undefined;
     try h.init(.{ .win_name = "scratch", .body = "" });
