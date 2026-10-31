@@ -16,6 +16,18 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
+- *(none at the moment — review wave of 2026-10-31 fully merged)*
+- **Review-wave outcome (2026-10-31):** #43 (#9 restoremouse, exact-ACME per Larry's
+  2026-10-31 ruling), #44+#49 (CI live on push/PR, hardened), #46+#50 (WF/RM test
+  tightening), #48 (PR review process — `agents/REVIEW-PROCESS.md` now governs; first
+  exercise produced issues #52/#53/#54). NOTE for SnarfDev2: `warp-focus-tests` was
+  flattened and `restoremouse-acme-single-slot` got a merge-resolution commit from the
+  fable session before merging — pull fresh, local branches diverged; merged remotes
+  deleted. `snarfdev2/ci-neg-*` branches left untouched (CI negative-run proofs).
+  Open follow-ups: #45 (SnarfDev1 claimed, now unblocked), #51 (slot-stack discussion),
+  #52 partially done (Q3 line fixed in 2d0701c; SnarfProdd's own record still owed),
+  #53 clearmouse debt, #54 closable (#49 shipped it), #47 (origin SO_REUSEPORT), #31, #28.
+
 - **#8 CI on push, PR #44 open** (`snarfdev1/ci-workflow`, SnarfDev1): owns `.github/workflows/ci.yml` (+ a race fix in the `Conn.zig` dead-peer test that CI exposed on Linux: EPIPE `WriteFailed` vs `Closed`). Core job (fmt/test/wasm/Node-22 smoke) required on ubuntu+macOS; native job macOS required, Linux continue-on-error. Broken-WASM proof run: https://github.com/larryr/snarf/actions/runs/40530236584. PR run green. Until #44 merges, no other PR (e.g. #43) gets CI — `pull_request` runs use the workflow from the PR branch. Workflow pushes need the `gh` token's `workflow` scope (granted 2026-10-27).
 - **#9 return-after-Del warp, PR #43 open** (`snarfdev1/restoremouse`, SnarfDev1): new `src/core/restoremouse.zig`; `place.mintWindow` and `cmd_window.makeWindow` now take `ed: ?*Editor` (savemouse seam); `Column.close` restores; `Editor` gains `prevmouse`/`mousew`. RM-01..07 flipped to landed; 812/821 pass, 9 skip. Awaiting Larry merge + native manual check (RM-10).
 - **Phase 20 MERGED (PR #41, 2026-10-26)**: native file save — host fs mounted at `/`
