@@ -17,6 +17,10 @@ one fact that had gone stale and wrong (PR creation — see below).
 ## ⚠ In-flight claims (check before touching these areas)
 
 - *(none at the moment — review wave of 2026-10-31 fully merged)*
+- **Issue triage #56 (fable, 2026-10-31)**: per-issue notes on ALL open issues — closables
+  (#54/#25/#19/#10), #12+#31 as the next phase, #45 implementation notes, #47 priority
+  bump (CI flake multiplier), #20's ADR-0006 constraint. Read it before picking up any
+  open issue. (Issue comments are blocked for this credential; triage lives in #56.)
 - **Review-wave outcome (2026-10-31):** #43 (#9 restoremouse, exact-ACME per Larry's
   2026-10-31 ruling), #44+#49 (CI live on push/PR, hardened), #46+#50 (WF/RM test
   tightening), #48 (PR review process — `agents/REVIEW-PROCESS.md` now governs; first
