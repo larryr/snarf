@@ -23,6 +23,10 @@ const Replace = @import("Replace.zig");
 
 gpa: std.mem.Allocator,
 fs: *HostFs,
+/// Set by `endSession`: the client is gone, so a clunk is the session's
+/// teardown, not the client's "done writing" — a Put still in flight is
+/// DISCARDED rather than committed (#58; see `endSession`).
+hung_up: bool = false,
 
 /// Per-fid state (`fid.ctx`): the path relative to the export root ("" is
 /// the root) and, between an OTRUNC open and the clunk, the Put in flight.
@@ -33,6 +37,17 @@ const Node = struct {
 
 pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
     return .{ .gpa = gpa, .fs = fs };
+}
+
+/// The session is over (the editor is shutting down, or its peer vanished):
+/// release every fid `srv` still holds through `clunk`, freeing its `Node`.
+/// An atomic Put that never saw its client's Tclunk is discarded — the
+/// original stays as it was and the temp is deleted — because a half-written
+/// buffer must never be renamed over a user's file (PM Q5's promise: readers
+/// see the old bytes or the new ones). Call before `srv.deinit`.
+pub fn endSession(self: *HostTree, srv: *server.Server) void {
+    self.hung_up = true;
+    srv.releaseFids();
 }
 
 pub const ops: server.Ops = .{
@@ -152,7 +167,10 @@ fn write(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, offset: u64, data
 fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
     const self = self_(ctx);
     const node: *Node = @ptrCast(@alignCast(fid.ctx orelse return));
-    if (node.put) |*p| p.end(self.fs, self.gpa); // commit or discard
+    if (node.put) |*p| {
+        if (self.hung_up) p.failed = true; // endSession: discard, never commit
+        p.end(self.fs, self.gpa); // commit or discard
+    }
     self.gpa.free(node.rel);
     self.gpa.destroy(node);
     fid.ctx = null;
@@ -199,4 +217,48 @@ test "HostTree: root walk, '..' stays at root, atomic Put through 9P" {
     try std.testing.expectEqualStrings("old", buf[0..try fs.readFile("d/f", 0, &buf)]);
     try cl.clunk(up.fid);
     try std.testing.expectEqualStrings("new", buf[0..try fs.readFile("d/f", 0, &buf)]);
+}
+
+test "HostTree: endSession frees every fid's node and discards an unfinished Put (#58)" {
+    const io = std.testing.io;
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "f", .data = "old" });
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var fs = try HostFs.open(io, path);
+    defer fs.close();
+    var tree = HostTree.init(a, &fs);
+
+    const pipe = try ninep.chan.Pipe.init(a, 16384);
+    defer pipe.deinit();
+    var srv = try server.Server.init(a, pipe.serverEnd(), &HostTree.ops, &tree, 8192);
+    defer srv.deinit();
+    var cl = try ninep.Client.init(a, pipe.clientEnd(), 8192);
+    defer cl.deinit();
+    cl.pump = .{ .ctx = &srv, .run = struct {
+        fn run(p: *anyopaque) anyerror!void {
+            _ = try @as(*server.Server, @ptrCast(@alignCast(p))).poll();
+        }
+    }.run };
+    _ = try cl.version(8192);
+    const root = (try cl.attach("larry", "")).fid;
+    _ = try cl.walk(root, &.{}); // a cloned root, never clunked
+    const f = try cl.walk(root, &.{"f"});
+    _ = try cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try cl.write(f.fid, 0, "half");
+
+    // No Tclunk ever arrives: the session just ends.
+    tree.endSession(&srv);
+    try std.testing.expect(srv.lookupFid(root) == null);
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("old", buf[0..try fs.readFile("f", 0, &buf)]);
+    // The temp is gone: the directory holds exactly the original.
+    var d = try tmp.dir.openDir(io, ".", .{ .iterate = true });
+    defer d.close(io);
+    var it = d.iterate();
+    var n: usize = 0;
+    while (try it.next(io)) |_| n += 1;
+    try std.testing.expectEqual(@as(usize, 1), n);
 }

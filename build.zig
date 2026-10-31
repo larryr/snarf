@@ -267,6 +267,17 @@ pub fn build(b: *std.Build) void {
         .{ .name = "shim", .module = shim }, // test_blit seam (phase-5); core's no-shim boundary is separately guarded
         .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
     });
+    // The native entry point's boot → session → shutdown (#58), over a
+    // scripted devdraw peer: no child process, no window. Same imports as
+    // `snarf-native`, so the test sees exactly what the executable sees.
+    addModuleTests(b, test_step, target, optimize, "src/main_native.zig", &.{
+        .{ .name = "core", .module = core },
+        .{ .name = "draw", .module = draw },
+        .{ .name = "ninep", .module = ninep },
+        .{ .name = "dev", .module = dev },
+        .{ .name = "host", .module = host },
+        .{ .name = "hostfs", .module = hostfs },
+    });
 }
 
 /// Build a test executable rooted at `root` with exactly `imports` visible, and

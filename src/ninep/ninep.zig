@@ -39,6 +39,7 @@ test {
     // 16a (the `core/core.zig` convention — refAllDecls does not reach a file
     // nothing names).
     _ = @import("msg_test.zig");
+    _ = @import("server_end_test.zig"); // #58: releaseFids at session end
 }
 
 // ===========================================================================

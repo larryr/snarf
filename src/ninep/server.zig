@@ -178,6 +178,22 @@ pub const Server = struct {
         self.* = undefined;
     }
 
+    /// End of session: hand every live fid to `Ops.clunk`, so the file server
+    /// frees whatever it hangs off `Fid.ctx`, then forget the fid. Parked
+    /// requests are dropped unanswered (there is no one left to answer). This
+    /// is lib9p's `freefidpool` → `destroyfid` (fid.c:29-33, :63-76), which
+    /// `deinit` alone does not do: a server whose peer simply goes away never
+    /// sees the Tclunks, so its per-fid state would leak (#58). Idempotent;
+    /// call it while `ctx` is still alive, then `deinit`.
+    pub fn releaseFids(self: *Server) void {
+        self.parked.clear(self.allocator);
+        if (self.ops.clunk) |clunk| {
+            var it = self.fids.valueIterator();
+            while (it.next()) |f| clunk(self.ctx, self, f);
+        }
+        self.clearFids();
+    }
+
     /// Look up a fid by number (null if absent). The pointer is valid until the
     /// next fid-table mutation.
     pub fn lookupFid(self: *Server, fid: u32) ?*Fid {
