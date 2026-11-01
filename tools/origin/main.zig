@@ -19,6 +19,7 @@ const WsTransport = @import("ws_transport.zig").WsTransport;
 const HostFs = @import("hostfs").HostFs;
 const Tree = @import("tree.zig").Tree;
 const Log = @import("log.zig").Log;
+const listenExclusive = @import("listen.zig").listenExclusive;
 
 /// Negotiated message ceiling (S-01 §1).
 pub const msize: u32 = 65536;
@@ -46,7 +47,9 @@ pub const Origin = struct {
 
     pub fn listen(io: Io, gpa: std.mem.Allocator, cfg: Config, bind: []const u8, port_num: u16) !Origin {
         const address = try Io.net.IpAddress.parse(bind, port_num);
-        const listener = try address.listen(io, .{ .reuse_address = true });
+        // SO_REUSEADDR only, never SO_REUSEPORT: a second snarf-origin on a
+        // busy port must fail with AddressInUse, not share it (#47).
+        const listener = try listenExclusive(io, address);
         return .{ .io = io, .gpa = gpa, .cfg = cfg, .listener = listener };
     }
 

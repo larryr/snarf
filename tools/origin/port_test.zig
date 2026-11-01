@@ -16,7 +16,7 @@ const Io = std.Io;
 const origin = @import("main.zig");
 
 /// Flip when a second bind to a busy port fails (issue #47, SnarfDev1).
-const origin_port_exclusive_fixed = false;
+const origin_port_exclusive_fixed = true;
 
 const cfg: origin.Config = .{ .www_dir = ".", .export_dir = "." };
 const bind = "127.0.0.1";
