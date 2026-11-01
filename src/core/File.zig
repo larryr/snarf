@@ -200,25 +200,44 @@ fn captureText(self: *File, p0: usize, nrunes: usize) error{OutOfMemory}![]u8 {
 
 /// Undo one transaction: reverse every top-seq delta onto epsilon, seq
 /// decreasing (file.c:188-276). Returns the Range of the last inversion, or
-/// null if the undo stack was empty.
+/// null if the undo stack was empty. Buffer-only: no view is told — use
+/// `undoView` when a frame shows this file.
 pub fn undo(self: *File) error{OutOfMemory}!?Range {
-    return self.unwind(&self.delta, &self.epsilon, true);
+    return self.unwind(&self.delta, &self.epsilon, true, {});
 }
 
 /// Redo one transaction: the mirror of undo (file.c:202-207,275-276).
 pub fn redo(self: *File) error{OutOfMemory}!?Range {
-    return self.unwind(&self.epsilon, &self.delta, false);
+    return self.unwind(&self.epsilon, &self.delta, false, {});
+}
+
+/// `fileundo` (file.c:189-279) with its per-Text notification: undo
+/// (isundo=true) or redo, telling `view` about every buffer edit right after
+/// it lands, exactly where the C loops `textdelete(f->text[j], …, FALSE)`
+/// (file.c:233-234) and `textinsert(f->text[j], …, FALSE)` (file.c:247-248).
+/// `view` is any value with
+///   `deleted(view, p0, p1) !void`  — runes [p0,p1) were just removed;
+///   `inserted(view, p0, bytes) !void` — `bytes` were just inserted at p0;
+/// the caller (cmd_edit.undo, via winundo wind.c:360) binds it to the Texts
+/// observing this file so their frames repaint in place (#57). File itself
+/// keeps no Text list (dat.h `File.text`) — it stays below the draw layer.
+pub fn undoView(self: *File, isundo: bool, view: anytype) !?Range {
+    if (isundo) return self.unwind(&self.delta, &self.epsilon, true, view);
+    return self.unwind(&self.epsilon, &self.delta, false, view);
 }
 
 /// Shared engine for undo (isundo=true) and redo (isundo=false). Pops records
 /// off `src`, applies each reverse to the buffer, and pushes the inverse onto
-/// `dst` with the record's own seq. Inversions run newest-first.
+/// `dst` with the record's own seq. Inversions run newest-first. `view` is `{}`
+/// (no observer) or an observer as documented on `undoView`.
 fn unwind(
     self: *File,
     src: *std.ArrayList(Delta),
     dst: *std.ArrayList(Delta),
     isundo: bool,
-) error{OutOfMemory}!?Range {
+    view: anytype,
+) !?Range {
+    const has_view = @TypeOf(view) != void;
     var result: ?Range = null;
     var stop: u32 = if (isundo) self.seq else 0; // redo: not known until first record
     var have_stop = isundo;
@@ -256,6 +275,8 @@ fn unwind(
                 }
                 self.mod = r.mod_before; // file.c:233 / :244
                 try self.buffer.delete(r.p0, r.nrunes);
+                // file.c:233-234: textdelete(f->text[j], p0, p0+n, FALSE).
+                if (has_view) try view.deleted(r.p0, r.p0 + r.nrunes);
                 result = .{ .q0 = r.p0, .q1 = r.p0 };
             },
             .delete => |r| {
@@ -269,8 +290,10 @@ fn unwind(
                     .nrunes = nrunes,
                 } });
                 self.mod = r.mod_before;
+                defer self.allocator.free(r.text); // consumed off the src stack
                 try self.buffer.insert(r.p0, r.text);
-                self.allocator.free(r.text); // consumed off the src stack
+                // file.c:247-248: textinsert(f->text[j], p0, buf, n, FALSE).
+                if (has_view) try view.inserted(r.p0, r.text);
                 result = .{ .q0 = r.p0, .q1 = r.p0 + nrunes };
             },
             .filename => |r| {
