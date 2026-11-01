@@ -203,7 +203,7 @@ fn decodeEvent(a: *App, kind: u32, x: i32, y: i32, c: u32, t: u32) void {
             const w = dimOf(x);
             const h = dimOf(y);
             if (w == a.canvas.headless.width and h == a.canvas.headless.height) return; // same size: nothing to do
-            screen.resize(&a.canvas, &a.dd, a.display, &a.tree, w, h) catch |e| @panic(@errorName(e));
+            screen.resize(&a.canvas, &a.dd, a.display, &a.tree, &a.editor, w, h) catch |e| @panic(@errorName(e));
             a.editor.needs_flush = true; // present the repaint on this tick's frameEnd
         },
     }

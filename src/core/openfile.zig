@@ -626,7 +626,7 @@ const MouseHarness = struct {
     }
 };
 
-test "openfile: an out-of-order or invalid :addr opens the file, warns, and issues NO /dev/mouse write (T12)" {
+test "openfile: an out-of-order or invalid :addr opens the file, warns, and issues no jump warp, only the new-window warp-in (T12, #45)" {
     const a = testing.allocator;
     var h: MouseHarness = undefined;
     try h.init(.{ .win_name = "scratch", .body = "" });
@@ -654,7 +654,12 @@ test "openfile: an out-of-order or invalid :addr opens the file, warns, and issu
     defer a.free(body1);
     try testing.expectEqualStrings(ten_lines, body1);
     try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "addresses out of order") != null);
-    try testing.expectEqual(@as(usize, 0), h.sink.writes);
+    // #45: the new window's `coladd` warp (cols.c:151-154) is NOT suppressed
+    // — only the jump warp (look.c:887-888 `e->jump = FALSE`, :896-897) is. So
+    // exactly one write per opened window, and it is the creation point, not
+    // a selection point. (Before #45 this asserted `writes == 0`.)
+    try testing.expectEqual(@as(usize, 1), h.sink.writes);
+    try testing.expectEqualStrings(&creationRec(opened1), &h.sink.last);
 
     // --- case 2: "/[" — unparseable (a malformed class, edit/Regx.zig
     // error.MalformedClass, mapped to error.BadRegexp by
@@ -671,9 +676,10 @@ test "openfile: an out-of-order or invalid :addr opens the file, warns, and issu
     defer a.free(body2);
     try testing.expectEqualStrings(ten_lines, body2);
     try testing.expect(std.mem.indexOf(u8, h.ed.warningText(), "bad regexp in command address") != null);
-    try testing.expectEqual(@as(usize, 0), h.sink.writes); // still none
+    try testing.expectEqual(@as(usize, 2), h.sink.writes); // only opened2's creation warp (#45)
+    try testing.expectEqualStrings(&creationRec(opened2), &h.sink.last);
 
-    // --- control: "1" — a valid, in-order address ⇒ exactly one warp write -
+    // --- control: "1" — a valid, in-order address ⇒ the jump warp fires too -
     const src3 = try h.tree.addWindow("three", ten_lines);
     const path3 = try std.fmt.allocPrint(a, "/mnt/snarf-self/{d}/body", .{src3.id});
     defer a.free(path3);
@@ -685,6 +691,18 @@ test "openfile: an out-of-order or invalid :addr opens the file, warns, and issu
     const body3 = try bodyText(opened3);
     defer a.free(body3);
     try testing.expectEqualStrings(ten_lines, body3);
-    try testing.expectEqual(@as(usize, 1), h.sink.writes); // the warp DID fire
+    // Creation warp (cols.c:154, #45) then the jump warp DID fire (look.c:897).
+    try testing.expectEqual(@as(usize, 4), h.sink.writes);
     try testing.expectEqual(@as(u8, 'm'), h.sink.last[0]); // a real mouse record
+    const creation3 = creationRec(opened3);
+    try testing.expect(!std.mem.eql(u8, &creation3, &h.sink.last)); // the last write is the selection warp
+}
+
+/// The `/dev/mouse` record of `w`'s creation warp, `w->tag.scrollr.max + (3,3)`
+/// (cols.c:154, #45).
+fn creationRec(w: *Window) [warp.rec_len]u8 {
+    var rec: [warp.rec_len]u8 = undefined;
+    const p = w.tag.scrollr.max;
+    warp.format(p.x + 3, p.y + 3, &rec);
+    return rec;
 }

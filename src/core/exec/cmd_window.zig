@@ -108,7 +108,7 @@ pub fn newcol(
     _: []const u8,
 ) Text.Error!void {
     const r = rowOf(et) orelse return; // exec.c:362 et->row
-    const c = (try r.add(-1)) orelse return; // rowadd(et->row, nil, -1)
+    const c = (try r.add(ed, -1)) orelse return; // rowadd(et->row, nil, -1)
     _ = try makeWindow(ed, c, ""); // coladd(c, nil, nil, -1) + winsettag
 }
 
@@ -220,7 +220,7 @@ test "makeNewWindow: no activecol/seltext uses the LAST column (T10)" {
         .body = "seed\n",
     });
     defer tree.deinit();
-    const c2 = (try tree.row.add(-1)).?; // second (LAST) column
+    const c2 = (try tree.row.addAtBoot(-1)).?; // second (LAST) column
 
     var ed = Editor.init(a);
     defer ed.deinit();
@@ -245,7 +245,7 @@ test "makeNewWindow: activecol wins over t's own column (T11)" {
     });
     defer tree.deinit();
     const c1 = tree.row.col.items[0];
-    const c2 = (try tree.row.add(-1)).?;
+    const c2 = (try tree.row.addAtBoot(-1)).?;
     const w2 = try tree.addWindow("two", "seed\n"); // lands in c2
 
     var ed = Editor.init(a);
