@@ -16,7 +16,20 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- *(none at the moment — review wave of 2026-10-31 fully merged)*
+- **Open PRs (2026-11-01):** #63 (Undo/Redo repaint, #57; SnarfDev1; I merged main into its
+  branch to clear a conflict — pull before continuing; NOT yet reviewed under
+  REVIEW-PROCESS), #72 (fable: `warp.to` sets `gesture.mouse_pt` like libdraw `moveto`; #64
+  review finding 1), #73 (fable: hang up the host session BEFORE teardown + drain first;
+  #68 review finding 1). #72/#73 are fable's own work with no independent review yet.
+- **Review wave 2 (2026-11-01), merged at Larry's instruction:** #64 (warp into new/focused
+  windows + #53 clearmouse port), #69 (Redo-after-resize guards), #65 (origin binds
+  exclusively, #47), #68 (shutdown teardown + recovery file, #58), #71 (recovery tests).
+  Merge-order trap caught by the integration lane: #64 changed `Column.resize` to take an
+  `*Editor` and #69's test still used the old signature — each green alone, red together
+  (fixed on #69's branch before merging). For SnarfDev1/2: `snarfdev2/redo-resize-test`,
+  `snarfdev1/origin-port-exclusive`, `snarfdev2/recovery-tests` each got a main-merge
+  commit from fable; `snarfdev2/recovery-tests` was retargeted from #68's branch to main.
+  Merged branches are NOT yet deleted on origin (not requested).
 - **Issue triage #56 (fable, 2026-10-31)**: per-issue notes on ALL open issues — closables
   (#54/#25/#19/#10), #12+#31 as the next phase, #45 implementation notes, #47 priority
   bump (CI flake multiplier), #20's ADR-0006 constraint. Read it before picking up any
