@@ -49,7 +49,7 @@ fn bootTwoCols(fx: *Frame.TestFixture) !boot.Tree {
         .body = "main body\n",
     });
     errdefer tree.deinit();
-    _ = (try tree.row.add(-1)).?; // a second column for the pop-up
+    _ = (try tree.row.addAtBoot(-1)).?; // a second column for the pop-up
     return tree;
 }
 

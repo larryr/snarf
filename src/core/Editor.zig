@@ -603,7 +603,7 @@ const TwoCol = struct {
             .win_name = "one",
             .body = "hello\n",
         });
-        h.c2 = (try h.tree.row.add(-1)).?;
+        h.c2 = (try h.tree.row.addAtBoot(-1)).?;
         h.w2 = try h.tree.addWindow("two", "world\n"); // lands in the LAST column (c2)
         h.ed = Editor.init(a);
         h.ed.row = h.tree.row;

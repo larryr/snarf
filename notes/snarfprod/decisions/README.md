@@ -12,3 +12,4 @@ The durable record of product rulings. Each entry gives the date, who decided, t
 | 2026-10-31 | SnarfProdd (interim, pending Larry on `/` vs `/n/local`) | At native `/`, host directories are never hidden: each name appears once, and `dev/` and `mnt/` list snarf's entries first, then the host's. | #60 |
 | 2026-10-31 | SnarfProdd | The `-b` flag stays out of scope, per R-EDIT-22 (point-to-type). It needs a requirements revision before anyone builds it. | #21 |
 | 2026-10-31 | SnarfProdd (follows the 2026-10-30 rule) | The pointer also warps into windows created at startup and during `Load`, as acme does. | PR #64 (#45, #53) |
+| 2026-10-31 | Larry / SnarfProdd | An unfinished `Put` at quit leaves the file unchanged; partial contents go to `.<name>.snarf-partial` (then `.1`, `.2`, …, never overwriting; `$TMPDIR` fallback), and stderr names the file actually written. | PR #68 (#58) |

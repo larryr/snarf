@@ -709,7 +709,7 @@ test "served: walk new places the window per makeNewWindow's activecol (T15)" {
     try h.connect();
 
     const c1 = h.tree.row.col.items[0];
-    const c2 = (try h.tree.row.add(-1)).?;
+    const c2 = (try h.tree.row.add(&h.ed, -1)).?;
     h.ed.activecol = c2;
     try testing.expectEqual(@as(usize, 1), c1.w.items.len);
     try testing.expectEqual(@as(usize, 0), c2.w.items.len);

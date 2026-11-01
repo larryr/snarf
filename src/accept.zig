@@ -828,7 +828,7 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     defer tree.deinit();
     // A second column — the RIGHTMOST one — with a placeholder window, so
     // the +Errors window's placement there (not column 0) is load-bearing.
-    const c2 = (try tree.row.add(-1)).?;
+    const c2 = (try tree.row.addAtBoot(-1)).?;
     _ = try tree.addWindow("placeholder", ""); // lands in the LAST column (c2)
 
     var ed = core.Editor.init(alloc);
@@ -1201,7 +1201,7 @@ test "phase-12c: resize scene — grow then shrink keeps the tiling and the text
     try hb.resize(900, 700);
     dd.noteResize(dev.draw_backend.Rect.init(0, 0, 900, 700));
     const r1 = try d.getWindow();
-    try tree.resize(r1);
+    try tree.resize(&ed, r1);
     ed.needs_flush = true;
     try ed.frameEnd(d);
     try expectTiling(&tree, core.Chrome.border, 900, 700);
@@ -1223,7 +1223,7 @@ test "phase-12c: resize scene — grow then shrink keeps the tiling and the text
     try hb.resize(640, 480);
     dd.noteResize(dev.draw_backend.Rect.init(0, 0, 640, 480));
     const r2 = try d.getWindow();
-    try tree.resize(r2);
+    try tree.resize(&ed, r2);
     ed.needs_flush = true;
     try ed.frameEnd(d);
     try expectTiling(&tree, core.Chrome.border, 640, 480);
@@ -1362,4 +1362,5 @@ test "phase-13b: acme boot — two columns, the root directory window rightmost 
 test {
     _ = @import("accept_colors.zig"); // phase 19 (R-P19-8c)
     _ = @import("accept_hostfs.zig"); // phase 20 (R-P20-7)
+    _ = @import("redo_resize_test.zig"); // #67 (SnarfDev2)
 }

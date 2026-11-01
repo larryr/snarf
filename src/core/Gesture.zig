@@ -43,6 +43,10 @@ gesture_text: ?*Text = null,
 /// The device point of the most recent mouse sample — acme's `mouse->xy` — the
 /// point `handleKey` types AT (POINT-TO-TYPE, R-P8-9 / rows.c:279-282).
 mouse_pt: Point = .{ .x = 0, .y = 0 },
+/// The button set of the most recent mouse sample — acme's `mousectl->m.buttons`.
+/// `coladd` reads it to skip the warp into a new window while a button is
+/// held (cols.c:152-154, `place.mintWindow`, #45).
+buttons: u8 = 0,
 /// Edge tracker for scrollbar clicks: the button set last acted on inside a
 /// body scrollbar. B1/B3 fire once per press edge; B2 (absolute) repeats while
 /// held (acme.c:603-612 `textscroll`, collapsed per R-P8-8). Reset to 0 on
@@ -144,6 +148,7 @@ pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
     const pt = Point{ .x = ev.x, .y = ev.y };
     g.mouse_pt = pt; // (1) acme `mouse->xy` always tracks
     const b = ev.buttons;
+    g.buttons = b; // acme `mouse->buttons` tracks too (read by cols.c:153)
     if (b == 0) g.scroll_but = 0; // release clears scrollbar edge tracking
 
     // (2) A pinned gesture owns every sample until all buttons release (R-P8-11):
