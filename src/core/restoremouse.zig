@@ -11,24 +11,23 @@
 //!
 //! Call sites, as in the C:
 //!   * `save`    — every new window (`coladd`, cols.c:150), via
-//!                 `place.mintWindow`, the single runtime creation seam.
+//!                 `place.mintWindow`, the single runtime creation seam, which
+//!                 then warps into the window (cols.c:151-154, #45).
 //!   * `restore` — `Column.close` (`colclose`, cols.c:178).
 //!   * `clear`   — typing (`rowtype`, rows.c:277, first thing in
-//!                 `Editor.handleKey`) and the B1 chord (text.c:1092).
-//!                 `colcloseall` (cols.c:226) is covered by `dropTextRefs` per
-//!                 window (`Row.close`).
+//!                 `Editor.handleKey`), the B1 chord (text.c:1092), every
+//!                 `colresize` (cols.c:242 → `Column.resize`) and `rowadd`
+//!                 (rows.c:99 → `Row.add`) (#53). `colcloseall` (cols.c:226)
+//!                 is covered by `dropTextRefs` per window (`Row.close`).
 //!
-//! KNOWN GAP (R-EDIT-25, PR #43 review item 5): the C's other `clearmouse`
-//! sites are NOT ported. `colsort` (cols.c:303), `coldragwin` (:484) and
-//! `rowdragcol` (rows.c:150) have no port yet, so they will clear when they
-//! land. `colresize` (cols.c:242 → `Column.resize`) and `rowadd` (rows.c:99 →
-//! `Row.add`) are ported but take no Editor, and threading one through is not
-//! small: `Row.add` has ~27 call sites (most of them tests), `Column.resize` is
-//! reached from `Column.add`, `Row.add`, `Row.resize` and `Row.close`, and
-//! `boot.boot` builds the tree (calling both) before any Editor exists. The
-//! effect: a pop-up saved before a column resize, Newcol or screen resize
-//! still warps back on a later Del of that pop-up, wherever the pointer is
-//! (exact acme parity, below), where acme would have forgotten the save.
+//! The layout clears take a non-optional `*Editor` (as `place.mintWindow`
+//! does since 1f24bb3). Two paths skip them on purpose: `boot.boot` builds
+//! the tree through `Row.addAtBoot` before any Editor (so any save) exists,
+//! and `Column.add`'s buggered redraw uses `Column.relayout` because the
+//! `savemouse` at cols.c:150 overwrites the slot right after it.
+//!
+//! REMAINING GAP (R-EDIT-25): `colsort` (cols.c:303), `coldragwin` (:484) and
+//! `rowdragcol` (rows.c:150) have no port yet; they will clear when they land.
 //!
 //! EXACT ACME PARITY (SnarfProdd PM correction, 2026-10-31; R-EDIT-25): restore
 //! whenever `mousew == w`, with no check of where the pointer is now

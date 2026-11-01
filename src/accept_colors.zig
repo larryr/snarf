@@ -56,7 +56,7 @@ test "phase-19: monadnock boot scene — dark backs, light text, dark ground" {
         .palette = pal,
     });
     defer tree.deinit();
-    _ = (try tree.row.add(-1)).?;
+    _ = (try tree.row.addAtBoot(-1)).?;
     const w = tree.row.col.items[0].w.items[0];
     var ed = core.Editor.init(alloc);
     defer ed.deinit();

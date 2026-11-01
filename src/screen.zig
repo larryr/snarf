@@ -61,11 +61,12 @@ pub fn resize(
     dd: *DevDraw,
     display: *Display,
     tree: *core.boot.Tree,
+    ed: *core.Editor,
     w: u32,
     h: u32,
 ) !void {
     try canvas.resize(w, h);
     dd.noteResize(dev.draw_backend.Rect.init(0, 0, @intCast(w), @intCast(h)));
     const clipr = try display.getWindow(); // acme.c:549 getwindow(display, Refnone)
-    try tree.resize(clipr); // acme.c:551-555 white fill + rowresize
+    try tree.resize(ed, clipr); // acme.c:551-555 white fill + rowresize
 }

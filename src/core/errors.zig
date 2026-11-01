@@ -166,7 +166,7 @@ pub fn errorWin(ed: *Editor, dir: []const u8) Text.Error!*Window {
 
     if (row.col.items.len == 0) {
         // util.c:95-97 rowadd(&row, nil, -1) or error("can't create column…")
-        _ = (try row.add(-1)) orelse return error.IoError;
+        _ = (try row.add(ed, -1)) orelse return error.IoError;
     }
     const c: *Column = row.col.items[row.col.items.len - 1]; // util.c:98 rightmost
     const w = try place.mintWindow(ed, c, -1, name); // util.c:98 coladd + :100 winsetname
@@ -298,7 +298,7 @@ test "errors: flushWarnings mints +Errors in the rightmost column and appends (T
         .body = "",
     });
     defer tree.deinit();
-    _ = (try tree.row.add(-1)).?; // a second column: the RIGHTMOST one now
+    _ = (try tree.row.addAtBoot(-1)).?; // a second column: the RIGHTMOST one now
 
     var ed = Editor.init(a);
     defer ed.deinit();
@@ -332,7 +332,7 @@ test "errors: warningIn targets a directory bucket; both windows land rightmost 
         .body = "",
     });
     defer tree.deinit();
-    _ = (try tree.row.add(-1)).?; // second column, the rightmost
+    _ = (try tree.row.addAtBoot(-1)).?; // second column, the rightmost
 
     var ed = Editor.init(a);
     defer ed.deinit();
