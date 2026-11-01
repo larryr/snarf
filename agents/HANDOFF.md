@@ -33,7 +33,15 @@ one fact that had gone stale and wrong (PR creation — see below).
 - **Issue triage #56 (fable, 2026-10-31)**: per-issue notes on ALL open issues — closables
   (#54/#25/#19/#10), #12+#31 as the next phase, #45 implementation notes, #47 priority
   bump (CI flake multiplier), #20's ADR-0006 constraint. Read it before picking up any
-  open issue. (Issue comments are blocked for this credential; triage lives in #56.)
+  open issue. (Per-issue comments now exist on each; the PAT was fixed 2026-10-31 — see the
+  credential note below.)
+- **GitHub credential (fixed 2026-10-31):** the fine-grained `agent_tokens` PAT now has
+  Issues + Contents read/write, so `gh issue comment/close`, Releases and `gh pr merge` all
+  work (verified: issue comment, draft-release create/delete, and #64/#65/#68/#69/#71
+  merges). Merging is still Larry's call per `agents/REVIEW-PROCESS.md` unless he says
+  otherwise in the moment. Exposed-in-chat tokens: the classic `agent2` token should be
+  revoked (Larry's to do); force-pushes are blocked by the Claude Code classifier, so
+  fix stacked/conflicted PR branches with a merge commit, never a rebase.
 - **Review-wave outcome (2026-10-31):** #43 (#9 restoremouse, exact-ACME per Larry's
   2026-10-31 ruling), #44+#49 (CI live on push/PR, hardened), #46+#50 (WF/RM test
   tightening), #48 (PR review process — `agents/REVIEW-PROCESS.md` now governs; first
@@ -55,7 +63,7 @@ one fact that had gone stale and wrong (PR creation — see below).
   installed binary `snarf` (build artifact stays `snarf-native`); startup/error log
   prefix is now `snarf:`. **Manually validated by Larry 2026-10-26**
   (navigate tree, New→tag-path→Put creates on disk, B3 opens, edit/Put/Get) — issue #11
-  ready to close (PAT can't; Larry closes). Two UX facts worth re-telling users: macOS's
+  ready to close (closed since). Two UX facts worth re-telling users: macOS's
   option-click-into-another-app hides the previous app (first B2 chord needs snarf focused
   first), and window placement is acme's makenewwindow heuristic (activecol/seltext pick
   the column, util.c:449-495, `place.zig`) — B3 clicks don't steer it, typing/B1 do.
