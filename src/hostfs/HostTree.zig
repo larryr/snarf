@@ -68,11 +68,21 @@ pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
 /// discarded, nor for a Put that had already failed (the editor reported
 /// that failure itself). `log` is flushed before returning.
 pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) void {
-    self.hung_up = true;
-    self.discard_log = log;
+    self.hangUp(log);
     defer self.discard_log = null;
     srv.releaseFids();
     if (log) |w| w.flush() catch {};
+}
+
+/// First half of `endSession`: from here on no Tclunk commits a Put. One that
+/// arrives is discarded (its bytes kept, see `keepPartial`) and reported to
+/// `log`. The host calls this BEFORE tearing the editor down: the teardown's
+/// own `discardClunk`s sit in the pipe, and any later write that blocks pumps
+/// the server and would otherwise commit a half-written temp over the user's
+/// file (#68 review, finding 1). `log` must outlive `endSession`.
+pub fn hangUp(self: *HostTree, log: ?*std.Io.Writer) void {
+    self.hung_up = true;
+    self.discard_log = log;
 }
 
 /// A Put discarded by `endSession` (see there): keep its bytes in a

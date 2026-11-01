@@ -254,7 +254,12 @@ const Rig = struct {
         defer r.a.free(kept);
         const partial = r.partial.?;
         try testing.expect(partial.len != 0 and partial.len < 4 + (1 << 20)); // really unfinished
-        try testing.expectEqualSlices(u8, partial, kept); // exactly what had arrived
+        // `shutdown` drains the host server before it hangs up (#68 review
+        // finding 1), so frames the client had already sent but the server had
+        // not yet processed are in the recovery file too: at least what had
+        // arrived at the last tick, as a prefix, and still unfinished.
+        try testing.expect(kept.len >= partial.len and kept.len < 4 + (1 << 20));
+        try testing.expectEqualSlices(u8, partial, kept[0..partial.len]);
         try testing.expectEqual(@as(usize, 3), try r.entries()); // + the recovery file, no temp
         try expectB3Paths(r.log.written(), &.{ "/big.txt", "/.big.txt.snarf-partial" });
     }
@@ -370,4 +375,17 @@ test "main_native: main defers shutdown before boot, and conn.deinit after it (#
     try testing.expect(conn_deinit < defer_shutdown);
     try testing.expect(defer_shutdown < call_boot);
     try testing.expect(std.mem.indexOf(u8, src, "defer a.tree.deinit();") == null);
+}
+
+test "main_native: shutdown drains, then hangs up the host session, BEFORE teardown (#68 finding 1, source pin)" {
+    // The ordering IS the fix: teardown queues Tclunks (`discardClunk`) that a
+    // blocked write can pump into a commit unless `hung_up` is already set. A
+    // pull-the-ring-full scenario is not reproducible headless, so pin the
+    // order of the three steps in `native_shutdown.zig`.
+    const src = @embedFile("native_shutdown.zig");
+    const drain = std.mem.indexOf(u8, src, "a.srv_fs.poll()").?;
+    const hang = std.mem.indexOf(u8, src, "a.host_tree.hangUp(").?;
+    const teardown = std.mem.indexOf(u8, src, "core.shutdown.teardown(&a.editor").?;
+    try testing.expect(drain < hang);
+    try testing.expect(hang < teardown);
 }
