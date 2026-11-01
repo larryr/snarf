@@ -326,7 +326,7 @@ fn pumpWindowSystem(a: *App) !void {
         // phase 12c built — unchanged, on a second host.
         const clipr = try a.display.getWindow(); // acme.c:549
         a.dd.noteResize(.{ .x0 = clipr.min.x, .y0 = clipr.min.y, .x1 = clipr.max.x, .y1 = clipr.max.y });
-        try a.tree.resize(clipr); // acme.c:551-555
+        try a.tree.resize(&a.editor, clipr); // acme.c:551-555
         a.editor.needs_flush = true;
     }
 }

@@ -39,10 +39,7 @@ test {
     _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
 }
 test {
-    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
-}
-test {
-    _ = @import("restoremouse_paths_test.zig"); // #9 review: clear paths (SnarfDev1)
+    _ = @import("restoremouse_layout_test.zig"); // #53 layout clears + #45 button guard (SnarfDev1)
 }
 test {
     _ = @import("clipboard_core_test.zig"); // #12 core sync (SnarfDev2)
@@ -88,6 +85,7 @@ pub const originhook = @import("originhook.zig");
 pub const exec = @import("exec/exec.zig");
 test {
     _ = @import("exec/builtins_m1_test.zig"); // #13 acceptance (SnarfDev2)
+    _ = @import("exec/undo_repaint_test.zig"); // #57 regression (SnarfDev2)
 }
 // Edit language (phase 10). One public type per line, matching the flat style
 // above; later 10x waves add ast/parse/addr/Elog/cmd here.

@@ -120,7 +120,7 @@ fn apply(ed: *Editor, p: *Parser) Error!void {
     _ = try p.need();
     var pbuf: [10]f64 = undefined;
     const pcts = dumpfmt.parsePcts(try p.need(), &pbuf) orelse return error.BadLoad; // rows.c:606-613
-    try placeColumns(row, pcts);
+    try placeColumns(ed, row, pcts);
 
     // rows.c:641-681: the `c`/`w` tag lines, until the first window record.
     var l = p.next();
@@ -161,7 +161,7 @@ fn apply(ed: *Editor, p: *Parser) Error!void {
 
 /// rows.c:614-640: move the existing column borders to the dumped percents
 /// (pairwise, both sides keeping ≥ 50 px), and add any extra columns.
-fn placeColumns(row: *Row, pcts: []const f64) Text.Error!void {
+fn placeColumns(ed: *Editor, row: *Row, pcts: []const f64) Text.Error!void {
     const screen = &row.chrome.display.image;
     const bd = Chrome.border;
     const ncol = row.col.items.len;
@@ -179,13 +179,13 @@ fn placeColumns(row: *Row, pcts: []const f64) Text.Error!void {
             r2.min.x = x;
             if (r1.max.x - r1.min.x < 50 or r2.max.x - r2.min.x < 50) continue; // rows.c:627-628
             try screen.draw(.{ .min = r1.min, .max = r2.max }, row.chrome.ground, null, .{}); // rows.c:629
-            try c1.resize(r1);
-            try c2.resize(r2);
+            try c1.resize(ed, r1); // rows.c:632 colresize (⇒ clearmouse, cols.c:242)
+            try c2.resize(ed, r2); // rows.c:633
             r2.min.x = x - bd;
             r2.max.x = x;
             try screen.draw(r2, row.chrome.rule, null, .{}); // rows.c:632-634
         } else {
-            _ = try row.add(x); // rows.c:636-637 rowadd(row, nil, x)
+            _ = try row.add(ed, x); // rows.c:636-637 rowadd(row, nil, x)
         }
     }
 }

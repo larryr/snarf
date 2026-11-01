@@ -3,12 +3,12 @@
 //! (S-07 P-1): this file *is* the Column.
 //!
 //! Ported from larryr/plan9port@337c6ac acme/cols.c; cite as `cols.c:NN`. This is
-//! the no-clone/no-warp `colinit` (cols.c:26-50), `coladd` (cols.c:52-158) and
+//! the no-clone `colinit` (cols.c:26-50), `coladd` (cols.c:52-158) and
 //! `colresize` (cols.c:235-272) plus `colwhich` (cols.c:558-580). `coladd`'s
-//! `moveto` into the new window (cols.c:152-154) is dropped (R-P8-7); its
-//! `savemouse` (cols.c:150) lives in `place.mintWindow`, which has the Editor,
-//! and `close` calls `restoremouse` (cols.c:178) — see `core/restoremouse.zig`
-//! (#9). `colgrow` arrived in phase 16b and lives in
+//! `savemouse` (cols.c:150) and its `moveto` into the new window (cols.c:151-154,
+//! #45) live in `place.mintWindow`, which has the Editor; `close` calls
+//! `restoremouse` (cols.c:178) and `resize` calls `clearmouse` (cols.c:242, #53)
+//! — see `core/restoremouse.zig` (#9). `colgrow` arrived in phase 16b and lives in
 //! `core/colgrow.zig` (the `but == 1` arm only); `coladd`'s own "grow the
 //! landing window first" loop (cols.c:81-87) is still deferred, because it
 //! changes `coladd`'s geometry and the accept goldens pin it — the buggered
@@ -106,7 +106,8 @@ pub fn deinit(c: *Column) void {
     c.tag_file.deinit();
 }
 
-/// `coladd` (cols.c:52-158), no-clone/no-warp: place a new window carrying
+/// `coladd` (cols.c:52-158), no-clone (its savemouse + warp, cols.c:150-154, are
+/// in `place.mintWindow`, which has the Editor): place a new window carrying
 /// `body_file` at (or near) `y_in`. With `y_in` above the window region and at
 /// least one window present, steal the bottom half of the last window; otherwise
 /// find the window `y_in` lands on, clamp the split point, shrink that window and
@@ -180,8 +181,12 @@ pub fn add(c: *Column, winid: *u32, body_file: *File, y_in: i32) Error!*Window {
     try c.w.insert(a, i, w);
     c.safe = true; // cols.c:144
 
-    // too many windows ⇒ redraw the whole column (cols.c:147-148).
-    if (buggered) try c.resize(c.r);
+    // too many windows ⇒ redraw the whole column (cols.c:147-148). `relayout`,
+    // not `resize`: the `clearmouse` inside that `colresize` (cols.c:242) is
+    // overwritten two lines later by `savemouse(w)` (cols.c:150, done by
+    // `place.mintWindow` right after this returns), so it is unobservable, and
+    // `boot` reaches here before any Editor exists (#53).
+    if (buggered) try c.relayout(c.r);
 
     return w;
 }
@@ -256,7 +261,20 @@ pub fn clean(c: *Column, ed: *Editor) bool {
 /// the growable height `new/old`, clamped to at least one tag line + border, with
 /// a `Border`-px black band above each. The last window takes the remainder and
 /// keeps its extra fringe (`keepextra`).
-pub fn resize(c: *Column, r: Rect) Error!void {
+///
+/// First it forgets any saved pop-up (`clearmouse`, cols.c:242, #53): after a
+/// layout change acme no longer warps back on `Del` of the saved window.
+pub fn resize(c: *Column, ed: *Editor, r: Rect) Error!void {
+    restoremouse.clear(ed); // cols.c:242 clearmouse()
+    return c.relayout(r);
+}
+
+/// `colresize` (cols.c:243-271) minus its `clearmouse` (cols.c:242). Only for
+/// paths where that clear is unobservable or no Editor exists yet: `add`'s
+/// buggered redraw (followed at once by `savemouse`, cols.c:150) and the
+/// pre-Editor `boot` path through `Row.addAtBoot` (#53). Everything else calls
+/// `resize`.
+pub fn relayout(c: *Column, r: Rect) Error!void {
     const font = c.chrome.font;
     const fh: i32 = font.height;
     const screen = &c.chrome.display.image;
@@ -467,7 +485,9 @@ test "column: resize stacks windows proportionally" {
     // Grow to 600: new = 600-2*20 = 560, old = 400-2*20 = 360. A (Dy 199) keeps
     // (199-20)*560/360 + 20 = 298 of growable slot → its winresize trims the body
     // to a line multiple, ending at 309; B takes 311..600.
-    try c.resize(proto.Rect.make(0, 0, 200, 600));
+    var ed = Editor.init(testing.allocator);
+    defer ed.deinit();
+    try c.resize(&ed, proto.Rect.make(0, 0, 200, 600));
     try testing.expectEqual(@as(i32, 20), c.w.items[0].r.min.y);
     try testing.expectEqual(@as(i32, 309), c.w.items[0].r.max.y);
     try testing.expectEqual(@as(i32, 311), c.w.items[1].r.min.y);

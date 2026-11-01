@@ -38,7 +38,7 @@ const Frame = draw.Frame;
 const proto = draw.proto;
 
 /// Flip to true in the PR that lands #45.
-const warp_focus_landed = false;
+const warp_focus_landed = true;
 
 fn xfail(ok: bool) !void {
     if (warp_focus_landed) {

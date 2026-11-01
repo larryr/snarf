@@ -27,6 +27,7 @@ const Column = @import("Column.zig");
 const Row = @import("Row.zig");
 const wintag = @import("wintag.zig");
 const restoremouse = @import("restoremouse.zig");
+const warp = @import("warp.zig");
 
 /// `t->col` (dat.h): the Column a Text belongs to. A window text ⇒ the window's
 /// column; a columntag ⇒ its own Column (via `@fieldParentPtr`); anything else
@@ -78,6 +79,14 @@ pub fn mintWindow(ed: *Editor, c: *Column, y: i32, name: []const u8) Text.Error!
     w.owns_body = true; // the Window now owns and frees this body File
     transferred = true; // f is reachable from the tree; its deinit chain frees it
     restoremouse.save(ed, w); // cols.c:150 savemouse(w) (#9)
+    // cols.c:151-154 (#45): "near the button, but in the body" — warp into the
+    // new window, unless a mouse button is held: 3 px below-right of the
+    // window button's bottom-right corner, i.e. at the top-left of the body.
+    // Computed before winsetname/winsettag, as in the C (coladd returns first).
+    if (ed.gesture.buttons == 0) { // cols.c:153 if(!mousectl->m.buttons)
+        const p = w.tag.scrollr.max;
+        warp.to(ed, .{ .x = p.x + 3, .y = p.y + 3 }); // cols.c:154 moveto(addpt(w->tag.scrollr.max, Pt(3, 3)))
+    }
 
     try wintag.setName(w, name); // winsetname: isscratch for `+Errors` (wind.c:387-391)
     try w.setTag1(); // setName is a no-op for "" (New): compose regardless
@@ -111,8 +120,8 @@ fn dy(r: draw.proto.Rect) i32 {
 /// biggest window is split at its vertical midpoint — unless `t`'s own window is
 /// in this column and is at least 2/3 as tall, in which case THAT is split.
 ///
-/// DROPPED: no `moveto` warp exists on this path in the C, and R-EDIT-25 forbids
-/// adding one.
+/// Warp: `makenewwindow` itself has no `moveto`; the one into the new window
+/// comes from its `coladd` (cols.c:151-154), i.e. from `mintWindow` (#45).
 pub fn makeNewWindow(ed: *Editor, t: ?*Text) Text.Error!*Window {
     // --- column choice (util.c:454-466) ------------------------------------
     const c: *Column = blk: {
@@ -127,7 +136,7 @@ pub fn makeNewWindow(ed: *Editor, t: ?*Text) Text.Error!*Window {
         // `error()`s (fatal) when it cannot; the port raises IoError.
         const row = ed.row orelse return error.IoError;
         if (row.col.items.len == 0) {
-            break :blk (try row.add(-1)) orelse return error.IoError; // util.c:461-462
+            break :blk (try row.add(ed, -1)) orelse return error.IoError; // util.c:461-462
         }
         break :blk row.col.items[row.col.items.len - 1]; // util.c:464
     };

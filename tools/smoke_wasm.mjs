@@ -324,8 +324,44 @@ check("origin absent: 10s dial timeout crossed without trap", () => !timeoutTrap
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Every snarf-origin this run spawns, reaped on ANY exit path (#47): normal
+// end, process.exit, an uncaught throw/rejection, or Ctrl-C/SIGTERM. A leaked
+// server keeps the baked port busy, which — before #47's exclusive bind — let
+// the NEXT run's server silently share it (39/1 flakes). With the fix a busy
+// port makes snarf-origin exit with "cannot listen", and the PENDING guard
+// below takes over; reaping here keeps the port free so the checks really run.
+const originChildren = new Set();
+function reapOrigins() {
+  for (const c of originChildren) {
+    if (c.exitCode === null && c.signalCode === null) {
+      try { c.kill("SIGKILL"); } catch {}
+    }
+  }
+  originChildren.clear();
+}
+process.on("exit", reapOrigins); // sync: runs on process.exit() and natural end
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    reapOrigins();
+    process.exit(128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 })[sig]);
+  });
+}
+process.on("uncaughtException", (e) => {
+  console.error("smoke: uncaught exception:", e);
+  reapOrigins();
+  process.exit(1);
+});
+process.on("unhandledRejection", (e) => {
+  console.error("smoke: unhandled rejection:", e);
+  reapOrigins();
+  process.exit(1);
+});
+
 function startOrigin() {
   const child = spawn(ORIGIN_BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
+  originChildren.add(child);
+  child.on("exit", () => originChildren.delete(child));
+  child.on("error", () => originChildren.delete(child)); // e.g. binary missing
   const out = { child, lines: [], port: 0, dead: false };
   let buf = "";
   child.stdout.on("data", (d) => {
@@ -337,6 +373,7 @@ function startOrigin() {
     }
   });
   child.on("exit", () => (out.dead = true));
+  child.on("error", () => (out.dead = true));
   return out;
 }
 
@@ -764,5 +801,7 @@ for (const { name, status, detail } of results) {
 console.log(`\nblit count: ${blits.length}`);
 console.log(`wasm size:  ${bytes.length} bytes (${(bytes.length / 1024).toFixed(1)} KiB)`);
 console.log(`summary:    ${results.length - failed - pending} pass, ${failed} fail, ${pending} pending`);
+
+reapOrigins();
 
 process.exit(failed > 0 ? 1 : 0);
