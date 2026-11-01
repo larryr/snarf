@@ -66,6 +66,11 @@ pub fn to(ed: *Editor, pt: draw.proto.Point) void {
     var rec: [rec_len]u8 = undefined;
     format(pt.x, pt.y, &rec);
     _ = f.client.write(f.fid, 0, &rec) catch return;
+    // libdraw's `moveto` also sets `mc->m.xy` (mouse.c:11-12): point-to-type and
+    // the next `savemouse` must see the new point without waiting for a host
+    // motion event, which a warp is not guaranteed to produce. Only after the
+    // write succeeded: a host that refuses it keeps the real pointer.
+    ed.gesture.mouse_pt = pt;
 }
 
 /// A `/dev/mouse` record: `m` plus four `%11d `-padded fields
@@ -120,7 +125,10 @@ test "warp: no namespace means no warp and no failure" {
     var ed = Editor.init(testing.allocator);
     defer ed.deinit();
     try testing.expectEqual(@as(?*ninep.mount.Namespace, null), ed.ns);
+    ed.gesture.mouse_pt = .{ .x = 7, .y = 9 };
     to(&ed, .{ .x = 1, .y = 2 }); // must not crash, must not error
+    // A refused warp leaves the pointer where it really is.
+    try testing.expectEqual(draw.proto.Point{ .x = 7, .y = 9 }, ed.gesture.mouse_pt);
 }
 
 // --------------------------------------------------------------------------
@@ -199,4 +207,6 @@ test "warp: the request reaches /dev/mouse through the namespace" {
     to(&ed, .{ .x = 100, .y = 200 });
     try testing.expectEqual(@as(usize, 1), sink.writes);
     try testing.expectEqualStrings("m        100         200           0           0 ", &sink.last);
+    // moveto (mouse.c:12): the editor's idea of the pointer follows the warp.
+    try testing.expectEqual(draw.proto.Point{ .x = 100, .y = 200 }, ed.gesture.mouse_pt);
 }
