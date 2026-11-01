@@ -163,7 +163,7 @@ fn scenario(p: Perturb) !void {
             const c = s.tree.row.col.items[0];
             var r = c.r;
             r.max.x -= 120;
-            try c.resize(r);
+            try c.resize(&s.ed, r);
             try s.ed.frameEnd(s.d);
         },
         .new_window => {
