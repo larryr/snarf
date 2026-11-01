@@ -61,6 +61,7 @@ pub const SelfTree = struct {
     ) !void {
         self.fsys = core.served.fsys.Fsys.init(ed);
         self.pipe = try ninep.chan.Pipe.init(a, 16384);
+        errdefer self.pipe.deinit();
         self.srv = try ninep.server.Server.init(
             a,
             self.pipe.serverEnd(),
@@ -68,12 +69,26 @@ pub const SelfTree = struct {
             &self.fsys,
             8192,
         );
+        errdefer self.srv.deinit();
         self.cl = try ninep.Client.init(a, self.pipe.clientEnd(), 8192);
+        errdefer self.cl.deinit();
         self.cl.pump = .{ .ctx = &self.srv, .run = pumpServer };
         _ = try self.cl.version(8192);
         const root = try self.cl.attach("larry", "");
         self.root_fid = root.fid;
         try ns.mount(mount_point, &self.cl, root.fid);
+    }
+
+    /// Undo `start` (#58): release the server's fids, then free the client,
+    /// the server and the pipe. The namespace entry is the namespace's to
+    /// free (`Namespace.deinit`); call this before that, and after the
+    /// `Editor` is done with the tree (`core.shutdown`).
+    pub fn stop(self: *SelfTree) void {
+        self.srv.releaseFids();
+        self.cl.deinit();
+        self.srv.deinit();
+        self.pipe.deinit();
+        self.* = .{};
     }
 
     /// Drive the served tree one poll, from the entry point's `tick` — the same

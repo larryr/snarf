@@ -24,6 +24,8 @@ pub const Chrome = @import("Chrome.zig");
 pub const Column = @import("Column.zig");
 pub const Row = @import("Row.zig");
 pub const boot = @import("boot.zig");
+/// Ending a session: Editor then window tree, freed for real (#58; #13 Exit).
+pub const shutdown = @import("shutdown.zig");
 pub const look = @import("look.zig");
 pub const warp = @import("warp.zig");
 /// Return-after-Del warp — acme `savemouse`/`restoremouse`/`clearmouse`

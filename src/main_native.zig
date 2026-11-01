@@ -34,10 +34,15 @@ const hostfs = @import("hostfs");
 const ninep = @import("ninep");
 const input_pump = @import("input_pump.zig");
 const ns_boot = @import("ns_boot.zig");
+const native_shutdown = @import("native_shutdown.zig");
 
 const Conn = host.Conn;
 const DevDraw9 = host.dev_draw.DevDraw9;
 const DevInput9 = host.dev_input.DevInput9;
+
+/// The teardown half of `boot` (#58) — its own file (S-07 P-2).
+pub const Built = native_shutdown.Built;
+pub const shutdown = native_shutdown.shutdown;
 
 /// Standing-ticket read buffers — the `main_wasm` sizes.
 const mouse_buf_len = dev.input.mouse_rec_len; // 49
@@ -53,7 +58,13 @@ const frame_timeout_ms: i32 = 16;
 /// the servers capture `&device`, the clients capture the pipes, the standing
 /// tickets borrow `mouse_buf`/`kbd_buf`, and the window tree's Row/Column/
 /// Window addresses are live inside `editor`.
-const App = struct {
+pub const App = struct {
+    /// What `boot` has built so far — `shutdown` frees exactly that, so a boot
+    /// that fails part-way is torn down as cleanly as a finished session.
+    built: Built = .{},
+    /// Where `shutdown` reports a discarded Put; null ⇒ stderr (#58 /
+    /// PM ruling 2026-10-31). The tests point it at a buffer.
+    exit_log: ?*std.Io.Writer = null,
     conn: Conn,
     // --- draw stack: devdraw ← dev_draw ← server ← client ← Display ---
     dd: DevDraw9,
@@ -100,6 +111,8 @@ pub fn main(init: std.process.Init) !void {
     const pal = colorsFromArgs(init.minimal.args) orelse std.process.exit(2);
     const a = try gpa.create(App);
     defer gpa.destroy(a);
+    a.built = .{};
+    a.exit_log = null;
 
     // ADR-0006 §4: $DEVDRAW → bundled (beside this executable) → $PLAN9/bin →
     // $PATH. No executable path just skips "bundled"; it is never fatal.
@@ -132,13 +145,18 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
 
-    try boot(gpa, init.io, a, pal);
-    defer a.tree.deinit();
-    defer a.editor.deinit();
+    // #58: every exit from here on — the devdraw hang-up below, an error, and
+    // (#13) `Exit` — frees the whole session, before `conn.deinit` reaps
+    // devdraw (so a live peer still gets the image frees).
+    defer shutdown(a);
+    try boot(gpa, init.io, a, pal, "/");
     // R-P17-5 / PM Q6: the native `$home` is the real `$HOME` (acme.c:136),
     // null when unset. It resolves through the root mount, so `Dump` writes
     // `$HOME/acme.dump` on the real disk.
     a.editor.session.home = init.environ_map.get("HOME");
+    // #58 (Owner decision 2026-10-31, Larry): where a Put cut off by exit
+    // keeps its bytes when its own directory refuses (`hostfs.Recovery`).
+    a.host_tree.recovery.tmp_dir = init.environ_map.get("TMPDIR") orelse "/tmp";
 
     // The two long polls, armed once and re-armed by `Conn.poll` from here on
     // (drawclient.c keeps exactly one of each outstanding).
@@ -192,12 +210,18 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
 }
 
 /// Build the whole stack in place (pointer-capture hazards — see `App`).
-fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !void {
+/// `host_root` is the host directory served at `/` and `/mnt/host` — the
+/// real `/` in `main`, a scratch directory in the tests. Each allocating step
+/// sets its `a.built` flag, so `shutdown` can undo a partial boot.
+pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
     a.pipe = try ninep.chan.Pipe.init(gpa, 16384);
+    a.built.pipe = true;
     a.srv = try ninep.server.Server.init(gpa, a.pipe.serverEnd(), &DevDraw9.ops, &a.dd, 8192);
+    a.built.srv = true;
     a.cl = try ninep.Client.init(gpa, a.pipe.clientEnd(), 8192);
+    a.built.cl = true;
     a.cl.pump = .{ .ctx = &a.srv, .run = pumpServer };
     _ = try a.cl.version(8192);
     const root = try a.cl.attach("larry", "");
@@ -206,10 +230,13 @@ fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !
     // window's size. Nothing here decides a display size: the window system
     // does (contrast the browser, where `init(w,h)` carries it in, R-GFX-05).
     a.display = try draw.Display.init(gpa, &a.cl, root.fid);
+    a.built.display = true;
     a.font = try draw.Font.init(gpa, a.display, draw.Font.default_subfont);
+    a.built.font = true;
 
     // ---- namespace ----
     a.ns = ninep.mount.Namespace.init(gpa);
+    a.built.ns = true;
 
     // ---- window tree: the acme no-argument boot (acme.c:242-259) ----
     a.tree = try core.boot.boot(gpa, a.display, &a.font, a.display.conn.clipr, .{
@@ -218,6 +245,7 @@ fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !
         .palette = pal,
     });
     a.editor = core.Editor.init(gpa);
+    a.built.tree = true;
     a.tree.bind(&a.editor);
     a.editor.but2col = a.tree.chrome.but2col;
     a.editor.but3col = a.tree.chrome.but3col;
@@ -225,8 +253,11 @@ fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !
     // ---- input stack ----
     a.devinput = DevInput9.init(gpa, &a.conn);
     a.pipe_input = try ninep.chan.Pipe.init(gpa, 16384);
+    a.built.pipe_input = true;
     a.srv_input = try ninep.server.Server.init(gpa, a.pipe_input.serverEnd(), &DevInput9.ops, &a.devinput, 8192);
+    a.built.srv_input = true;
     a.cl_input = try ninep.Client.init(gpa, a.pipe_input.clientEnd(), 8192);
+    a.built.cl_input = true;
     a.cl_input.pump = .{ .ctx = &a.srv_input, .run = pumpServer };
     _ = try a.cl_input.version(8192);
     const iroot = try a.cl_input.attach("larry", "");
@@ -245,15 +276,20 @@ fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette) !
     // ---- boot namespace (S-02 §1.3) ----
     try ns_boot.mountDevices(&a.ns, &a.cl, root.fid, &a.cl_input, iroot.fid);
     try a.self_tree.start(gpa, &a.editor, &a.ns);
+    a.built.self_tree = true;
 
     // ---- host file system at `/` and `/mnt/host` (phase 20, R-P20-2) ----
     // Same pipe/server/client pump as the input stack; one attach, mounted
     // twice (the same client + root fid serve both prefixes).
-    a.host_fs = try hostfs.HostFs.open(io, "/");
+    a.host_fs = try hostfs.HostFs.open(io, host_root);
+    a.built.host_fs = true;
     a.host_tree = hostfs.HostTree.init(gpa, &a.host_fs);
     a.pipe_fs = try ninep.chan.Pipe.init(gpa, 65536);
+    a.built.pipe_fs = true;
     a.srv_fs = try ninep.server.Server.init(gpa, a.pipe_fs.serverEnd(), &hostfs.HostTree.ops, &a.host_tree, 8192);
+    a.built.srv_fs = true;
     a.cl_fs = try ninep.Client.init(gpa, a.pipe_fs.clientEnd(), 8192);
+    a.built.cl_fs = true;
     a.cl_fs.pump = .{ .ctx = &a.srv_fs, .run = pumpServer };
     _ = try a.cl_fs.version(8192);
     const froot = try a.cl_fs.attach("larry", "");
@@ -297,7 +333,7 @@ fn pumpWindowSystem(a: *App) !void {
 
 /// One frame: drain the 9P stacks and the input device, then flush once.
 /// The body of `main_wasm.tick`, minus the browser-only mounts.
-fn tick(a: *App) !void {
+pub fn tick(a: *App) !void {
     _ = try a.srv.poll(); // draw stack
     try a.self_tree.poll(); // /mnt/snarf-self stack
     _ = try a.srv_fs.poll(); // host file system stack (Load/Put jobs)
@@ -316,4 +352,8 @@ fn inputDevices(a: *App) input_pump.Devices {
         .mouse_buf = &a.mouse_buf,
         .kbd_buf = &a.kbd_buf,
     };
+}
+
+test {
+    _ = @import("main_native_test.zig"); // #58: boot → session → shutdown, leak-checked
 }
