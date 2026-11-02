@@ -129,17 +129,9 @@ pub fn main(init: std.process.Init) !void {
     }
     const pal = colorsFromFlags(cmdline.flags) orelse std.process.exit(2);
     // acme.c:261-266: each file argument, rooted at the working directory
-    // (acme's `wdir`, acme.c:293-294).
-    var files: std.ArrayList([]const u8) = .empty;
-    defer {
-        for (files.items) |f| gpa.free(f);
-        files.deinit(gpa);
-    }
-    if (cmdline.files.len != 0) {
-        const cwd = try std.process.currentPathAlloc(init.io, gpa);
-        defer gpa.free(cwd);
-        for (cmdline.files) |f| try files.append(gpa, try native_args.absolute(gpa, cwd, f));
-    }
+    // (acme's `wdir`, acme.c:293-296) by `boot`.
+    const cwd: []u8 = if (cmdline.files.len != 0) try std.process.currentPathAlloc(init.io, gpa) else try gpa.dupe(u8, "/");
+    defer gpa.free(cwd);
     const a = try gpa.create(App);
     defer gpa.destroy(a);
     a.built = .{};
@@ -183,7 +175,7 @@ pub fn main(init: std.process.Init) !void {
     // (#13) `Exit` — frees the whole session, before `conn.deinit` reaps
     // devdraw (so a live peer still gets the image frees).
     defer shutdown(a);
-    try boot(gpa, init.io, a, pal, "/", files.items);
+    try boot(gpa, init.io, a, pal, "/", cwd, cmdline.files);
     // R-P17-5 / PM Q6: the native `$home` is the real `$HOME` (acme.c:136),
     // null when unset. It resolves through the root mount, so `Dump` writes
     // `$HOME/acme.dump` on the real disk.
@@ -265,7 +257,9 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
 /// 261-266); none opens the `/` directory window (acme.c:258-259). Each
 /// allocating step sets its `a.built` flag, so `shutdown` can undo a partial
 /// boot.
-pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8, files: []const []const u8) !void {
+/// `files` are the file arguments as typed; `cwd` (acme's `wdir`) roots the
+/// relative ones (acme.c:293-296).
+pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8, cwd: []const u8, files: []const []const u8) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
     a.pipe = try ninep.chan.Pipe.init(gpa, 16384);
@@ -354,10 +348,13 @@ pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palett
         const cols = a.tree.row.col.items;
         if (files.len == 0) {
             _ = try core.openfile.readFile(&a.editor, cols[cols.len - 1], "/");
-        } else for (files, 0..) |f, i| {
+        } else for (files, 0..) |typed, i| {
+            const f = try native_args.absolute(gpa, cwd, typed);
+            defer gpa.free(f);
             // A missing file is acme's too: an empty window under that name,
-            // and `can't open` in +Errors (text.c:214-217).
-            _ = try core.openfile.readFile(&a.editor, cols[native_args.columnFor(i, f, cols.len)], f);
+            // and `can't open` in +Errors naming it as typed (text.c:214-217,
+            // acme.c:299 passes `s`, #84).
+            _ = try core.openfile.readFileAs(&a.editor, cols[native_args.columnFor(i, f, cols.len)], f, typed);
             // acme's readfile runs textload to the end before the next
             // coladd (acme.c:261-266, :292-304), and that coladd shrinks the
             // window it lands on to its loaded lines (cols.c:117). Snarf's

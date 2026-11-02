@@ -53,12 +53,14 @@ test "native file args: a file, a directory and a missing file each get a window
     try testing.expect(std.mem.indexOf(u8, body(d.w, &buf), "inner") != null);
 
     // The missing file: an empty window under its (cleaned) name, and acme's
-    // `can't open` line in +Errors (text.c:214-217) — not created on disk.
+    // `can't open` line in +Errors (text.c:214-217), naming the file as typed
+    // with the error text (acme.c:299, #84) — not created on disk.
     const n = find(r, "/new.txt").?;
     try testing.expectEqual(@as(usize, 0), n.w.body.file.buffer.len());
     try testing.expect(!n.w.dirty);
     const errs = find(r, "+Errors").?; // flushed there by the settle ticks
-    try testing.expect(std.mem.indexOf(u8, body(errs.w, &buf), "can't open /new.txt") != null);
+    try testing.expect(std.mem.indexOf(u8, body(errs.w, &buf), "can't open /sub/../new.txt: file does not exist\n") != null);
+    try testing.expect(std.mem.indexOf(u8, body(errs.w, &buf), "NotFound") == null);
     try testing.expectError(error.FileNotFound, r.tmp.dir.access(testing.io, "new.txt", .{}));
 }
 
@@ -134,4 +136,30 @@ test "native file args: each window keeps its loaded lines; the next one is adde
     try testing.expect(d.body.fr.r.max.y > d.body.fr.r.min.y);
     // The last window takes the rest of the column.
     try testing.expect(m.body.fr.r.max.y - m.body.fr.r.min.y > e.body.fr.r.max.y - e.body.fr.r.min.y);
+}
+
+test "native file args: can't open names a relative argument as typed, with the error text (#84, acme.c:299 + text.c:216)" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.createDir(testing.io, "sub", .default_dir);
+    try r.bootIn("/sub", &.{ "missing.txt", "../gone/x.txt" });
+    try r.settle();
+    var buf: [1024]u8 = undefined;
+    // The windows are named by the rooted, cleaned path (acme.c:293-298)…
+    _ = find(r, "/sub/missing.txt").?;
+    _ = find(r, "/gone/x.txt").?;
+    // …but textload gets `s` as typed, so the warnings say it that way.
+    const errs = body(find(r, "+Errors").?.w, &buf);
+    try testing.expect(std.mem.indexOf(u8, errs, "can't open missing.txt: file does not exist\n") != null);
+    try testing.expect(std.mem.indexOf(u8, errs, "can't open ../gone/x.txt: file does not exist\n") != null);
+    try testing.expect(std.mem.indexOf(u8, errs, "/sub/missing.txt") == null);
+}
+
+test "Load.errstr: namespace errors read as the kernel's text, not Zig names (#84)" {
+    const Load = core.Load;
+    try testing.expectEqualStrings("file does not exist", Load.errstr(error.NotFound));
+    try testing.expectEqualStrings("file does not exist", Load.errstr(error.NotMounted));
+    try testing.expectEqualStrings("file name syntax", Load.errstr(error.BadPath));
+    try testing.expectEqualStrings("file does not exist", Load.errstr(error.FileDoesNotExist)); // 9P Rerror text
+    try testing.expectEqualStrings("permission denied", Load.errstr(error.PermissionDenied));
 }

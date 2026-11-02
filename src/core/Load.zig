@@ -67,6 +67,10 @@ w: *Window,
 /// outlive every job this Load starts, which is why it lives here and not in
 /// the caller's frame.
 name: []u8,
+/// The name as the user gave it, when that is not `name`: a file argument
+/// typed relative to the working directory (acme.c:299 passes `s` as typed to
+/// `textload`, so text.c:216's `can't open %s` names it that way, #84). Owned.
+shown: ?[]u8 = null,
 /// The `:addr` text of the expansion that opened this window (`e->a0..e->a1`,
 /// look.c:874-893), evaluated against the loaded body once it is in place.
 /// Owned.
@@ -100,7 +104,7 @@ pub const GetTail = struct { samename: bool, addr: getaddr.TextAddr };
 // ==========================================================================
 
 /// Begin loading `name` into `w` (the `textload(t, 0, e->bname, 1)` of
-/// look.c:857 / acme.c:298). `name` and `addr` are COPIED. Fails only on OOM or
+/// look.c:857 / acme.c:299). `name` and `addr` are COPIED. Fails only on OOM or
 /// a syntactically impossible path; every other failure — the path does not
 /// exist, the server refuses it — arrives later as the `can't open` warning
 /// text.c:216 emits. Returns the new Load so a caller can attach a `get` tail
@@ -113,11 +117,27 @@ pub fn start(
     a0: ?[]const u21,
     jump: bool,
 ) Text.Error!?*Load {
+    return startAs(ed, w, name, null, a0, jump);
+}
+
+/// `start`, with the warnings naming the file as `shown` (the user's own
+/// spelling of `name`; null is `name`). acme.c:299's `textload(&w->body, 0,
+/// s, 1)` takes the argument as typed while the window is named by its
+/// rooted path (acme.c:293-298), so text.c:216 says `can't open s` (#84).
+pub fn startAs(
+    ed: *Editor,
+    w: *Window,
+    name: []const u8,
+    shown: ?[]const u8,
+    a0: ?[]const u21,
+    jump: bool,
+) Text.Error!?*Load {
     const a = ed.allocator;
+    const said = shown orelse name;
     const ns = ed.ns orelse {
         // No mount table at all (headless harnesses): the C would have failed
         // its `open`, so say exactly what it says.
-        ed.warning("can't open {s}: no namespace\n", .{name});
+        ed.warning("can't open {s}: no namespace\n", .{said});
         return null;
     };
 
@@ -140,10 +160,13 @@ pub fn start(
         self.addr = try a.dupe(u21, ap);
     }
     errdefer if (self.addr) |ap| a.free(ap);
+    if (shown) |s| self.shown = try a.dupe(u8, s);
+    errdefer if (self.shown) |s| a.free(s);
 
     self.job = .{ .stat = nsjob.StatJob.init(ns, self.name) catch |e| {
-        ed.warning("can't open {s}: {s}\n", .{ name, errstr(e) });
+        ed.warning("can't open {s}: {s}\n", .{ said, errstr(e) });
         a.free(self.name);
+        if (self.shown) |s| a.free(s);
         if (self.addr) |ap| a.free(ap);
         a.destroy(self);
         return null;
@@ -160,6 +183,7 @@ pub fn deinit(self: *Load) void {
     }
     self.data.deinit(self.allocator);
     self.allocator.free(self.name);
+    if (self.shown) |s| self.allocator.free(s);
     if (self.addr) |ap| self.allocator.free(ap);
     self.* = undefined;
 }
@@ -277,17 +301,33 @@ pub fn step(self: *Load, ed: *Editor) Text.Error!void {
 /// `textload` (look.c:857 ignores the return value for everything but
 /// `file->unread`).
 fn fail(self: *Load, ed: *Editor, e: anyerror) void {
-    ed.warning("can't open {s}: {s}\n", .{ self.name, errstr(e) });
+    ed.warning("can't open {s}: {s}\n", .{ self.label(), errstr(e) });
     self.finished = true;
 }
 
+/// The name the warnings use: as the user gave it (`shown`), else `name`.
+fn label(self: *const Load) []const u8 {
+    return self.shown orelse self.name;
+}
+
 /// acme's `%r`: the server's own Rerror text for a 9P error (e.g. hostfs's
-/// "not supported" on a fifo, #60), else the namespace-level error's name.
+/// "not supported" on a fifo, #60). The namespace's and the transport's own
+/// failures get the Plan 9 kernel's text for the same condition (#84), so a
+/// warning never shows a Zig error name for them.
 pub fn errstr(e: anyerror) []const u8 {
     inline for (@typeInfo(ninep.errors.OpError).error_set.?) |f| {
         if (e == @field(anyerror, f.name)) return ninep.errors.errorString(@field(ninep.errors.OpError, f.name));
     }
-    return @errorName(e);
+    return switch (e) {
+        // chan.c's Enonexist / Edoesnotexist: nothing mounted there, or no
+        // union member has it.
+        error.NotFound, error.NotMounted => "file does not exist",
+        error.BadPath => "file name syntax", // Efilename
+        error.TooBig => "read or write too large", // Etoobig
+        error.Closed => "i/o on hungup channel", // Ehungup
+        error.ProtocolError, error.MessageTooBig, error.FrameTooBig, error.WouldBlock => "i/o error", // Eio
+        else => @errorName(e),
+    };
 }
 
 /// The non-directory arm (text.c:249-253 `fileload`): replace the body with the
@@ -303,7 +343,7 @@ fn installFile(self: *Load, ed: *Editor) Text.Error!void {
     if (self.data.items.len != 0) {
         const clean = try sanitize(self.allocator, self.data.items);
         defer self.allocator.free(clean.bytes);
-        if (clean.replaced) ed.warning("{s}: invalid UTF-8 replaced\n", .{self.name});
+        if (clean.replaced) ed.warning("{s}: invalid UTF-8 replaced\n", .{self.label()});
         try t.insertAt(0, clean.bytes, true);
     }
     // text.c:277-284 `setqid`: remember what the file on disk looked like —

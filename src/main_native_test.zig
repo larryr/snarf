@@ -127,9 +127,14 @@ pub const Rig = struct {
         try r.bootWith(&.{});
     }
 
-    /// `boot` with command-line file arguments (already rooted names).
+    /// `boot` with command-line file arguments, as typed in `/`.
     pub fn bootWith(r: *Rig, files: []const []const u8) !void {
-        try main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, files);
+        try r.bootIn("/", files);
+    }
+
+    /// `boot` with command-line file arguments typed in the directory `cwd`.
+    pub fn bootIn(r: *Rig, cwd: []const u8, files: []const []const u8) !void {
+        try main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, cwd, files);
         r.app.editor.session.home = "/";
         r.app.host_tree.recovery.tmp_dir = r.root; // as main sets $TMPDIR
         try r.app.conn.armMouse();
@@ -376,7 +381,7 @@ test "main_native: a boot that fails part-way is torn down by the same shutdown 
     defer r.destroy();
     r.a.free(r.root);
     r.root = try r.a.dupeZ(u8, "/nonexistent/snarf-58-host-root");
-    try testing.expectError(error.FileNotFound, main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, &.{}));
+    try testing.expectError(error.FileNotFound, main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, "/", &.{}));
     try testing.expect(r.app.built.self_tree and !r.app.built.host_fs);
     main_native.shutdown(r.app);
     try testing.expectEqualStrings("", r.log.written()); // nothing to discard
@@ -390,7 +395,7 @@ test "main_native: main defers shutdown before boot, and conn.deinit after it (#
     const src = @embedFile("main_native.zig");
     const conn_deinit = std.mem.indexOf(u8, src, "defer a.conn.deinit();").?;
     const defer_shutdown = std.mem.indexOf(u8, src, "defer shutdown(a);").?;
-    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\", files.items);").?;
+    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\", cwd, cmdline.files);").?;
     try testing.expect(conn_deinit < defer_shutdown);
     try testing.expect(defer_shutdown < call_boot);
     try testing.expect(std.mem.indexOf(u8, src, "defer a.tree.deinit();") == null);

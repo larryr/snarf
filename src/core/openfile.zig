@@ -107,11 +107,18 @@ pub fn openFile(ed: *Editor, t: ?*Text, e: Expand) Text.Error!*Window {
 /// `c` (the C's `coladd(c, nil, nil, -1)`), named absolutely, then loaded.
 /// `winresize`/`textscrdraw` (acme.c:299-300) are `place.mintWindow`'s job here.
 pub fn readFile(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window {
+    return readFileAs(ed, c, name, null);
+}
+
+/// `readFile`, with `typed` the argument as the user typed it (acme's `s`):
+/// the window is named by `name`, but `textload` gets `s` (acme.c:299), so
+/// its `can't open` warning names the file as typed (#84). Null is `name`.
+pub fn readFileAs(ed: *Editor, c: *Column, name: []const u8, typed: ?[]const u8) Text.Error!*Window {
     const a = ed.allocator;
     const abs = try absName(a, name); // acme.c:291-294 + cleanrname
     defer a.free(abs);
     const w = try place.mintWindow(ed, c, -1, abs); // acme.c:290 + :295 winsetname
-    _ = try Load.start(ed, w, abs, null, false); // acme.c:296 textload
+    _ = try Load.startAs(ed, w, abs, typed, null, false); // acme.c:299 textload(&w->body, 0, s, 1)
     ed.needs_flush = true;
     return w;
 }
