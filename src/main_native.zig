@@ -154,9 +154,12 @@ pub fn main(init: std.process.Init) !void {
         gpa,
         init.environ_map,
         if (exe_path) |p| std.fs.path.dirname(p) else null,
-        .{ .ctx = &io, .exists = existsOnDisk },
+        .{ .ctx = &io, .check = checkOnDisk },
     );
     defer dd_path.deinit(gpa);
+    // #78: a derived candidate that exists but can't run, and why.
+    for (dd_path.skipped) |k| if (k) |x|
+        std.debug.print("snarf: devdraw: skipping {s} ({s}): {s}\n", .{ x.path, host.DevdrawPath.sourceName(x.source), x.verdict.reason() });
     // R-P18-9: printed once, before the spawn's outcome is known.
     std.debug.print("snarf: devdraw: {s} ({s})\n", .{ dd_path.path, dd_path.describe() });
 
@@ -214,13 +217,18 @@ pub fn running(a: *App) bool {
     return !a.conn.isClosed() and !a.editor.exitReady();
 }
 
-/// `DevdrawPath.Probe` over the real file system: an `access(2)` existence
-/// check through `Io.Dir.access` (no open, no write). Relative `$PLAN9` values
-/// resolve against the working directory, as the spawn itself would.
-fn existsOnDisk(ctx: *anyopaque, path: []const u8) bool {
+/// `DevdrawPath.Probe` over the real file system: `access(2)` for existence
+/// and then execute permission, plus a stat for "regular file" (#78), all
+/// through `Io.Dir` (no open, no write). Relative `$PLAN9` values resolve
+/// against the working directory, as the spawn itself would.
+fn checkOnDisk(ctx: *anyopaque, path: []const u8) host.DevdrawPath.Verdict {
     const io: *const std.Io = @ptrCast(@alignCast(ctx));
-    std.Io.Dir.cwd().access(io.*, path, .{}) catch return false;
-    return true;
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io.*, path, .{}) catch return .absent;
+    const st = cwd.statFile(io.*, path, .{}) catch return .absent;
+    if (st.kind != .file) return .not_a_file;
+    cwd.access(io.*, path, .{ .execute = true }) catch return .not_executable;
+    return .runnable;
 }
 
 /// The scheme `-colors=NAME` selects (last one wins), or `Palette.default`.
