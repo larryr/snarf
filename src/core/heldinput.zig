@@ -20,8 +20,12 @@
 //!
 //! The one liberty: consecutive pointer moves with no button held are
 //! coalesced to the last (only its position can matter), so a long load
-//! cannot grow the queue without bound while the mouse wanders. Button and
-//! wheel samples are kept one for one.
+//! cannot grow the queue without bound while the mouse wanders. Only a BARE
+//! move is ever replaced: a queued no-button sample whose previous mouse
+//! sample also had no button. A no-button sample after a held button is a
+//! release, and it is kept, or a B1 click followed by a move would replay as
+//! a sweep and a B2 command would be lost (SnarfDev2, PR #85 review). Samples
+//! with a button held (drags, chords) and wheel samples are kept one for one.
 //!
 //! Imports: `std` + sibling core files (S-07 §6).
 const std = @import("std");
@@ -44,13 +48,28 @@ pub fn hold(ed: *Editor, ev: Held) error{OutOfMemory}!bool {
     const q = &ed.held_input;
     if (ev == .mouse and ev.mouse.buttons == 0 and q.items.len != 0) {
         const last = &q.items[q.items.len - 1];
-        if (last.* == .mouse and last.mouse.buttons == 0) {
+        if (last.* == .mouse and isBareMove(q.items[0 .. q.items.len - 1], last.mouse)) {
             last.* = ev; // a bare move replaces a bare move
             return true;
         }
     }
     try q.append(ed.allocator, ev);
     return true;
+}
+
+/// `m` (queued after `before`) is a move with no button held and no button
+/// change: it has no buttons, and neither has the mouse sample queued before
+/// it. With no earlier sample in the queue the state it changed from is not
+/// known here, so it counts as a change and is kept: the queue still grows by
+/// at most one sample per button change.
+fn isBareMove(before: []const Held, m: Editor.MouseEvent) bool {
+    if (m.buttons != 0) return false;
+    var i = before.len;
+    while (i > 0) {
+        i -= 1;
+        if (before[i] == .mouse) return before[i].mouse.buttons == 0;
+    }
+    return false;
 }
 
 /// Hand the held events to the editor, in arrival order, while no load is in

@@ -150,3 +150,114 @@ test "#83: with no load in flight a key is handled at once" {
     try testing.expectEqual(@as(usize, 7), w.body.file.buffer.len());
     try testing.expectEqual(@as(usize, 0), r.ed.held_input.items.len);
 }
+
+// ---- mouse buttons during a load (SnarfDev2, PR #85 review) ----
+// acme hands every mouse sample to the editor in order once row.lk is free,
+// so the same samples during a load must end up the same as with no load in
+// flight. Each test runs them twice: on a rig whose file has loaded (live),
+// and during the load on a second rig with the same layout (held).
+
+const Point = draw.proto.Point;
+
+fn at(p: Point, buttons: u8) Editor.MouseEvent {
+    return .{ .x = p.x, .y = p.y + 2, .buttons = buttons, .msec = 0 };
+}
+
+const Pair = struct {
+    live: *Rig,
+    held: *Rig,
+    lw: *Window,
+    hw: *Window,
+
+    fn create(content: []const u8) !Pair {
+        const live = try Rig.create();
+        errdefer live.destroy();
+        const held = try Rig.create();
+        errdefer held.destroy();
+        try live.m.tree.put("f", content);
+        try held.m.tree.put("f", content);
+        const lw = try live.open("/m/f");
+        try live.settle();
+        const hw = try held.open("/m/f");
+        return .{ .live = live, .held = held, .lw = lw, .hw = hw };
+    }
+
+    fn destroy(p: Pair) void {
+        p.held.destroy();
+        p.live.destroy();
+    }
+
+    /// The samples, live and then held during the load; the held rig is
+    /// settled after them.
+    fn run(p: Pair, evs: []const Editor.MouseEvent) !void {
+        for (evs) |e| try p.live.ed.handleMouse(e);
+        try p.live.settle();
+        try testing.expect(p.held.ed.loads.items.len != 0);
+        for (evs) |e| try p.held.ed.handleMouse(e);
+        try testing.expectEqual(@as(usize, 0), p.hw.body.file.buffer.len()); // still held
+        try p.held.settle();
+    }
+
+    /// A point in the LOADED body (the live rig's), at rune `q`.
+    fn body(p: Pair, q: usize) Point {
+        return p.lw.body.fr.ptOfChar(q - p.lw.body.org);
+    }
+};
+
+test "#85 review: a B1 click then a move during a load is a click, not a sweep" {
+    const p = try Pair.create("hello world\nsecond line\n");
+    defer p.destroy();
+    const c = p.body(2);
+    const away = p.body(9);
+    try p.run(&.{ at(c, 0), at(c, 1), at(c, 0), at(away, 0), at(p.body(18), 0) });
+    try testing.expectEqual(@as(usize, 2), p.lw.body.q0); // the live reference
+    try testing.expectEqual(@as(usize, 2), p.lw.body.q1);
+    try testing.expectEqual(p.lw.body.q0, p.hw.body.q0); // the caret lands at the click
+    try testing.expectEqual(p.lw.body.q1, p.hw.body.q1);
+}
+
+test "#85 review: a B2 command then a move during a load runs (Newcol)" {
+    const p = try Pair.create("hello\n");
+    defer p.destroy();
+    const ncol = p.live.tree.row.col.items.len;
+    const newcol = p.live.tree.row.tag.fr.ptOfChar(2); // inside "Newcol"
+    const away = p.body(3);
+    try p.run(&.{ at(newcol, 0), at(newcol, 2), at(newcol, 0), at(away, 0), at(p.body(1), 0) });
+    try testing.expectEqual(ncol + 1, p.live.tree.row.col.items.len); // the live reference
+    try testing.expectEqual(ncol + 1, p.held.tree.row.col.items.len); // the command ran
+}
+
+test "#85 review: a B1 drag during a load selects what the same drag selects live" {
+    const p = try Pair.create("hello world\nsecond line\n");
+    defer p.destroy();
+    const b = 1;
+    try p.run(&.{
+        at(p.body(1), 0),
+        at(p.body(1), b), // B1 down
+        at(p.body(3), b),
+        at(p.body(5), b),
+        at(p.body(15), b), // onto the second line
+        at(p.body(15), 0), // B1 up
+        at(p.body(20), 0),
+        at(p.body(21), 0),
+    });
+    try testing.expectEqual(@as(usize, 1), p.lw.body.q0); // the live reference
+    try testing.expectEqual(@as(usize, 15), p.lw.body.q1);
+    try testing.expectEqual(p.lw.body.q0, p.hw.body.q0);
+    try testing.expectEqual(p.lw.body.q1, p.hw.body.q1);
+}
+
+test "#85 review: bare moves still coalesce, but a release is never replaced" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.m.tree.put("f", "hello\n");
+    const w = try r.open("/m/f");
+    const pt = Point{ .x = w.body.fr.r.min.x + 2, .y = w.body.fr.r.min.y + 2 };
+    try r.ed.handleMouse(at(pt, 1));
+    try r.ed.handleMouse(at(pt, 0)); // the release
+    try r.ed.handleMouse(at(pt, 0)); // a move after it: kept apart
+    try testing.expectEqual(@as(usize, 3), r.ed.held_input.items.len);
+    for (0..1000) |_| try r.ed.handleMouse(at(pt, 0)); // bare moves: one slot
+    try testing.expectEqual(@as(usize, 3), r.ed.held_input.items.len);
+    try r.settle();
+}
