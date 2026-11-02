@@ -210,6 +210,7 @@ fn open(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) OpError!
     const acc = mode & 3;
     const wants_write = acc == msg.OWRITE or acc == msg.ORDWR or (mode & msg.OTRUNC) != 0;
     const qid = try self.fs.qidOf(node.rel);
+    if (!try self.fs.isPlain(node.rel)) return error.NotSupported; // device/fifo/socket (#60, #76)
     if (qid.qtype.dir) {
         if (wants_write) return error.PermissionDenied;
     } else if ((mode & msg.OTRUNC) != 0) {

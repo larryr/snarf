@@ -93,8 +93,8 @@ rbuf: []u8,
 /// Owned write buffer, `max_msize` bytes.
 wbuf: []u8,
 pump: ?Pump = null,
-/// Raw ename of the most recent unrecognized Rerror (error.Other), so the
-/// caller can recover the server's original text via `lastErrorString`.
+/// Raw ename of the most recent Rerror (any kind, not only error.Other), so
+/// the caller can recover the server's original text via `lastErrorString`.
 last_rerror_buf: [128]u8 = undefined,
 last_rerror_len: u8 = 0,
 
@@ -245,20 +245,19 @@ fn readFrame(self: *Client) Error![]u8 {
     }
 }
 
-/// Map a received Rerror string to a typed error; for the catch-all error.Other
-/// stash the raw text (truncated to 128 bytes) BEFORE returning it. `pub` for
+/// Map a received Rerror string to a typed error, stashing the raw text
+/// (truncated to 128 bytes) BEFORE returning it — for every Rerror, so a
+/// recognized one (e.g. "not supported", #60) is readable too. `pub` for
 /// `tickets.zig` only (it maps an Rerror into a ticket's slot).
 pub fn mapRerror(self: *Client, ename: []const u8) Error {
     const e = errors.errorFromString(ename);
-    if (e == error.Other) {
-        const m = @min(ename.len, self.last_rerror_buf.len);
-        @memcpy(self.last_rerror_buf[0..m], ename[0..m]);
-        self.last_rerror_len = @intCast(m);
-    }
+    const m = @min(ename.len, self.last_rerror_buf.len);
+    @memcpy(self.last_rerror_buf[0..m], ename[0..m]);
+    self.last_rerror_len = @intCast(m);
     return e;
 }
 
-/// The raw text of the most recent error.Other Rerror (empty if none).
+/// The raw text of the most recent Rerror (empty if none).
 pub fn lastErrorString(self: *const Client) []const u8 {
     return self.last_rerror_buf[0..self.last_rerror_len];
 }

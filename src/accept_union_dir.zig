@@ -48,7 +48,7 @@ const Stat = ninep.stat;
 const host_mtpt = "/";
 
 /// Flip to true in the PR that lands #60.
-const union_dir_landed = false;
+const union_dir_landed = true;
 
 /// The union cases only exist while the host is mounted at `/`.
 fn shadowing() bool {

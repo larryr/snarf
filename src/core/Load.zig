@@ -142,7 +142,7 @@ pub fn start(
     errdefer if (self.addr) |ap| a.free(ap);
 
     self.job = .{ .stat = nsjob.StatJob.init(ns, self.name) catch |e| {
-        ed.warning("can't open {s}: {s}\n", .{ name, @errorName(e) });
+        ed.warning("can't open {s}: {s}\n", .{ name, errstr(e) });
         a.free(self.name);
         if (self.addr) |ap| a.free(ap);
         a.destroy(self);
@@ -277,8 +277,17 @@ pub fn step(self: *Load, ed: *Editor) Text.Error!void {
 /// `textload` (look.c:857 ignores the return value for everything but
 /// `file->unread`).
 fn fail(self: *Load, ed: *Editor, e: anyerror) void {
-    ed.warning("can't open {s}: {s}\n", .{ self.name, @errorName(e) });
+    ed.warning("can't open {s}: {s}\n", .{ self.name, errstr(e) });
     self.finished = true;
+}
+
+/// acme's `%r`: the server's own Rerror text for a 9P error (e.g. hostfs's
+/// "not supported" on a fifo, #60), else the namespace-level error's name.
+pub fn errstr(e: anyerror) []const u8 {
+    inline for (@typeInfo(ninep.errors.OpError).error_set.?) |f| {
+        if (e == @field(anyerror, f.name)) return ninep.errors.errorString(@field(ninep.errors.OpError, f.name));
+    }
+    return @errorName(e);
 }
 
 /// The non-directory arm (text.c:249-253 `fileload`): replace the body with the

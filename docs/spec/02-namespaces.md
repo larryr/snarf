@@ -104,14 +104,26 @@ it up, and a listing of `/mnt` reads `opfs/ snarf-self/`. Not yet mounted: `/dev
 `/dev/dom`, the browser feature files and `/mnt/host`. (`/mnt/snarf-self/ns` itself is
 SERVED as of phase 13b; `/mnt/opfs` as of phase 14b.)
 
+> Revision log: 2026-11-02 (#60, SnarfProdd rulings in `notes/snarfprod/decisions/`) —
+> **native `/` never hides host directories.** A listing of `/`, `/dev` or `/mnt` (and
+> only those, while the host is mounted at `/`) names each entry once: snarf's records
+> first, and on a collision snarf's record wins; then the host's remaining entries. A
+> name under `/dev` that snarf does not serve falls through to the host's `/dev`
+> (`/dev/kbd`, `/dev/mouse` on the host stay reachable only via `/mnt/host`). No nested
+> union: `/dev/draw` stays snarf-only. Creating a new file in a shadowed folder creates
+> it on the host. Host device nodes, fifos and sockets are listed and stat-able but
+> opening them fails with "not supported". "Snarf first" is the raw 9P order only;
+> folder windows keep acme's sorted order. Every other union keeps R-9P-03 (no dedup).
+>
 > Revision log: 2026-10-26 (phase 20) — **native root = the host file system** (decided
 > 2026-10-26 by Larry, contract `agents/contracts/phase20-native-save.md`). `snarf-native`
 > serves the real `/` in-process (`src/hostfs/HostTree.zig` over `HostFs`) and mounts it at
 > **`/`** — the fallthrough: longest prefix keeps `/dev`, `/dev/draw` and
 > `/mnt/snarf-self` winning — and again at **`/mnt/host`** (same client and root fid, the
 > §1.3 row's continuity). Native's boot directory window therefore lists the REAL root;
-> `dev/`/`mnt/` are mount-table prefixes, not host entries, so they are not in that
-> listing. Tags show bare paths (`/Users/larry/notes.txt`), as in acme. Put is atomic on
+> `dev/` and `mnt/` appear in that listing once each, as snarf's records, with the host's
+> own `dev`/`mnt` merged under them (*corrected 2026-11-02, #60* — this line used to say
+> they were not in the listing at all; see the #60 entry above). Tags show bare paths (`/Users/larry/notes.txt`), as in acme. Put is atomic on
 > this server (§4 note). The browser's namespace and this section's browser table are
 > unchanged.
 >

@@ -19,7 +19,10 @@
 //!  * `ListDirJob` is `sysfile.c:323-380`'s `unionread` — synthetic children
 //!    first, then each member's own stream concatenated in bind order, "error
 //!    causes component of union to be skipped" (sysfile.c:340), no
-//!    de-duplication (R-P12d-2).
+//!    de-duplication (R-P12d-2) outside #60's `nsdir.dedupScope`. One
+//!    difference from `DirReader`: when no member read anything and one failed
+//!    for a reason other than "does not exist" (an unreadable host directory),
+//!    the job returns that error so B3 warns as acme does.
 //!
 //! RULING R-P13a-2 (pinned by tests): over the same fixtures, `runSync(WalkJob)`
 //! lands on the same member as `nsdir.walk` and `runSync(ListDirJob)` yields the
@@ -144,6 +147,11 @@ pub const WalkJob = struct {
     /// The union at the resolved mount point, in bind order. Borrowed from the
     /// mount table.
     targets: []const Target = &.{},
+    /// #60: the host-at-`/` targets tried after `targets` (`nsdir.shadowFall`),
+    /// walking `alt_rem` (the path minus its '/'). Swapped in once `targets`
+    /// is exhausted; `initPreferHost` puts them first instead.
+    alt: []const Target = &.{},
+    alt_rem: []const u8 = "",
     /// Did anything in the table match at all? Decides NotFound vs NotMounted.
     resolved: bool = false,
     /// False for `ListDirJob`'s per-member walks: `unionread` opens each member
@@ -182,6 +190,25 @@ pub const WalkJob = struct {
         self.resolved = true;
         self.targets = res.entry.targets.items;
         self.n = nsdir.splitComponents(res.remainder, &self.names) orelse return error.BadPath;
+        if (nsdir.shadowFall(ns, res.entry)) |root| {
+            self.alt = root.targets.items;
+            self.alt_rem = self.path[1..];
+        }
+        return self;
+    }
+
+    /// `init`, but where a path under a top-level snarf mount also exists on
+    /// the host, the HOST's copy is walked first — the parent of a new file
+    /// in a shadowed folder, which #60 ruling #5 creates on the host.
+    pub fn initPreferHost(ns: *const Namespace, path_in: []const u8) Error!WalkJob {
+        var self = try init(ns, path_in);
+        if (self.alt.len == 0) return self;
+        const res = ns.resolve(self.path) catch unreachable; // init resolved it
+        const own_targets = self.targets;
+        self.targets = self.alt;
+        self.n = nsdir.splitComponents(self.alt_rem, &self.names) orelse return error.BadPath;
+        self.alt = own_targets;
+        self.alt_rem = res.remainder;
         return self;
     }
 
@@ -203,6 +230,13 @@ pub const WalkJob = struct {
         switch (self.phase) {
             .done => return .done,
             .next_member => {
+                if (self.i >= self.targets.len and self.alt.len != 0) {
+                    // #60: snarf's members lack it — try the host's (or back).
+                    self.targets = self.alt;
+                    self.alt = &.{};
+                    self.n = nsdir.splitComponents(self.alt_rem, &self.names) orelse return error.BadPath;
+                    self.i = 0;
+                }
                 if (self.i >= self.targets.len) {
                     // Every member failed (or there were none): a path that is
                     // only a PREFIX of mounted entries is a synthetic
