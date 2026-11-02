@@ -95,3 +95,42 @@ Commit `c1d13ea` (pushed, gates green: 932/935, 3 skipped; smoke 40/0). acme.c:2
 readfile: a window per named file/dir (WPERCOL 8 per column, guide → last column), a
 missing file → empty named window (+ acme's "can't open" line in +Errors), relative names
 rooted at the process cwd; ARGBEGIN split (flags end at first non-flag or `--`).
+
+## #60 — union directories at native `/` (Fixes #60)
+
+Commit `7a2d7fe` (pushed, gates green: 963/965, 2 skipped = UD-22 root-only + 1 existing;
+smoke 40/0), on top of SnarfDev2's UD suite from PR #75 cherry-picked as `a61b4f8` and
+`9263591`; `union_dir_landed = true`. Per the SnarfProdd rulings of 2026-11-02:
+- `nsdir.shadowFall`: a name under the `/dev` mount that snarf doesn't serve falls through to
+  the host at `/` (snarf's members first → snarf wins a collision; host kbd/mouse only via
+  `/mnt/host`). Not for `/dev/draw` (no nested union) or any other prefix.
+- `nsdir.dedupScope`: exactly `/`, `/dev`, `/mnt` (the ruling's list, `shadow_dirs`), only
+  while the host is at `/`. Other unions keep R-9P-03 (UD-18). DirReader and ListDirJob both
+  dedup (R-P13a-2); windows keep dircmp order.
+- Create in a shadowed folder → host (`WalkJob.initPreferHost` for the parent walk).
+- hostfs: device nodes/fifos/sockets listed + stat-able with host permission bits; open →
+  new `OpError.NotSupported` ("not supported"). Load's "can't open" prints the wire string.
+- `Client.lastErrorString` now keeps every Rerror's text (was error.Other only).
+- ListDirJob: nothing read + a member failure other than "does not exist" → that error, so
+  B3 on an unreadable host dir warns (UD-16). `DirReader` still skips silently (raw 9P).
+- S-02 (docs/spec/02-namespaces.md) phase-20 revision-log line corrected + a #60 entry.
+
+**#79 check** (draw connection under `/dev/draw/`): not a listing/union problem. The native
+`/dev/draw` server (`src/host/devdraw/dev_draw.zig:233`) returns 0 bytes for every directory
+read (`.root, .conn => return 0`), although walk resolves `new` and the live connection
+directory (`isConnName`, = the editor's own connection). So B3 on `/dev/draw/` is empty
+even while snarf's own connection is open; Plan 9 would list `new` and `1/`. Not changed.
+
+## #77 — --help / --version (Fixes #77)
+
+Commit `296162f` (gates green: 964/966; smoke 40/0). `native_args.infoFlag` (flags only;
+`-h` = `--help`); handled before devdraw lookup/spawn; stdout, exit 0. Version =
+`-Dversion=` or `git describe --tags --always --dirty` at build time ("unknown" outside a
+checkout), via a `native_options` build module. release.yml unchanged.
+
+## #78 — non-runnable bundled devdraw (Fixes #78)
+
+Commit `899d2fa` (gates green: 965/967; smoke 40/0). `DevdrawPath.Probe` returns a
+`Verdict`; a bundled/`$PLAN9` candidate that exists but isn't a runnable regular file is
+recorded in `skipped` and logged (`snarf: devdraw: skipping <path> (<source>): <reason>`),
+then lookup falls through. Checked by hand with a 0644 `devdraw` beside the binary.
