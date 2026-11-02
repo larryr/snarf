@@ -36,6 +36,7 @@ const input_pump = @import("input_pump.zig");
 const ns_boot = @import("ns_boot.zig");
 const native_shutdown = @import("native_shutdown.zig");
 const native_args = @import("native_args.zig");
+const native_options = @import("native_options");
 
 const Conn = host.Conn;
 const DevDraw9 = host.dev_draw.DevDraw9;
@@ -117,6 +118,15 @@ pub fn main(init: std.process.Init) !void {
         while (it.next()) |arg| try argv.append(gpa, arg);
     }
     const cmdline = native_args.split(argv.items);
+    // #77: before anything touches devdraw.
+    if (native_args.infoFlag(cmdline.flags)) |info| {
+        const out = switch (info) {
+            .help => native_args.usage,
+            .version => "snarf " ++ native_options.version ++ "\n",
+        };
+        std.Io.File.stdout().writeStreamingAll(init.io, out) catch {};
+        return;
+    }
     const pal = colorsFromFlags(cmdline.flags) orelse std.process.exit(2);
     // acme.c:261-266: each file argument, rooted at the working directory
     // (acme's `wdir`, acme.c:293-294).

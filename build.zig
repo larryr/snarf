@@ -131,6 +131,11 @@ pub fn build(b: *std.Build) void {
     //     forks, no host #ifdefs. The wasm artifact above is also named `snarf`;
     //     the two never meet on disk: it installs to zig-out/www/snarf.wasm,
     //     this one to zig-out/bin/snarf. ---
+    // #77: `snarf --version` prints this. `-Dversion=` wins; otherwise
+    // `git describe` (the release workflow builds at the tag), else "unknown".
+    const native_opts = b.addOptions();
+    native_opts.addOption([]const u8, "version", b.option([]const u8, "version", "Version string `snarf --version` prints (default: git describe)") orelse gitVersion(b));
+    const native_opts_mod = native_opts.createModule();
     const native = b.addExecutable(.{
         .name = "snarf",
         .root_module = b.createModule(.{
@@ -144,6 +149,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "dev", .module = dev },
                 .{ .name = "host", .module = host },
                 .{ .name = "hostfs", .module = hostfs },
+                .{ .name = "native_options", .module = native_opts_mod },
             },
         }),
     });
@@ -281,7 +287,17 @@ pub fn build(b: *std.Build) void {
         .{ .name = "dev", .module = dev },
         .{ .name = "host", .module = host },
         .{ .name = "hostfs", .module = hostfs },
+        .{ .name = "native_options", .module = native_opts_mod },
     });
+}
+
+/// `git describe --tags --always --dirty` in the build root, or "unknown"
+/// (no git, not a checkout). Only `snarf --version` reads it (#77).
+fn gitVersion(b: *std.Build) []const u8 {
+    var code: u8 = 0;
+    const out = b.runAllowFail(&.{ "git", "-C", b.build_root.path orelse ".", "describe", "--tags", "--always", "--dirty" }, &code, .ignore) catch return "unknown";
+    const v = std.mem.trim(u8, out, " \n\r\t");
+    return if (v.len == 0) "unknown" else v;
 }
 
 /// Build a test executable rooted at `root` with exactly `imports` visible, and

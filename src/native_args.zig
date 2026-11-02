@@ -11,6 +11,36 @@
 //! is a file, even one that starts with `-`.
 const std = @import("std");
 
+/// `--help` / `--version` (#77): print and exit 0 before devdraw is
+/// started, so they work with no display. Only the flag arguments count; the
+/// first one present wins.
+pub const Info = enum { help, version };
+
+pub fn infoFlag(flags: []const []const u8) ?Info {
+    for (flags) |f| {
+        if (std.mem.eql(u8, f, "--help") or std.mem.eql(u8, f, "-h")) return .help;
+        if (std.mem.eql(u8, f, "--version")) return .version;
+    }
+    return null;
+}
+
+/// The `--help` text (stdout). acme's own usage line is acme.c:118-121.
+pub const usage =
+    \\usage: snarf [-colors=NAME] [file ...]
+    \\
+    \\Snarf, a port of Plan 9 acme. Opens a window for each file or directory
+    \\named (a missing file gets an empty window with that name).
+    \\
+    \\  -colors=NAME  color scheme: acme, monadnock, sunapee or whiteface
+    \\  --help, -h    print this and exit
+    \\  --version     print the version and exit
+    \\  --            end of flags; every later argument is a file
+    \\
+    \\Display: snarf runs a plan9port devdraw — $DEVDRAW, else the devdraw
+    \\beside this executable, else $PLAN9/bin/devdraw, else devdraw on $PATH.
+    \\
+;
+
 /// `#define WPERCOL 8` (acme.c:240): file arguments per column.
 pub const wpercol = 8;
 
@@ -98,4 +128,14 @@ test "native_args: relative names root at the working directory (acme.c:293-294)
     const r2 = try absolute(a, "/home/u", "/etc/hosts");
     defer a.free(r2);
     try testing.expectEqualStrings("/etc/hosts", r2);
+}
+
+test "native_args: --help/-h and --version are found among the flags only (#77)" {
+    try testing.expectEqual(@as(?Info, .help), infoFlag(split(&.{"--help"}).flags));
+    try testing.expectEqual(@as(?Info, .help), infoFlag(split(&.{ "-colors=acme", "-h" }).flags));
+    try testing.expectEqual(@as(?Info, .version), infoFlag(split(&.{"--version"}).flags));
+    try testing.expectEqual(@as(?Info, .version), infoFlag(split(&.{ "--version", "--help" }).flags));
+    try testing.expectEqual(@as(?Info, null), infoFlag(split(&.{ "a.c", "--help" }).flags)); // a file named --help
+    try testing.expectEqual(@as(?Info, null), infoFlag(split(&.{ "--", "--version" }).flags));
+    try testing.expectEqual(@as(?Info, null), infoFlag(split(&.{"-colors=acme"}).flags));
 }
