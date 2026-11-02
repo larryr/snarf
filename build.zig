@@ -1,5 +1,6 @@
 const std = @import("std");
 const devdraw_build = @import("build/devdraw.zig");
+const version = @import("build/version.zig");
 
 // Snarf build graph (S-06 §3). `zig build` is the ONLY build entry point and is
 // identical on macOS and Linux (ADR-0001). No node/npm, no Emscripten, no WASI.
@@ -131,10 +132,11 @@ pub fn build(b: *std.Build) void {
     //     forks, no host #ifdefs. The wasm artifact above is also named `snarf`;
     //     the two never meet on disk: it installs to zig-out/www/snarf.wasm,
     //     this one to zig-out/bin/snarf. ---
-    // #77: `snarf --version` prints this. `-Dversion=` wins; otherwise
-    // `git describe` (the release workflow builds at the tag), else "unknown".
+    // #77: `snarf --version` prints this. `-Dversion=` wins; otherwise the
+    // latest tag plus, unless this is a clean build of a release tag, the
+    // short commit hash (`build/version.zig`, PR #74 Q8), else "unknown".
     const native_opts = b.addOptions();
-    native_opts.addOption([]const u8, "version", b.option([]const u8, "version", "Version string `snarf --version` prints (default: git describe)") orelse gitVersion(b));
+    native_opts.addOption([]const u8, "version", b.option([]const u8, "version", "Version string `snarf --version` prints (default: latest tag + short hash)") orelse gitVersion(b));
     const native_opts_mod = native_opts.createModule();
     const native = b.addExecutable(.{
         .name = "snarf",
@@ -250,6 +252,7 @@ pub fn build(b: *std.Build) void {
     // The bundled-devdraw file table's count assertions (phase 18, §3c). A
     // build-time helper, std-only; testing it touches no dependency.
     addModuleTests(b, test_step, target, optimize, "build/devdraw_files.zig", &.{});
+    addModuleTests(b, test_step, target, optimize, "build/version.zig", &.{});
     // The host file system as 9P, atomic Put included (phase 20).
     addModuleTests(b, test_step, target, optimize, "src/hostfs/root.zig", &.{
         .{ .name = "ninep", .module = ninep },
@@ -291,13 +294,27 @@ pub fn build(b: *std.Build) void {
     });
 }
 
-/// `git describe --tags --always --dirty` in the build root, or "unknown"
-/// (no git, not a checkout). Only `snarf --version` reads it (#77).
+/// `snarf --version`'s string from git (format: `build/version.zig`), or
+/// "unknown" (no git, not a checkout). Only `snarf --version` reads it (#77).
 fn gitVersion(b: *std.Build) []const u8 {
+    const root = b.build_root.path orelse ".";
+    const hash = gitLine(b, &.{ "git", "-C", root, "rev-parse", "--short", "HEAD" }) orelse return "unknown";
     var code: u8 = 0;
-    const out = b.runAllowFail(&.{ "git", "-C", b.build_root.path orelse ".", "describe", "--tags", "--always", "--dirty" }, &code, .ignore) catch return "unknown";
+    _ = b.runAllowFail(&.{ "git", "-C", root, "diff", "--quiet", "HEAD" }, &code, .ignore) catch {};
+    return version.format(b.allocator, .{
+        .tag = gitLine(b, &.{ "git", "-C", root, "describe", "--tags", "--abbrev=0" }),
+        .exact = gitLine(b, &.{ "git", "-C", root, "describe", "--tags", "--exact-match" }) != null,
+        .hash = hash,
+        .dirty = code != 0,
+    }) catch "unknown";
+}
+
+/// One git command's trimmed output, or null if it failed or said nothing.
+fn gitLine(b: *std.Build, argv: []const []const u8) ?[]const u8 {
+    var code: u8 = 0;
+    const out = b.runAllowFail(argv, &code, .ignore) catch return null;
     const v = std.mem.trim(u8, out, " \n\r\t");
-    return if (v.len == 0) "unknown" else v;
+    return if (v.len == 0) null else v;
 }
 
 /// Build a test executable rooted at `root` with exactly `imports` visible, and
