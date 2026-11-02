@@ -111,3 +111,27 @@ test "native file args: none opens the / directory window in the last column (ac
     try testing.expectEqual(@as(usize, 1), countWindows(r));
     try testing.expectEqual(@as(usize, 1), find(r, "/").?.col);
 }
+
+test "native file args: each window keeps its loaded lines; the next one is added after the load (#82, acme.c:261-266 + readfile)" {
+    const r = try Rig.create();
+    defer r.destroy();
+    try r.tmp.dir.writeFile(testing.io, .{ .sub_path = "exist.txt", .data = "one\ntwo\n" });
+    try r.tmp.dir.createDir(testing.io, "adir", .default_dir);
+    try r.tmp.dir.writeFile(testing.io, .{ .sub_path = "adir/inner", .data = "" });
+    try r.bootWith(&.{ "/exist.txt", "/adir", "/missing.txt" });
+    // acme's readfile loads each file before the next coladd: the loads are
+    // done by the time boot returns.
+    try testing.expectEqual(@as(usize, 0), r.app.editor.loads.items.len);
+    try r.settle();
+    const e = find(r, "/exist.txt").?.w;
+    const d = find(r, "/adir/").?.w;
+    const m = find(r, "/missing.txt").?.w;
+    // cols.c:117: the next coladd shrinks the window it lands on to its
+    // loaded lines, so the earlier windows keep a body, not just a tag.
+    try testing.expectEqual(@as(usize, 2), e.body.fr.nlines);
+    try testing.expect(d.body.fr.nlines >= 1);
+    try testing.expect(e.body.fr.r.max.y > e.body.fr.r.min.y);
+    try testing.expect(d.body.fr.r.max.y > d.body.fr.r.min.y);
+    // The last window takes the rest of the column.
+    try testing.expect(m.body.fr.r.max.y - m.body.fr.r.min.y > e.body.fr.r.max.y - e.body.fr.r.min.y);
+}

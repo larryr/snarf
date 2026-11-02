@@ -358,9 +358,26 @@ pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palett
             // A missing file is acme's too: an empty window under that name,
             // and `can't open` in +Errors (text.c:214-217).
             _ = try core.openfile.readFile(&a.editor, cols[native_args.columnFor(i, f, cols.len)], f);
+            // acme's readfile runs textload to the end before the next
+            // coladd (acme.c:261-266, :292-304), and that coladd shrinks the
+            // window it lands on to its loaded lines (cols.c:117). Snarf's
+            // load is asynchronous, so wait for it here (#82).
+            try loadNow(a);
         }
     }
     try a.display.flush();
+}
+
+/// Run the boot window's load to the end, as acme's synchronous `textload`
+/// does: step the load and answer its 9P requests until it has finished. No
+/// input is read and nothing is drawn meanwhile.
+fn loadNow(a: *App) !void {
+    while (a.editor.loads.items.len != 0) {
+        try core.Load.stepAll(&a.editor);
+        _ = try a.srv.poll(); // draw stack
+        try a.self_tree.poll(); // /mnt/snarf-self stack
+        _ = try a.srv_fs.poll(); // host file system stack
+    }
 }
 
 /// Move everything the window system said into the input device, and handle a
