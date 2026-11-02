@@ -130,8 +130,8 @@ pub fn main(init: std.process.Init) !void {
     const pal = colorsFromFlags(cmdline.flags) orelse std.process.exit(2);
     // acme.c:261-266: each file argument, rooted at the working directory
     // (acme's `wdir`, acme.c:293-296) by `boot`.
-    const cwd: []u8 = if (cmdline.files.len != 0) try std.process.currentPathAlloc(init.io, gpa) else try gpa.dupe(u8, "/");
-    defer gpa.free(cwd);
+    const cwd = try ArgsDir.init(gpa, init.io, cmdline.files.len);
+    defer cwd.deinit(gpa);
     const a = try gpa.create(App);
     defer gpa.destroy(a);
     a.built = .{};
@@ -175,7 +175,7 @@ pub fn main(init: std.process.Init) !void {
     // (#13) `Exit` — frees the whole session, before `conn.deinit` reaps
     // devdraw (so a live peer still gets the image frees).
     defer shutdown(a);
-    try boot(gpa, init.io, a, pal, "/", cwd, cmdline.files);
+    try boot(gpa, init.io, a, pal, "/", cwd.path, cmdline.files);
     // R-P17-5 / PM Q6: the native `$home` is the real `$HOME` (acme.c:136),
     // null when unset. It resolves through the root mount, so `Dump` writes
     // `$HOME/acme.dump` on the real disk.
@@ -257,6 +257,22 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
 /// 261-266); none opens the `/` directory window (acme.c:258-259). Each
 /// allocating step sets its `a.built` flag, so `shutdown` can undo a partial
 /// boot.
+/// The directory the file arguments are rooted at (acme's `wdir`): the working
+/// directory when there are any, else `/` (unused). It owns `path` and frees
+/// it with the sentinel `currentPathAlloc` allocated. Typing it `[]u8` frees
+/// one byte short, which DebugAllocator reports at every exit.
+pub const ArgsDir = struct {
+    path: [:0]u8,
+
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, nfiles: usize) !ArgsDir {
+        return .{ .path = if (nfiles != 0) try std.process.currentPathAlloc(io, gpa) else try gpa.dupeZ(u8, "/") };
+    }
+
+    pub fn deinit(self: ArgsDir, gpa: std.mem.Allocator) void {
+        gpa.free(self.path);
+    }
+};
+
 /// `files` are the file arguments as typed; `cwd` (acme's `wdir`) roots the
 /// relative ones (acme.c:293-296).
 pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8, cwd: []const u8, files: []const []const u8) !void {

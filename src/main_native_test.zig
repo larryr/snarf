@@ -395,7 +395,7 @@ test "main_native: main defers shutdown before boot, and conn.deinit after it (#
     const src = @embedFile("main_native.zig");
     const conn_deinit = std.mem.indexOf(u8, src, "defer a.conn.deinit();").?;
     const defer_shutdown = std.mem.indexOf(u8, src, "defer shutdown(a);").?;
-    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\", cwd, cmdline.files);").?;
+    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\", cwd.path, cmdline.files);").?;
     try testing.expect(conn_deinit < defer_shutdown);
     try testing.expect(defer_shutdown < call_boot);
     try testing.expect(std.mem.indexOf(u8, src, "defer a.tree.deinit();") == null);
@@ -412,4 +412,20 @@ test "main_native: shutdown drains, then hangs up the host session, BEFORE teard
     const teardown = std.mem.indexOf(u8, src, "core.shutdown.teardown(&a.editor").?;
     try testing.expect(drain < hang);
     try testing.expect(hang < teardown);
+}
+
+test "main_native: the file-argument directory is freed at the size it was allocated (#74 review, currentPathAlloc's sentinel)" {
+    // std.testing.allocator fails the test on a size-mismatched free, which
+    // is what `main` printed at every exit with file arguments.
+    for ([_]usize{ 0, 1, 3 }) |n| {
+        const d = try main_native.ArgsDir.init(testing.allocator, testing.io, n);
+        defer d.deinit(testing.allocator);
+        try testing.expect(d.path.len != 0 and d.path[0] == '/');
+        try testing.expectEqual(@as(u8, 0), d.path.ptr[d.path.len]);
+        if (n == 0) try testing.expectEqualStrings("/", d.path);
+    }
+    // `main` goes through ArgsDir rather than its own slice.
+    const src = @embedFile("main_native.zig");
+    try testing.expect(std.mem.indexOf(u8, src, "const cwd = try ArgsDir.init(gpa, init.io, cmdline.files.len);") != null);
+    try testing.expect(std.mem.indexOf(u8, src, "defer cwd.deinit(gpa);") != null);
 }
