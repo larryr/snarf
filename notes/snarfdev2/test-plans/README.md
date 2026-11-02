@@ -20,6 +20,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | [M1-11-native-fs.md](M1-11-native-fs.md) | #11 native file server | M1 |
 | [M1-12-clipboard.md](M1-12-clipboard.md) | #12 native clipboard | M1 |
 | [M1-13-builtins.md](M1-13-builtins.md) | #13 Sort/Zerox/Kill/Exit | M1 |
+| [M1-60-union-dir.md](M1-60-union-dir.md) | #60 union dir listing at `/` (PR #75) | M1 |
 | [M3-45-warp-focus.md](M3-45-warp-focus.md) | #45 warp to focused window | M3 |
 | (todo) M2 #14–#18, M3 #19–#23 | | |
 
@@ -27,15 +28,15 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | Requirement / decision | Test cases |
 |---|---|
 | R-BLD-03 | CI-01..04, CI-10 |
-| R-OV-09 (browser frozen, must build/test) | CI-05, CI-07, NFS-17, CB-09 |
+| R-OV-09 (browser frozen, must build/test) | CI-05, CI-07, NFS-17, CB-09, UD-17 |
 | ADR-0005 amendment Risks | CI-05, CI-07 |
 | ADR-0006 (network-free test, devdraw order) | CI-08, CI-11, walkthrough 1–3 |
 | R-EDIT-02 | BI-01..13, walkthrough 4 |
-| R-EDIT-03 | NFS-03, walkthrough 8 |
+| R-EDIT-03 | NFS-03, walkthrough 8, UD-04, UD-06, UD-07, UD-16 |
 | R-EDIT-05..10 | walkthrough 9–17 |
 | R-EDIT-11/12 | BI-06, BI-07, NFS-06, walkthrough 19–20 |
 | R-EDIT-14 | CB-02..06, CB-10 |
-| R-EDIT-15 | NFS-02, NFS-05..10, BI-09 |
+| R-EDIT-15 | NFS-02, NFS-05..10, BI-09, UD-07, UD-13 |
 | R-EDIT-16 / R-P17-5 | NFS-11..13 |
 | R-EDIT-17 + process rule 1 | NFS-14, BI-12 |
 | R-EDIT-25 | RM-01..10, WF-01..12, walkthrough 8, 12, 21 |
@@ -43,7 +44,11 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-9P-14 | NFS-11 |
 | R-P9-10 (Undo/Redo), #57 | UR-01..05, walkthrough 20 |
 | #47 (origin port) | OP-01..04 |
-| ADR-0005 §2 | NFS-01, NFS-15 |
+| ADR-0005 §2 | NFS-01, NFS-15, UD-08, UD-10 |
+| #60 (union dir, interim ruling 2026-10-31) | UD-01..17, UD-M1..M4 |
+| R-9P-03 (union read) | UD-15, UD-17 |
+| R-9P-16 (synthetic dirs) | UD-03, UD-11 |
+| #28 (symlink policy, local) | UD-14 |
 
 ## PM decisions (SnarfProdd, 2026-10-14)
 Default rule: when unsure, use ACME behaviour.
