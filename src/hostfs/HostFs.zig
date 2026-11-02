@@ -1,5 +1,6 @@
-//! `HostFs` — a host directory as plain files and directories, read/write;
-//! everything else (devices, sockets) is invisible. Qid paths are the host
+//! `HostFs` — a host directory as plain files and directories, read/write.
+//! Device nodes, fifos and sockets are LISTED and stat-able but cannot be
+//! opened (`isPlain`; #60 ruling 2026-11-02 #2 — device I/O is #76). Qid paths are the host
 //! inodes tagged into their own range so they never collide with a synthetic
 //! tree; `qid.vers` is the mtime in seconds so a client can cheaply notice
 //! changes.
@@ -40,8 +41,14 @@ pub fn close(self: *HostFs) void {
 /// Directory entry for `rel` ("" is the export root), named `name`.
 pub fn statOf(self: *HostFs, rel: []const u8, name: []const u8) OpError!Stat {
     const st = self.root.statFile(self.io, subPath(rel), .{}) catch |e| return mapErr(e);
-    if (st.kind != .directory and st.kind != .file) return error.FileDoesNotExist;
     return toStat(st, name);
+}
+
+/// True for a regular file or a directory — what `open` may serve. A device
+/// node, fifo or socket is listed and stats, but its open is `NotSupported`.
+pub fn isPlain(self: *HostFs, rel: []const u8) OpError!bool {
+    const st = self.root.statFile(self.io, subPath(rel), .{}) catch |e| return mapErr(e);
+    return st.kind == .directory or st.kind == .file;
 }
 
 pub fn qidOf(self: *HostFs, rel: []const u8) OpError!Qid {
@@ -55,9 +62,8 @@ pub fn readDir(self: *HostFs, rel: []const u8, offset: u64, buf: []u8) OpError!u
     var it = dir.iterate();
     var dr = DirReader.init(offset, buf);
     while (it.next(self.io) catch return error.IoError) |ent| {
-        // Racing deletions and non-file kinds simply vanish from the listing.
+        // Racing deletions (and dangling links) simply vanish from the listing.
         const st = dir.statFile(self.io, ent.name, .{}) catch continue;
-        if (st.kind != .directory and st.kind != .file) continue;
         if (!dr.emit(toStat(st, ent.name))) break;
     }
     return dr.len();
@@ -105,12 +111,17 @@ fn toStat(st: Io.File.Stat, name: []const u8) Stat {
             .vers = mtime,
             .qtype = .{ .dir = dir },
         },
-        .mode = if (dir) Stat.DMDIR | 0o755 else 0o644,
+        .mode = (if (dir) Stat.DMDIR else 0) | hostPerm(st), // the host's own rwx bits
         .atime = if (st.atime) |a| seconds(a) else mtime,
         .mtime = mtime,
         .length = if (dir) 0 else st.size,
         .name = name,
     };
+}
+
+fn hostPerm(st: Io.File.Stat) u32 {
+    if (@TypeOf(st.permissions.toMode()) == u0) return if (st.kind == .directory) 0o755 else 0o644;
+    return @intCast(st.permissions.toMode() & 0o777);
 }
 
 fn seconds(t: Io.Timestamp) u32 {

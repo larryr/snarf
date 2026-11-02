@@ -35,6 +35,8 @@ const ninep = @import("ninep");
 const input_pump = @import("input_pump.zig");
 const ns_boot = @import("ns_boot.zig");
 const native_shutdown = @import("native_shutdown.zig");
+const native_args = @import("native_args.zig");
+const native_options = @import("native_options");
 
 const Conn = host.Conn;
 const DevDraw9 = host.dev_draw.DevDraw9;
@@ -108,7 +110,28 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     // ADR-0007 §2: resolved before anything is spawned, so a bad name never
     // opens a window.
-    const pal = colorsFromArgs(init.minimal.args) orelse std.process.exit(2);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    {
+        var it = init.minimal.args.iterate();
+        _ = it.skip(); // argv[0]
+        while (it.next()) |arg| try argv.append(gpa, arg);
+    }
+    const cmdline = native_args.split(argv.items);
+    // #77: before anything touches devdraw.
+    if (native_args.infoFlag(cmdline.flags)) |info| {
+        const out = switch (info) {
+            .help => native_args.usage,
+            .version => "snarf " ++ native_options.version ++ "\n",
+        };
+        std.Io.File.stdout().writeStreamingAll(init.io, out) catch {};
+        return;
+    }
+    const pal = colorsFromFlags(cmdline.flags) orelse std.process.exit(2);
+    // acme.c:261-266: each file argument, rooted at the working directory
+    // (acme's `wdir`, acme.c:293-296) by `boot`.
+    const cwd = try ArgsDir.init(gpa, init.io, cmdline.files.len);
+    defer cwd.deinit(gpa);
     const a = try gpa.create(App);
     defer gpa.destroy(a);
     a.built = .{};
@@ -123,9 +146,12 @@ pub fn main(init: std.process.Init) !void {
         gpa,
         init.environ_map,
         if (exe_path) |p| std.fs.path.dirname(p) else null,
-        .{ .ctx = &io, .exists = existsOnDisk },
+        .{ .ctx = &io, .check = checkOnDisk },
     );
     defer dd_path.deinit(gpa);
+    // #78: a derived candidate that exists but can't run, and why.
+    for (dd_path.skipped) |k| if (k) |x|
+        std.debug.print("snarf: devdraw: skipping {s} ({s}): {s}\n", .{ x.path, host.DevdrawPath.sourceName(x.source), x.verdict.reason() });
     // R-P18-9: printed once, before the spawn's outcome is known.
     std.debug.print("snarf: devdraw: {s} ({s})\n", .{ dd_path.path, dd_path.describe() });
 
@@ -149,7 +175,7 @@ pub fn main(init: std.process.Init) !void {
     // (#13) `Exit` — frees the whole session, before `conn.deinit` reaps
     // devdraw (so a live peer still gets the image frees).
     defer shutdown(a);
-    try boot(gpa, init.io, a, pal, "/");
+    try boot(gpa, init.io, a, pal, "/", cwd.path, cmdline.files);
     // R-P17-5 / PM Q6: the native `$home` is the real `$HOME` (acme.c:136),
     // null when unset. It resolves through the root mount, so `Dump` writes
     // `$HOME/acme.dump` on the real disk.
@@ -163,7 +189,7 @@ pub fn main(init: std.process.Init) !void {
     try a.conn.armMouse();
     try a.conn.armKbd();
 
-    while (!a.conn.isClosed()) {
+    while (running(a)) {
         _ = a.conn.poll(frame_timeout_ms) catch |e| switch (e) {
             error.Closed => break,
             else => return e,
@@ -173,22 +199,37 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-/// `DevdrawPath.Probe` over the real file system: an `access(2)` existence
-/// check through `Io.Dir.access` (no open, no write). Relative `$PLAN9` values
-/// resolve against the working directory, as the spawn itself would.
-fn existsOnDisk(ctx: *anyopaque, path: []const u8) bool {
+/// The main loop's test: devdraw is still up (closing the window hangs it
+/// up), and `Exit` (#13, `cexit`) has not been accepted — or was, but a Put
+/// or Dump it followed is still writing (`Editor.exitReady`: acme's are
+/// synchronous, so one issued before Exit has always finished). Either way
+/// out, `main`'s deferred `shutdown` (#58/#68) frees the session and
+/// `conn.deinit` ends devdraw.
+pub fn running(a: *App) bool {
+    return !a.conn.isClosed() and !a.editor.exitReady();
+}
+
+/// `DevdrawPath.Probe` over the real file system: `access(2)` for existence
+/// and then execute permission, plus a stat for "regular file" (#78), all
+/// through `Io.Dir` (no open, no write). Relative `$PLAN9` values resolve
+/// against the working directory, as the spawn itself would.
+fn checkOnDisk(ctx: *anyopaque, path: []const u8) host.DevdrawPath.Verdict {
     const io: *const std.Io = @ptrCast(@alignCast(ctx));
-    std.Io.Dir.cwd().access(io.*, path, .{}) catch return false;
-    return true;
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io.*, path, .{}) catch return .absent;
+    const st = cwd.statFile(io.*, path, .{}) catch return .absent;
+    if (st.kind != .file) return .not_a_file;
+    cwd.access(io.*, path, .{ .execute = true }) catch return .not_executable;
+    return .runnable;
 }
 
 /// The scheme `-colors=NAME` selects (last one wins), or `Palette.default`.
 /// Null after reporting an unknown name and the valid ones on stderr.
-fn colorsFromArgs(args: std.process.Args) ?*const core.Palette {
+/// Only the flag arguments count (`native_args.split`): after the first file
+/// name, `-colors=…` is a file name, as in acme's `ARGBEGIN`.
+fn colorsFromFlags(flags: []const []const u8) ?*const core.Palette {
     var pal = core.Palette.default;
-    var it = args.iterate();
-    _ = it.skip(); // argv[0]
-    while (it.next()) |arg| switch (core.Palette.parseFlag(arg)) {
+    for (flags) |arg| switch (core.Palette.parseFlag(arg)) {
         .other => {},
         .palette => |p| pal = p,
         .unknown => |name| {
@@ -209,11 +250,30 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
     return env.get("winsize") orelse "1024x768";
 }
 
+/// The directory the file arguments are rooted at (acme's `wdir`): the working
+/// directory when there are any, else `/` (unused). It owns `path` and frees
+/// it with the sentinel `currentPathAlloc` allocated. Typing it `[]u8` frees
+/// one byte short, which DebugAllocator reports at every exit.
+pub const ArgsDir = struct {
+    path: [:0]u8,
+
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, nfiles: usize) !ArgsDir {
+        return .{ .path = if (nfiles != 0) try std.process.currentPathAlloc(io, gpa) else try gpa.dupeZ(u8, "/") };
+    }
+
+    pub fn deinit(self: ArgsDir, gpa: std.mem.Allocator) void {
+        gpa.free(self.path);
+    }
+};
+
 /// Build the whole stack in place (pointer-capture hazards — see `App`).
 /// `host_root` is the host directory served at `/` and `/mnt/host` — the
-/// real `/` in `main`, a scratch directory in the tests. Each allocating step
-/// sets its `a.built` flag, so `shutdown` can undo a partial boot.
-pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8) !void {
+/// real `/` in `main`, a scratch directory in the tests. `files` are the
+/// command line's file arguments as typed (acme.c:261-266); `cwd` (acme's
+/// `wdir`) roots the relative ones (acme.c:293-296). No file arguments opens
+/// the `/` directory window (acme.c:258-259). Each allocating step sets its
+/// `a.built` flag, so `shutdown` can undo a partial boot.
+pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8, cwd: []const u8, files: []const []const u8) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
     a.pipe = try ninep.chan.Pipe.init(gpa, 16384);
@@ -238,9 +298,10 @@ pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palett
     a.ns = ninep.mount.Namespace.init(gpa);
     a.built.ns = true;
 
-    // ---- window tree: the acme no-argument boot (acme.c:242-259) ----
+    // ---- window tree: acme's boot columns (acme.c:241-254) ----
     a.tree = try core.boot.boot(gpa, a.display, &a.font, a.display.conn.clipr, .{
         .dir_boot = true,
+        .ncol = if (files.len == 0) 2 else native_args.ncolFor(files.len),
         .ns = &a.ns,
         .palette = pal,
     });
@@ -296,12 +357,38 @@ pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palett
     try a.ns.mount("/", &a.cl_fs, froot.fid);
     try a.ns.mount("/mnt/host", &a.cl_fs, froot.fid);
 
-    // ---- the boot directory window (acme.c:258-259, R-EDIT-03) ----
+    // ---- the boot windows (acme.c:258-266, R-EDIT-03) ----
     {
         const cols = a.tree.row.col.items;
-        _ = try core.openfile.readFile(&a.editor, cols[cols.len - 1], "/");
+        if (files.len == 0) {
+            _ = try core.openfile.readFile(&a.editor, cols[cols.len - 1], "/");
+        } else for (files, 0..) |typed, i| {
+            const f = try native_args.absolute(gpa, cwd, typed);
+            defer gpa.free(f);
+            // A missing file is acme's too: an empty window under that name,
+            // and `can't open` in +Errors naming it as typed (text.c:214-217,
+            // acme.c:299 passes `s`, #84).
+            _ = try core.openfile.readFileAs(&a.editor, cols[native_args.columnFor(i, f, cols.len)], f, typed);
+            // acme's readfile runs textload to the end before the next
+            // coladd (acme.c:261-266, :292-304), and that coladd shrinks the
+            // window it lands on to its loaded lines (cols.c:117). Snarf's
+            // load is asynchronous, so wait for it here (#82).
+            try loadNow(a);
+        }
     }
     try a.display.flush();
+}
+
+/// Run the boot window's load to the end, as acme's synchronous `textload`
+/// does: step the load and answer its 9P requests until it has finished. No
+/// input is read and nothing is drawn meanwhile.
+fn loadNow(a: *App) !void {
+    while (a.editor.loads.items.len != 0) {
+        try core.Load.stepAll(&a.editor);
+        _ = try a.srv.poll(); // draw stack
+        try a.self_tree.poll(); // /mnt/snarf-self stack
+        _ = try a.srv_fs.poll(); // host file system stack
+    }
 }
 
 /// Move everything the window system said into the input device, and handle a
@@ -356,4 +443,8 @@ fn inputDevices(a: *App) input_pump.Devices {
 
 test {
     _ = @import("main_native_test.zig"); // #58: boot → session → shutdown, leak-checked
+    _ = @import("main_native_clipboard_test.zig"); // #12/#31: Snarf/Paste ↔ the pasteboard
+    _ = @import("native_args.zig"); // the command line (acme.c:71-124, :241-266)
+    _ = @import("main_native_args_test.zig"); // file arguments open windows
+    _ = @import("main_native_exit_test.zig"); // #13: Exit ends the loop through the #58/#68 shutdown
 }

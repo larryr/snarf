@@ -12,7 +12,7 @@
 //! phase-6/7 gesture set (F-9 single-Text; scroll via the wheel/nav keys).
 //!
 //! The snarf buffer and the `cut`/`snarfInsert` ops (exec.c:947-1073) live here;
-//! /dev/snarf + clipboard sync are deferred (R-P7-5, S-05 §7). Phase 12e carved
+//! /dev/snarf sync is `clipboard.zig` (#12; none in the browser, S-05 §7). Phase 12e carved
 //! the mouse gesture machine out to `Gesture.zig` (its doc paragraph went with
 //! it); `handleMouse`/`hitTest` below are one-line forwarders into it.
 const std = @import("std");
@@ -33,11 +33,13 @@ const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Load = @import("Load.zig");
 const Put = @import("Put.zig");
+const cmd_session = @import("exec/cmd_session.zig");
 const pendinglook = @import("pendinglook.zig");
 const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
 const wintag = @import("wintag.zig");
 const restoremouse = @import("restoremouse.zig");
+const heldinput = @import("heldinput.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -160,6 +162,10 @@ ns: ?*ninep.mount.Namespace = null,
 /// ticket and must never MOVE (nsjob.zig's pointer-stability rule), so the list
 /// may reallocate but the Loads may not. Owned; `Load.deinitAll` frees them.
 loads: std.ArrayList(*Load) = .empty,
+/// Keys and mouse samples that arrived while a load was in flight, handled
+/// once it finishes, as acme's blocked input threads would (#83,
+/// `heldinput.zig`). Freed by `Load.deinitAll`.
+held_input: std.ArrayList(heldinput.Held) = .empty,
 /// The ONE parked B3 look (R-P13b-2). acme decides "is this text a file name?"
 /// with a synchronous `access()` (look.c:706); Snarf can only answer with a
 /// `StatJob` that completes on a later frame, so the look waits here. A newer
@@ -167,6 +173,19 @@ loads: std.ArrayList(*Load) = .empty,
 /// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
 pending_look: ?*pendinglook.PendingLook = null,
 puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
+/// `Exit` passed its `rowclean` (exec.c:1158-1160, #13): acme's `sendul(cexit, 0)`.
+/// The host ends its loop on it (`exitReady`) and runs its normal shutdown
+/// (#58/#68).
+exit_requested: bool = false,
+/// An `Exit` arrived while a Put or Dump was still writing. acme's are
+/// synchronous, so its `xexit` never sees one in flight: the port holds the
+/// Exit here and runs its `rowclean` once they have all finished
+/// (`cmd_session.exitStep`, from `frameEnd`), on the row it was issued in
+/// (SnarfProdd, PR #74 Q4).
+exit_waiting: ?*Row = null,
+/// A second `Exit` while one waits: stop now, through the #58/#68 shutdown,
+/// which discards the unfinished Put and keeps its bytes.
+exit_now: bool = false,
 session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
@@ -175,6 +194,18 @@ needs_flush: bool = false,
 /// cache spans Edit invocations (regx.c:16,203-204), so it hangs off the Editor
 /// rather than being rebuilt per command.
 regx: Regx,
+
+/// True when the host should stop: `Exit` was accepted (after any Put or
+/// Dump it waited for, `exit_waiting`), or a second Exit forced it
+/// (`exit_now`). Loads are abandoned, as acme's exit would abandon a read.
+pub fn exitReady(self: *const Editor) bool {
+    return self.exit_requested and (self.exit_now or !self.writing());
+}
+
+/// A Put or the Dump is still writing.
+pub fn writing(self: *const Editor) bool {
+    return self.puts.items.len != 0 or self.session.dump != null;
+}
 
 pub fn init(allocator: std.mem.Allocator) Editor {
     return .{ .allocator = allocator, .regx = Regx.init(allocator) };
@@ -259,7 +290,9 @@ pub fn dropColRef(ed: *Editor, c: *Column) void {
 
 /// Route one mouse sample — forwarder into the gesture machine
 /// (`Gesture.handleMouse`, acme.c:576-672 `mousethread`).
+/// While a window load is in flight the sample waits (`heldinput`, #83).
 pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
+    if (try heldinput.hold(ed, .{ .mouse = ev })) return;
     return ed.gesture.handleMouse(ed, ev);
 }
 
@@ -276,8 +309,16 @@ pub fn hitTest(ed: *Editor, p: Point) ?Gesture.Hit {
 /// nil). NOTE: acme's `-b` variant instead types into `barttext` (the last
 /// button-2/3 text); we implement the default. Keys only edit when idle — a live
 /// B1 drag owns the gesture, so keys mid-sweep are FLAG-dropped (text.c: keyboard
-/// and mouse threads interlock on `row.lk`).
+/// and mouse threads interlock on `row.lk`). While a window load is in flight
+/// the key waits for it (`heldinput`, #83): acme's `textload` holds `row.lk`.
 pub fn handleKey(ed: *Editor, r: u21) !void {
+    if (try heldinput.hold(ed, .{ .key = r })) return;
+    return ed.keyNow(r);
+}
+
+/// `handleKey` without the load hold: the key is handled now. `heldinput`'s
+/// replay calls this.
+pub fn keyNow(ed: *Editor, r: u21) !void {
     // rows.c:277 rowtype: clearmouse() runs first, unconditionally — before the
     // C even looks for a Text — so a key that takes either early return below
     // still forgets a saved pop-up (#9).
@@ -313,6 +354,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try Put.stepAll(ed); // and per in-flight Put (phase 17)
     try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
+    cmd_session.exitStep(ed); // an Exit that waited for them (PR #74 Q4)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
     // Flush when an editor action marked the tick dirty OR when the display

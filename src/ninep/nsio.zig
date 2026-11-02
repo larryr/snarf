@@ -297,7 +297,8 @@ pub const StatJob = struct {
 /// union member's own stream concatenated in bind order. A member that fails to
 /// walk, open or read is SKIPPED (sysfile.c:340); when the path is NOT an exact
 /// mount point only the first member that opens is read (chan.c's walk takes the
-/// first success). No de-duplication anywhere (R-P12d-2).
+/// first success). No de-duplication (R-P12d-2) except at native `/`, `/dev`
+/// and `/mnt` while the host is mounted at `/` (#60, `nsdir.dedupScope`).
 ///
 /// `data` accumulates the raw stat(5) byte stream — byte-identical to what
 /// `nsdir.DirReader` hands out — and `entries` is that stream decoded once at
@@ -311,6 +312,17 @@ pub const ListDirJob = struct {
     synth_i: usize = 0,
     members: []const Target = &.{},
     rem: []const u8 = "",
+    /// #60: the host-at-`/` targets listed after `members` (`nsdir.shadowFall`),
+    /// at `alt_rem`; and whether the stream lists each name once.
+    alt: []const Target = &.{},
+    alt_rem: []const u8 = "",
+    dedup: bool = false,
+    /// #60: did any member open, and the first member failure that was not a
+    /// plain "does not exist" — returned when nothing at all opened, so an
+    /// unreadable directory reached through a shadowed one still warns.
+    any_opened: bool = false,
+    fail: ?Error = null,
+    member_start: usize = 0,
     union_at_mount: bool = false,
     i: usize = 0,
     drain: ?Drain = null,
@@ -329,12 +341,17 @@ pub const ListDirJob = struct {
             self.union_at_mount = res.remainder.len == 0;
             self.members = res.entry.targets.items;
             self.rem = res.remainder;
+            if (nsdir.shadowFall(ns, res.entry)) |root| {
+                self.alt = root.targets.items;
+                self.alt_rem = self.path[1..];
+            }
         } else |e| switch (e) {
             error.BadPath => return error.BadPath,
             error.NotMounted => {}, // purely synthetic directory
         }
         // Neither a mount point nor a prefix of one — `DirReader.open`'s verdict.
         if (self.members.len == 0 and self.synth.items.len == 0) return error.NotMounted;
+        self.dedup = nsdir.dedupScope(ns, self.path);
         return self;
     }
 
@@ -366,12 +383,13 @@ pub const ListDirJob = struct {
 
     fn stepMember(self: *ListDirJob) Error!Status {
         if (self.drain == null) {
-            if (self.i >= self.members.len) {
-                self.phase = .decode;
-                return .pending;
-            }
-            const w = try WalkJob.initOne(self.ns, self.path, self.members[self.i..][0..1], self.rem);
+            if (self.i >= self.members.len + self.alt.len) return self.toDecode();
+            const w = if (self.i < self.members.len)
+                try WalkJob.initOne(self.ns, self.path, self.members[self.i..][0..1], self.rem)
+            else
+                try WalkJob.initOne(self.ns, self.path, self.alt[self.i - self.members.len ..][0..1], self.alt_rem);
             self.drain = try Drain.init(self.allocator, w, &self.data, std.math.maxInt(usize), true);
+            self.member_start = self.data.items.len;
             return .pending;
         }
         const d = &self.drain.?;
@@ -380,10 +398,29 @@ pub const ListDirJob = struct {
         // then ended (or failed mid-read) also ends a NON-union listing, where
         // chan.c's walk takes the first success only.
         const opened = d.opened;
-        const finished = if (d.step()) |s| s == .done else |_| true;
+        var failed = false;
+        const finished = if (d.step()) |s| s == .done else |e| blk: {
+            // A member that read nothing before failing (never opened, or an
+            // unreadable directory) is remembered for `toDecode`.
+            if (self.data.items.len == self.member_start) {
+                failed = true;
+                if (self.fail == null and e != error.FileDoesNotExist) self.fail = e;
+            }
+            break :blk true;
+        };
         if (!finished) return .pending;
+        if (!failed) self.any_opened = true;
         self.closeMember();
-        if (opened and !self.union_at_mount) self.phase = .decode;
+        if (opened and !self.union_at_mount) return self.toDecode();
+        return .pending;
+    }
+
+    /// End the member phase. Nothing read at all and a real failure (not a
+    /// mere "does not exist" in a member) → that error, so B3 warns.
+    fn toDecode(self: *ListDirJob) Error!Status {
+        if (!self.any_opened and self.synth.items.len == 0)
+            if (self.fail) |e| return e;
+        self.phase = .decode;
         return .pending;
     }
 
@@ -394,6 +431,12 @@ pub const ListDirJob = struct {
     }
 
     fn decodeAll(self: *ListDirJob) Error!void {
+        if (self.dedup) { // #60: each name once, the first (snarf's) record kept
+            var seen: nsdir.Seen = .{};
+            defer seen.deinit(self.allocator);
+            const kept = try seen.filter(self.allocator, self.data.items);
+            self.data.shrinkRetainingCapacity(kept);
+        }
         var off: usize = 0;
         while (off + 2 <= self.data.items.len) {
             const size = std.mem.readInt(u16, self.data.items[off..][0..2], .little);

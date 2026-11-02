@@ -89,6 +89,8 @@ pub const DevDraw9 = struct {
     /// Set by `noteResize` when `Rrdmouse.resized` arrives; a `refresh` read
     /// consumes it (the `dev/draw.zig` contract, S-03 §5).
     pending_refresh: ?Rect = null,
+    /// Backing store for the connection folder's name in a `stat` reply.
+    stat_name: [24]u8 = undefined,
 
     pub fn init(conn: *Conn) Self {
         return .{ .conn = conn };
@@ -230,8 +232,38 @@ pub const DevDraw9 = struct {
                 return n;
             },
             .new => return sliceOut(&self.line, offset, buf),
-            .root, .conn => return 0, // directory reads: the tree is fixed
+            .root => return self.dirRead(&.{ .new, .conn }, offset, buf),
+            .conn => return self.dirRead(&.{ .ctl, .data, .refresh }, offset, buf),
         }
+    }
+
+    /// A directory read: the children's stat records, back to back, starting
+    /// at `offset` and only whole records (5/read). The kernel's `drawgen`
+    /// lists `new` and one folder per connection at the top, and `ctl`,
+    /// `data`, `refresh` inside one (9/port/devdraw.c drawgen); plan9port's
+    /// devdraw has exactly one connection, so the top lists `new` and it
+    /// (#79). The tree is fixed, so an offset is simply a byte position in
+    /// the listing; one that does not fall on a record boundary is refused.
+    fn dirRead(self: *Self, kids: []const Node, offset: u64, buf: []u8) OpError!usize {
+        var pos: u64 = 0;
+        var out: usize = 0;
+        var namebuf: [24]u8 = undefined;
+        for (kids) |k| {
+            const st = self.statOf(k, &namebuf);
+            const n = st.encodedSize();
+            if (pos >= offset) {
+                if (pos != offset and out == 0) return error.BadOffset;
+                if (out + n > buf.len) {
+                    if (out == 0) return error.ShortDraw; // not even one record fits
+                    break;
+                }
+                _ = st.encode(buf[out..]) catch return error.IoError;
+                out += n;
+            }
+            pos += n;
+        }
+        if (out == 0 and offset != pos and offset < pos) return error.BadOffset;
+        return out;
     }
 
     /// Every `data` write is a batch of draw verbs; hand it to the peer
@@ -254,19 +286,26 @@ pub const DevDraw9 = struct {
 
     fn statOp(ctx: *anyopaque, _: *Server, fid: *Fid) OpError!Stat {
         const self = devOf(ctx);
-        var namebuf: [24]u8 = undefined;
-        const info: struct { name: []const u8, mode: u32 } = switch (nodeOf(fid.qid.path)) {
+        // The conn name lives in the device so the returned Stat outlives
+        // this frame (the server encodes it after we return).
+        var st = self.statOf(nodeOf(fid.qid.path), &self.stat_name);
+        st.qid = fid.qid;
+        return st;
+    }
+
+    fn statOf(self: *const Self, node: Node, namebuf: *[24]u8) Stat {
+        const info: struct { name: []const u8, mode: u32 } = switch (node) {
             .root => .{ .name = "draw", .mode = Stat.DMDIR | 0o555 },
             .new => .{ .name = "new", .mode = 0o666 },
             .conn => .{
-                .name = std.fmt.bufPrint(&namebuf, "{d}", .{self.conn_no}) catch "1",
+                .name = std.fmt.bufPrint(namebuf, "{d}", .{self.conn_no}) catch "1",
                 .mode = Stat.DMDIR | 0o555,
             },
             .ctl => .{ .name = "ctl", .mode = 0o666 },
             .data => .{ .name = "data", .mode = 0o666 },
             .refresh => .{ .name = "refresh", .mode = 0o444 },
         };
-        return .{ .qid = fid.qid, .mode = info.mode, .length = 0, .name = info.name };
+        return .{ .qid = qidFor(node), .mode = info.mode, .length = 0, .name = info.name };
     }
 };
 
@@ -407,4 +446,61 @@ test "dev_draw: the connection directory is named from field 0" {
     var srv: Server = undefined;
     try testing.expectEqual(qidFor(.conn), try DevDraw9.ops.walk1(&d, &srv, &fid, "7"));
     try testing.expectError(error.FileDoesNotExist, DevDraw9.ops.walk1(&d, &srv, &fid, "1"));
+}
+
+/// Read a whole directory through the device, `chunk` bytes at a time, and
+/// return the names in order.
+fn listDir(d: *DevDraw9, node: Node, chunk: usize, names: *[4][]const u8, store: *[512]u8) !usize {
+    var fid: Fid = .{ .fid = 1, .qid = qidFor(node), .omode = msg.OREAD, .uname = @constCast("") };
+    var srv: Server = undefined;
+    var off: u64 = 0;
+    var count: usize = 0;
+    while (true) {
+        const n = try DevDraw9.ops.read(d, &srv, &fid, off, store[@intCast(off)..][0..chunk]);
+        if (n == 0) break;
+        var p: usize = 0;
+        while (p < n) {
+            const rec = store[@intCast(off + p)..];
+            const len = 2 + @as(usize, std.mem.readInt(u16, rec[0..2], .little));
+            const st = try Stat.decode(rec[0..len]);
+            names[count] = st.name;
+            count += 1;
+            p += len;
+        }
+        off += n;
+    }
+    return count;
+}
+
+test "dev_draw: /dev/draw lists new and the connection folder; the folder lists ctl, data, refresh (#79)" {
+    var c = Conn.init(testing.allocator);
+    defer c.deinit();
+    var d = DevDraw9.init(&c);
+    d.conn_no = 3;
+    var names: [4][]const u8 = undefined;
+    var store: [512]u8 = undefined;
+    // A big buffer takes the whole listing at once; a small one gets whole
+    // records one at a time (5/read), and the listing is the same.
+    for ([_]usize{ 256, Stat.STATFIXLEN + 15 + 8 }) |chunk| { // uid/gid/muid "snarf"
+        try testing.expectEqual(@as(usize, 2), try listDir(&d, .root, chunk, &names, &store));
+        try testing.expectEqualStrings("new", names[0]);
+        try testing.expectEqualStrings("3", names[1]);
+        try testing.expectEqual(@as(usize, 3), try listDir(&d, .conn, chunk, &names, &store));
+        try testing.expectEqualStrings("ctl", names[0]);
+        try testing.expectEqualStrings("data", names[1]);
+        try testing.expectEqualStrings("refresh", names[2]);
+    }
+    // The records carry the right qids and modes: the folder is a directory.
+    var buf: [256]u8 = undefined;
+    var fid: Fid = .{ .fid = 1, .qid = qidFor(.root), .omode = msg.OREAD, .uname = @constCast("") };
+    var srv: Server = undefined;
+    const n = try DevDraw9.ops.read(&d, &srv, &fid, 0, &buf);
+    const first_len = 2 + @as(usize, std.mem.readInt(u16, buf[0..2], .little));
+    const conn = try Stat.decode(buf[first_len..n]);
+    try testing.expect(conn.qid.qtype.dir);
+    try testing.expect(conn.mode & Stat.DMDIR != 0);
+    // An offset inside a record is refused, as lib9p does.
+    try testing.expectError(error.BadOffset, DevDraw9.ops.read(&d, &srv, &fid, 1, &buf));
+    // A buffer too small for one record is an error, not a silent 0 (EOF).
+    try testing.expectError(error.ShortDraw, DevDraw9.ops.read(&d, &srv, &fid, 0, buf[0..10]));
 }

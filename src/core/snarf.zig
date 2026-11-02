@@ -12,6 +12,7 @@ const std = @import("std");
 const Editor = @import("Editor.zig");
 const Text = @import("text/Text.zig");
 const Buffer = @import("Buffer.zig");
+const clipboard = @import("clipboard.zig");
 
 /// snarf capture read chunk (exec.c uses RBUFSIZE; any bound works — see `cut`).
 const snarf_chunk_runes: usize = 2000;
@@ -23,7 +24,7 @@ const snarf_chunk_runes: usize = 2000;
 /// A null selection (q0==q1) returns with the snarf buffer UNTOUCHED
 /// (exec.c:984-988). The CALLER bumps `ed.seq` + `File.mark` first, exactly as
 /// `execute`/`texttype` do in the C — `cut` never marks. /dev/snarf sync
-/// (`acmeputsnarf`, exec.c:1003) is deferred (R-P7-5).
+/// (`acmeputsnarf`, exec.c:1003) runs after the copy (`clipboard.put`, #12).
 pub fn cut(ed: *Editor, t: *Text, dosnarf: bool, docut: bool) !void {
     const q0 = t.q0;
     const q1 = t.q1;
@@ -39,7 +40,7 @@ pub fn cut(ed: *Editor, t: *Text, dosnarf: bool, docut: bool) !void {
             try ed.snarf.appendSlice(ed.allocator, bytes);
             p += n;
         }
-        // exec.c:1003 acmeputsnarf — /dev/snarf + clipboard sync DEFERRED (R-P7-5).
+        clipboard.put(ed); // exec.c:1003 acmeputsnarf (#12)
     }
     if (docut) {
         try t.deleteRange(q0, q1, true); // exec.c:1006 textdelete
@@ -49,12 +50,12 @@ pub fn cut(ed: *Editor, t: *Text, dosnarf: bool, docut: bool) !void {
 }
 
 /// `paste` (exec.c:1018-1073), single-Text subset (no `tobody`, no cross-window
-/// lock, no /dev/snarf fetch). Replace the current selection with the snarf
+/// lock). Replace the current selection with the snarf
 /// buffer at the caret. `selectall` selects the inserted text (the chord path,
 /// text.c:1087); otherwise the caret lands after it. The CALLER marks first.
 pub fn snarfInsert(ed: *Editor, t: *Text, selectall: bool) !void {
-    // exec.c:1037-1039 acmegetsnarf + empty guard (dev fetch DEFERRED, R-P7-5).
-    if (ed.snarf.items.len == 0) return;
+    clipboard.get(ed); // exec.c:1037 acmegetsnarf (#12)
+    if (ed.snarf.items.len == 0) return; // exec.c:1038-1039
     try ed.cut(t, false, true); // exec.c:1046 cut(t,t,nil,FALSE,TRUE) — no snarf
     const q0 = t.q0;
     const n = std.unicode.utf8CountCodepoints(ed.snarf.items) catch unreachable;

@@ -13,12 +13,23 @@ showcase; native is the daily-driver target now.
 
 ## Native (primary)
 
-Pinned Zig, see `.zigversion`. `zig build native` builds `snarf-native` **and** its
-`devdraw` display server in-tree from a pinned plan9port snapshot (ADR-0006, macOS) — no
-plan9port install needed; the first build fetches once, `zig build`/`zig build test` stay
-network-free. `zig build run-native` runs it; `make install` puts both binaries side by
-side in `$(PREFIX)/bin` (default `~/.local/bin`), installing `snarf-native` as `snarf`. A deliberate `$DEVDRAW` still wins, and
-`$PLAN9`/`$PATH` remain fallbacks (resolution order in ADR-0006).
+Pinned Zig, see `.zigversion`. `zig build native` builds `zig-out/bin/snarf` **and**, beside
+it, its `devdraw` display server, in-tree from a pinned plan9port snapshot (ADR-0006, macOS) —
+no plan9port install needed; the first build fetches once, `zig build`/`zig build test` stay
+network-free. `zig build run-native` (or `zig-out/bin/snarf`) runs it; `make install` puts
+`snarf` and `devdraw` side by side in `$(PREFIX)/bin` (default `~/.local/bin`). snarf looks
+for `devdraw` next to its own executable, so keep the two together. A deliberate `$DEVDRAW`
+still wins, and `$PLAN9`/`$PATH` remain fallbacks (resolution order in ADR-0006).
+
+From a release tarball (`snarf-<tag>-macos-arm64.tar.gz`): unpack it, then, because the
+binaries are unsigned, run `xattr -d com.apple.quarantine snarf devdraw` in that directory
+and start `./snarf`. The Linux tarball has `snarf` only; point `$PLAN9` or `$DEVDRAW` at a
+plan9port devdraw. (Releases up to v0.M0-dev.2 named the binary `snarf-native`.)
+
+`snarf [-colors=NAME] [file ...]`: like acme, snarf opens a window for each file or
+directory named (relative names are taken from the current directory); a file that does not
+exist yet opens as an empty window under that name, and `Put` creates it. With no names it
+opens the `/` directory.
 
 ### Snarf Palette Options
 

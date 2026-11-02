@@ -1,5 +1,6 @@
 const std = @import("std");
 const devdraw_build = @import("build/devdraw.zig");
+const version = @import("build/version.zig");
 
 // Snarf build graph (S-06 §3). `zig build` is the ONLY build entry point and is
 // identical on macOS and Linux (ADR-0001). No node/npm, no Emscripten, no WASI.
@@ -123,12 +124,22 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_wasm.step);
     b.getInstallStep().dependOn(&install_web.step);
 
-    // --- snarf-native: the NATIVE HOST (ADR-0005). The same editor core, in a
-    //     real window, through a plan9port `devdraw` child process. Everything
-    //     except `shim` (S-07 §6); `core`/`draw`/`ninep` are the SAME module
-    //     objects the wasm build consumes — no -D forks, no host #ifdefs. ---
+    // --- snarf: the NATIVE HOST (ADR-0005), installed as zig-out/bin/snarf —
+    //     the name users run (Larry, 2026-11-02; it was `snarf-native` before).
+    //     The same editor core, in a real window, through a plan9port `devdraw`
+    //     child process. Everything except `shim` (S-07 §6); `core`/`draw`/
+    //     `ninep` are the SAME module objects the wasm build consumes — no -D
+    //     forks, no host #ifdefs. The wasm artifact above is also named `snarf`;
+    //     the two never meet on disk: it installs to zig-out/www/snarf.wasm,
+    //     this one to zig-out/bin/snarf. ---
+    // #77: `snarf --version` prints this. `-Dversion=` wins; otherwise the
+    // latest tag plus, unless this is a clean build of a release tag, the
+    // short commit hash (`build/version.zig`, PR #74 Q8), else "unknown".
+    const native_opts = b.addOptions();
+    native_opts.addOption([]const u8, "version", b.option([]const u8, "version", "Version string `snarf --version` prints (default: latest tag + short hash)") orelse gitVersion(b));
+    const native_opts_mod = native_opts.createModule();
     const native = b.addExecutable(.{
-        .name = "snarf-native",
+        .name = "snarf",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main_native.zig"),
             .target = target,
@@ -140,11 +151,12 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "dev", .module = dev },
                 .{ .name = "host", .module = host },
                 .{ .name = "hostfs", .module = hostfs },
+                .{ .name = "native_options", .module = native_opts_mod },
             },
         }),
     });
     b.installArtifact(native);
-    const native_step = b.step("native", "Build the native host (snarf-native; on macOS also zig-out/bin/devdraw)");
+    const native_step = b.step("native", "Build the native host (zig-out/bin/snarf; on macOS also zig-out/bin/devdraw beside it)");
     native_step.dependOn(&b.addInstallArtifact(native, .{}).step);
 
     // --- devdraw: the display-server PEER, built from the pinned plan9port
@@ -178,7 +190,7 @@ pub fn build(b: *std.Build) void {
 
     // R-P18-8: run the INSTALLED binary, so the bundled `devdraw` beside it is
     // what `DevdrawPath` finds (a cached exe has no sibling).
-    const run_native = b.addSystemCommand(&.{b.getInstallPath(.bin, "snarf-native")});
+    const run_native = b.addSystemCommand(&.{b.getInstallPath(.bin, "snarf")});
     run_native.step.dependOn(native_step);
     const run_step = b.step("run-native", "Run the native host: the editor in a devdraw window");
     run_step.dependOn(&run_native.step);
@@ -240,6 +252,7 @@ pub fn build(b: *std.Build) void {
     // The bundled-devdraw file table's count assertions (phase 18, §3c). A
     // build-time helper, std-only; testing it touches no dependency.
     addModuleTests(b, test_step, target, optimize, "build/devdraw_files.zig", &.{});
+    addModuleTests(b, test_step, target, optimize, "build/version.zig", &.{});
     // The host file system as 9P, atomic Put included (phase 20).
     addModuleTests(b, test_step, target, optimize, "src/hostfs/root.zig", &.{
         .{ .name = "ninep", .module = ninep },
@@ -269,7 +282,7 @@ pub fn build(b: *std.Build) void {
     });
     // The native entry point's boot → session → shutdown (#58), over a
     // scripted devdraw peer: no child process, no window. Same imports as
-    // `snarf-native`, so the test sees exactly what the executable sees.
+    // the native `snarf`, so the test sees exactly what the executable sees.
     addModuleTests(b, test_step, target, optimize, "src/main_native.zig", &.{
         .{ .name = "core", .module = core },
         .{ .name = "draw", .module = draw },
@@ -277,7 +290,31 @@ pub fn build(b: *std.Build) void {
         .{ .name = "dev", .module = dev },
         .{ .name = "host", .module = host },
         .{ .name = "hostfs", .module = hostfs },
+        .{ .name = "native_options", .module = native_opts_mod },
     });
+}
+
+/// `snarf --version`'s string from git (format: `build/version.zig`), or
+/// "unknown" (no git, not a checkout). Only `snarf --version` reads it (#77).
+fn gitVersion(b: *std.Build) []const u8 {
+    const root = b.build_root.path orelse ".";
+    const hash = gitLine(b, &.{ "git", "-C", root, "rev-parse", "--short", "HEAD" }) orelse return "unknown";
+    var code: u8 = 0;
+    _ = b.runAllowFail(&.{ "git", "-C", root, "diff", "--quiet", "HEAD" }, &code, .ignore) catch {};
+    return version.format(b.allocator, .{
+        .tag = gitLine(b, &.{ "git", "-C", root, "describe", "--tags", "--abbrev=0" }),
+        .exact = gitLine(b, &.{ "git", "-C", root, "describe", "--tags", "--exact-match" }) != null,
+        .hash = hash,
+        .dirty = code != 0,
+    }) catch "unknown";
+}
+
+/// One git command's trimmed output, or null if it failed or said nothing.
+fn gitLine(b: *std.Build, argv: []const []const u8) ?[]const u8 {
+    var code: u8 = 0;
+    const out = b.runAllowFail(argv, &code, .ignore) catch return null;
+    const v = std.mem.trim(u8, out, " \n\r\t");
+    return if (v.len == 0) null else v;
 }
 
 /// Build a test executable rooted at `root` with exactly `imports` visible, and

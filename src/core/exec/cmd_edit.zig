@@ -110,20 +110,27 @@ pub fn undo(
     // :247-248), so a change inside the visible region repaints in place (#57).
     // Before this the file op bypassed the frame and `show` only refilled
     // when the range was off-screen, leaving stale glyphs.
-    const r = try f.undoView(isundo, UndoView{ .texts = &.{&w.body} });
+    const one = [_]*Text{&w.body};
+    const views: []const *Text = if (f.shared()) f.texts.items else &one; // file.c:233,:247 f->text[]
+    const r = try f.undoView(isundo, UndoView{ .texts = views });
     // winundo wind.c:361: textshow scrolls to + selects the reversed range —
     // none for a rename-only transaction (file.c:259-271).
     if (r) |rr| try w.body.show(rr.q0, rr.q1, true);
-    w.dirty = (f.seq != w.putseq); // wind.c:366
+    for (views) |u| if (u.w) |v| { // wind.c:363-370
+        v.dirty = (f.seq != v.putseq);
+        if (v != w) { // the other Zerox views: dot follows their frame
+            v.body.q0 = v.body.fr.p0 + v.body.org;
+            v.body.q1 = v.body.fr.p1 + v.body.org;
+        }
+    };
     try wintag.setTagCommit(ed, w); // wind.c:372 winsettag
 }
 
 /// The `f->text[0..ntext]` loop of `fileundo` (file.c:233-234, :247-248): the
 /// Texts observing the undone file, each told with `tofile=FALSE` so only its
 /// frame/selection/origin follow the already-edited buffer (text.c:460-508,
-/// :366-413). FLAG: v1 has no Zerox (no shared-File views), so the only Text
-/// on a body file is that window's body; a future `File.text` list plugs in
-/// here.
+/// :366-413). The window's body, or `File.texts` — every Zerox view — when
+/// more than one window shows the file (#13).
 const UndoView = struct {
     texts: []const *Text,
 

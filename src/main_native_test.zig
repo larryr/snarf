@@ -19,12 +19,17 @@ const conn_line_len = host.dev_draw.conn_line_len;
 /// A devdraw stand-in: decodes each outbound frame and feeds back the reply
 /// devdraw would send (srv.c `runmsg`), with the request's own tag. The two
 /// long polls (`Trdmouse`/`Trdkbd4`) stay unanswered, as with an idle user.
-const FakeDevdraw = struct {
+pub const FakeDevdraw = struct {
     conn: *Conn,
     /// The `Trddraw` answer: a 1024x768 x8r8g8b8 screen (devdraw.c:945-947).
     line: [conn_line_len]u8,
     hung_up: bool = false,
     frames: usize = 0,
+    /// The macOS pasteboard as devdraw sees it (#12): `Trdsnarf` answers it,
+    /// `Twrsnarf` replaces it. Owned (`conn.gpa`); freed by `Rig.destroy`.
+    pasteboard: std.ArrayList(u8) = .empty,
+    rdsnarfs: usize = 0,
+    wrsnarfs: usize = 0,
 
     fn init(conn: *Conn) FakeDevdraw {
         var self: FakeDevdraw = .{ .conn = conn, .line = undefined };
@@ -67,8 +72,16 @@ const FakeDevdraw = struct {
             .tcursor => try c.feedMsg(.rcursor, tag),
             .tcursor2 => try c.feedMsg(.rcursor2, tag),
             .tbouncemouse => try c.feedMsg(.rbouncemouse, tag),
-            .trdsnarf => try c.feedMsg(.{ .rrdsnarf = "" }, tag),
-            .twrsnarf => try c.feedMsg(.rwrsnarf, tag),
+            .trdsnarf => {
+                self.rdsnarfs += 1;
+                try c.feedMsg(.{ .rrdsnarf = self.pasteboard.items }, tag);
+            },
+            .twrsnarf => |t| {
+                self.wrsnarfs += 1;
+                self.pasteboard.clearRetainingCapacity();
+                try self.pasteboard.appendSlice(c.gpa, t);
+                try c.feedMsg(.rwrsnarf, tag);
+            },
             .ttop => try c.feedMsg(.rtop, tag),
             .tresize => try c.feedMsg(.rresize, tag),
             .tctxt => try c.feedMsg(.rctxt, tag),
@@ -80,7 +93,7 @@ const FakeDevdraw = struct {
 
 /// `main`'s shape, minus the spawn: an `App` on the heap, a scripted peer, a
 /// scratch host root, and `shutdown` deferred BEFORE `boot` as `main` does.
-const Rig = struct {
+pub const Rig = struct {
     a: std.mem.Allocator,
     app: *App,
     peer: FakeDevdraw,
@@ -91,7 +104,7 @@ const Rig = struct {
     /// The Put's temp-file bytes just before shutdown (`workSession`).
     partial: ?[]u8 = null,
 
-    fn create() !*Rig {
+    pub fn create() !*Rig {
         const a = testing.allocator;
         const r = try a.create(Rig);
         errdefer a.destroy(r);
@@ -110,8 +123,18 @@ const Rig = struct {
         return r;
     }
 
-    fn boot(r: *Rig) !void {
-        try main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root);
+    pub fn boot(r: *Rig) !void {
+        try r.bootWith(&.{});
+    }
+
+    /// `boot` with command-line file arguments, as typed in `/`.
+    pub fn bootWith(r: *Rig, files: []const []const u8) !void {
+        try r.bootIn("/", files);
+    }
+
+    /// `boot` with command-line file arguments typed in the directory `cwd`.
+    pub fn bootIn(r: *Rig, cwd: []const u8, files: []const []const u8) !void {
+        try main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, cwd, files);
         r.app.editor.session.home = "/";
         r.app.host_tree.recovery.tmp_dir = r.root; // as main sets $TMPDIR
         try r.app.conn.armMouse();
@@ -120,8 +143,9 @@ const Rig = struct {
 
     /// `shutdown` (idempotent, so a test may call it early), then the rest of
     /// `main`'s exit: reap the peer, free the `App`.
-    fn destroy(r: *Rig) void {
+    pub fn destroy(r: *Rig) void {
         main_native.shutdown(r.app);
+        r.peer.pasteboard.deinit(r.a);
         r.app.conn.deinit();
         r.a.destroy(r.app);
         r.log.deinit();
@@ -131,11 +155,11 @@ const Rig = struct {
         r.a.destroy(r);
     }
 
-    fn ticks(r: *Rig, n: usize) !void {
+    pub fn ticks(r: *Rig, n: usize) !void {
         for (0..n) |_| try main_native.tick(r.app);
     }
 
-    fn settle(r: *Rig) !void {
+    pub fn settle(r: *Rig) !void {
         const ed = &r.app.editor;
         var i: usize = 0;
         while (ed.loads.items.len != 0 or ed.puts.items.len != 0 or
@@ -147,7 +171,7 @@ const Rig = struct {
         try r.ticks(4);
     }
 
-    fn run(r: *Rig, t: *core.Text, word: []const u8) !void {
+    pub fn run(r: *Rig, t: *core.Text, word: []const u8) !void {
         const n = t.file.buffer.len();
         try t.insertAt(n, " ", true);
         try t.insertAt(n + 1, word, true);
@@ -155,7 +179,7 @@ const Rig = struct {
         try t.deleteRange(n, n + 1 + word.len, true);
     }
 
-    fn edit(r: *Rig, w: *core.Window, text: []const u8) !void {
+    pub fn edit(r: *Rig, w: *core.Window, text: []const u8) !void {
         const ed = &r.app.editor;
         ed.seq += 1;
         w.body.file.mark(ed.seq);
@@ -163,7 +187,7 @@ const Rig = struct {
         try r.ticks(1);
     }
 
-    fn disk(r: *Rig, rel: []const u8) ![]u8 {
+    pub fn disk(r: *Rig, rel: []const u8) ![]u8 {
         return r.tmp.dir.readFileAlloc(testing.io, rel, r.a, .limited(16 << 20));
     }
 
@@ -357,7 +381,7 @@ test "main_native: a boot that fails part-way is torn down by the same shutdown 
     defer r.destroy();
     r.a.free(r.root);
     r.root = try r.a.dupeZ(u8, "/nonexistent/snarf-58-host-root");
-    try testing.expectError(error.FileNotFound, main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root));
+    try testing.expectError(error.FileNotFound, main_native.boot(r.a, testing.io, r.app, core.Palette.default, r.root, "/", &.{}));
     try testing.expect(r.app.built.self_tree and !r.app.built.host_fs);
     main_native.shutdown(r.app);
     try testing.expectEqualStrings("", r.log.written()); // nothing to discard
@@ -371,7 +395,7 @@ test "main_native: main defers shutdown before boot, and conn.deinit after it (#
     const src = @embedFile("main_native.zig");
     const conn_deinit = std.mem.indexOf(u8, src, "defer a.conn.deinit();").?;
     const defer_shutdown = std.mem.indexOf(u8, src, "defer shutdown(a);").?;
-    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\");").?;
+    const call_boot = std.mem.indexOf(u8, src, "try boot(gpa, init.io, a, pal, \"/\", cwd.path, cmdline.files);").?;
     try testing.expect(conn_deinit < defer_shutdown);
     try testing.expect(defer_shutdown < call_boot);
     try testing.expect(std.mem.indexOf(u8, src, "defer a.tree.deinit();") == null);
@@ -388,4 +412,20 @@ test "main_native: shutdown drains, then hangs up the host session, BEFORE teard
     const teardown = std.mem.indexOf(u8, src, "core.shutdown.teardown(&a.editor").?;
     try testing.expect(drain < hang);
     try testing.expect(hang < teardown);
+}
+
+test "main_native: the file-argument directory is freed at the size it was allocated (#74 review, currentPathAlloc's sentinel)" {
+    // std.testing.allocator fails the test on a size-mismatched free, which
+    // is what `main` printed at every exit with file arguments.
+    for ([_]usize{ 0, 1, 3 }) |n| {
+        const d = try main_native.ArgsDir.init(testing.allocator, testing.io, n);
+        defer d.deinit(testing.allocator);
+        try testing.expect(d.path.len != 0 and d.path[0] == '/');
+        try testing.expectEqual(@as(u8, 0), d.path.ptr[d.path.len]);
+        if (n == 0) try testing.expectEqualStrings("/", d.path);
+    }
+    // `main` goes through ArgsDir rather than its own slice.
+    const src = @embedFile("main_native.zig");
+    try testing.expect(std.mem.indexOf(u8, src, "const cwd = try ArgsDir.init(gpa, init.io, cmdline.files.len);") != null);
+    try testing.expect(std.mem.indexOf(u8, src, "defer cwd.deinit(gpa);") != null);
 }

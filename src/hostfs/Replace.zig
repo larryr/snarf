@@ -39,6 +39,12 @@ target: [:0]u8,
 temp: ?[]u8,
 /// A write failed: clunk discards instead of committing.
 failed: bool = false,
+/// This Put made `target` itself (a Tcreate: `beginNew`). The name holds an
+/// empty placeholder until the commit renames the temp over it; a discard
+/// removes the placeholder again, so a Put of a new file that never finished
+/// leaves NO file under the real name (#70, SnarfProdd ruling 2026-11-02: a
+/// half-written file under the real name looks like a successful save).
+created: bool = false,
 
 /// Begin a Put onto the existing file `rel` (relative to `fs.root`).
 pub fn begin(fs: *HostFs, gpa: std.mem.Allocator, rel: []const u8) OpError!Replace {
@@ -79,6 +85,23 @@ pub fn begin(fs: *HostFs, gpa: std.mem.Allocator, rel: []const u8) OpError!Repla
     return error.IoError;
 }
 
+/// Begin a Put of a NEW file `rel` (the Tcreate path, #70). The exclusive
+/// create of an empty file at `rel` is the 9P create itself (an existing name
+/// is still `file already exists`, mode `0666 & ~umask`, PM Q5), and it
+/// reserves the name; the bytes then go to a temp beside it exactly as for an
+/// existing file (`begin`), so the name only ever holds nothing or the whole
+/// Put. If the temp cannot be set up the placeholder is removed again and the
+/// create fails.
+pub fn beginNew(fs: *HostFs, gpa: std.mem.Allocator, rel: []const u8) OpError!Replace {
+    try fs.createFile(rel);
+    var r = begin(fs, gpa, rel) catch |e| {
+        fs.root.deleteFile(fs.io, rel) catch {};
+        return e;
+    };
+    r.created = true;
+    return r;
+}
+
 /// The fallback when no temp can be made beside the original: acme's own
 /// open-truncate (non-atomic, but no worse than acme).
 fn inPlace(fs: *HostFs, rel: []const u8, target: [:0]u8) OpError!Replace {
@@ -112,18 +135,46 @@ pub fn read(self: *Replace, fs: *HostFs, offset: u64, buf: []u8) OpError!usize {
 /// are copied over the original IN PLACE instead (the file itself is usually
 /// still writable; non-atomic, but the save happens — orchestrator fix, phase
 /// 20 gate). Only if that too fails does the original stay as it was, and the
-/// client's re-stat (`Put.zig` restat, exec.c:790-799) sees no change. The
-/// temp's delete is best-effort: in a locked directory it cannot be removed.
+/// client's re-stat (`Put.zig` restat, exec.c:790-799) sees no change.
+///
+/// A discarded Put of a new file (`created`) also removes its placeholder
+/// (#70), but only while it is still empty: anything else there is not ours.
 pub fn end(self: *Replace, fs: *HostFs, gpa: std.mem.Allocator) void {
+    if (self.finish(fs, gpa)) |stray| gpa.free(stray);
+}
+
+/// `end`, returning the temp's path (owned) when it could NOT be deleted —
+/// the directory went read-only mid-Put (#70 review item 3). Its contents are
+/// truncated away first (the file is usually still writable), so a stray
+/// holds no copy of the user's bytes; the caller retries the delete later
+/// (`HostTree.sweepStrays`).
+pub fn finish(self: *Replace, fs: *HostFs, gpa: std.mem.Allocator) ?[]u8 {
+    var stray: ?[]u8 = null;
     if (self.temp) |temp| {
         if (!self.failed) {
             fs.root.rename(temp, fs.root, self.target, fs.io) catch copyInPlace(fs, temp, self.target);
         }
-        fs.root.deleteFile(fs.io, temp) catch {};
-        gpa.free(temp);
+        if (fs.root.deleteFile(fs.io, temp)) |_| {
+            gpa.free(temp);
+        } else |e| switch (e) {
+            error.FileNotFound => gpa.free(temp), // renamed, or pulled from under us
+            else => {
+                fs.truncate(temp) catch {};
+                stray = temp;
+            },
+        }
     }
+    if (self.created and self.failed and self.temp != null) removeIfEmpty(fs, self.target);
     gpa.free(self.target);
     self.* = undefined;
+    return stray;
+}
+
+/// Delete `path` if it is an empty regular file (a `beginNew` placeholder).
+fn removeIfEmpty(fs: *HostFs, path: []const u8) void {
+    const st = fs.root.statFile(fs.io, path, .{ .follow_symlinks = false }) catch return;
+    if (st.kind != .file or st.size != 0) return;
+    fs.root.deleteFile(fs.io, path) catch {};
 }
 
 /// Rename-failure fallback: stream the temp's bytes over the original

@@ -193,7 +193,9 @@ fn sanitizeUtf8(a: Allocator, data: []const u8) error{OutOfMemory}![]u8 {
 
 // ===========================================================================
 // ctl write (xfidctlwrite, xfid.c:622-844) — v1 subset (R-P10-H): clean,
-// dirty, delete, del, name. Commands are packed back-to-back in one write;
+// dirty, delete, del, name, get, put — acme's own verbs only (SnarfProdd, PR #74
+// Q3: no port-only verbs; quitting the editor through a file is an M5 grant
+// question). Commands are packed back-to-back in one write;
 // each consumes its own prefix (+ argument for `name`), trailing '\n's are
 // skipped between commands (xfid.c:827-828), and the FIRST failure aborts
 // the whole write (xfid.c:835-838: `err` set ⇒ the reported count is 0 — Zig
@@ -664,4 +666,20 @@ test "served: body write appends" {
     try testing.expect(rw2.body == .rwrite);
     const nc2 = w.body.file.buffer.len();
     try testing.expectEqualStrings("hello\nMORE!", w.body.file.buffer.read(0, nc2, &rbuf));
+}
+
+test "served: ctl has acme's verbs only — sort, kill, exit and zerox are ill-formed (PR #74 Q3)" {
+    const h = try Harness.create(testing.allocator, "/c", "cee\n");
+    defer h.destroy();
+    try h.connect();
+    const col = h.tree.row.col.items[0];
+    _ = try h.walk(0, 1, &.{ "1", "ctl" });
+    _ = try h.open(1, msg.ORDWR);
+    for ([_][]const u8{ "sort\n", "kill cc\n", "exit\n", "zerox\n" }) |verb| {
+        const r = try h.write(1, 0, verb);
+        try testing.expect(r.body == .rerror);
+        try testing.expectEqualStrings("ill-formed control message", r.body.rerror.ename);
+    }
+    try testing.expect(!h.ed.exit_requested);
+    try testing.expectEqual(@as(usize, 1), col.w.items.len);
 }

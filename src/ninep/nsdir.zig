@@ -14,7 +14,8 @@
 //!     unionrewind`). One cursor per open directory: member index plus an open
 //!     clone of that member. The members' directory streams are CONCATENATED in
 //!     bind order; "Error causes component of union to be skipped"; there is no
-//!     de-duplication of names anywhere (ruling R-P12d-2). Offset 0 rewinds
+//!     de-duplication of names (ruling R-P12d-2) except at native `/`, `/dev`
+//!     and `/mnt` while the host is mounted at `/` (#60, `dedupScope`). Offset 0 rewinds
 //!     (`sysfile.c:660-666`), any other offset must equal the bytes already
 //!     returned (`Edirseek`, `sysfile.c:676`; read(5) "seeking other than to
 //!     the beginning is illegal in a directory").
@@ -151,8 +152,108 @@ pub fn walk(ns: *const Namespace, path_in: []const u8) Error!Handle {
         const info = t.client.walk(t.root_fid, names[0..n]) catch continue;
         return .{ .fid = .{ .client = t.client, .fid = info.fid } };
     }
+    if (shadowFall(ns, res.entry)) |root| { // #60: a name snarf lacks is the host's
+        const m = splitComponents(path[1..], &names) orelse return error.BadPath;
+        for (root.targets.items) |t| {
+            const info = t.client.walk(t.root_fid, names[0..m]) catch continue;
+            return .{ .fid = .{ .client = t.client, .fid = info.fid } };
+        }
+    }
     return syntheticHandle(ns, path) orelse error.NotFound;
 }
+
+// ---------------------------------------------------------------------------
+// #60 — the host at `/` behind snarf's own top-level mounts.
+//
+// Native mounts the host file system at `/` and snarf's devices at `/dev`,
+// `/dev/draw`, `/mnt/host`, `/mnt/snarf-self`. Longest-prefix resolution then
+// HIDES the host's own `/dev` (and duplicates `dev`/`mnt` in the `/`
+// listing). SnarfProdd's rulings (decisions README, 2026-10-31 interim and
+// 2026-11-02): host directories are never hidden; at `/`, `dev/` and `mnt/`
+// each name is listed once, snarf's record first and winning a collision;
+// a name snarf does not serve falls through to the host; no nested union
+// (`/dev/draw` stays snarf-only); a new file in a shadowed folder is created
+// on the host; every other union keeps R-9P-03 (no dedup). Plan 9 itself has
+// no such fall-through — this is a port rule, scoped by the two helpers
+// below so a namespace without a `/` mount (browser, `/n/local`) is untouched.
+// ---------------------------------------------------------------------------
+
+/// The entry mounted EXACTLY at "/", if any.
+pub fn rootEntry(ns: *const Namespace) ?*const mount.Entry {
+    for (ns.entries.items) |*e| if (std.mem.eql(u8, e.prefix, "/")) return e;
+    return null;
+}
+
+/// The top-level directories whose host copies snarf's mounts shadow — the
+/// ruling names exactly these (`dev/` and `mnt/`); any other union (e.g. a
+/// `/bin` bind) keeps R-9P-03.
+pub const shadow_dirs = [_][]const u8{ "/dev", "/mnt" };
+
+fn isShadowDir(p: []const u8) bool {
+    for (shadow_dirs) |d| if (std.mem.eql(u8, p, d)) return true;
+    return false;
+}
+
+/// The host-at-`/` entry a path resolved into a shadowing snarf mount (the
+/// one at `/dev`) falls through to: tried after snarf's own members, with the
+/// whole path (minus its leading '/') as remainder. Null for a deeper mount
+/// (`/dev/draw`: no nested union), any other prefix, or when nothing is
+/// mounted at `/`. (`/mnt` itself is no mount: it already resolves to `/`.)
+pub fn shadowFall(ns: *const Namespace, entry: *const mount.Entry) ?*const mount.Entry {
+    if (!isShadowDir(entry.prefix)) return null;
+    const root = rootEntry(ns) orelse return null;
+    return if (root == entry) null else root;
+}
+
+/// Does a listing of `path` list each name once (#60 ruling #1)? Only `/`,
+/// `/dev` and `/mnt`, and only while the host is mounted at `/`.
+pub fn dedupScope(ns: *const Namespace, path: []const u8) bool {
+    if (rootEntry(ns) == null) return false;
+    return std.mem.eql(u8, path, "/") or isShadowDir(path);
+}
+
+/// Names already listed, for `dedupScope` listings. Keys are owned.
+pub const Seen = struct {
+    map: std.StringHashMapUnmanaged(void) = .empty,
+
+    /// True the first time `name` is offered (and records it).
+    pub fn first(self: *Seen, a: std.mem.Allocator, name: []const u8) error{OutOfMemory}!bool {
+        if (self.map.contains(name)) return false;
+        const k = try a.dupe(u8, name);
+        errdefer a.free(k);
+        try self.map.put(a, k, {});
+        return true;
+    }
+
+    pub fn clear(self: *Seen, a: std.mem.Allocator) void {
+        var it = self.map.keyIterator();
+        while (it.next()) |k| a.free(k.*);
+        self.map.clearRetainingCapacity();
+    }
+
+    pub fn deinit(self: *Seen, a: std.mem.Allocator) void {
+        self.clear(a);
+        self.map.deinit(a);
+    }
+
+    /// Drop, in place, every whole stat record in `buf` whose name was seen
+    /// (recording the rest). Returns the kept length.
+    pub fn filter(self: *Seen, a: std.mem.Allocator, buf: []u8) Error!usize {
+        var r: usize = 0;
+        var w: usize = 0;
+        while (r + 2 <= buf.len) {
+            const rec = 2 + @as(usize, std.mem.readInt(u16, buf[r..][0..2], .little));
+            if (r + rec > buf.len) return error.ProtocolError;
+            const st = Stat.decode(buf[r..][0..rec]) catch return error.ProtocolError;
+            if (try self.first(a, st.name)) {
+                if (w != r) std.mem.copyForwards(u8, buf[w..][0..rec], buf[r..][0..rec]);
+                w += rec;
+            }
+            r += rec;
+        }
+        return w;
+    }
+};
 
 /// Release a handle: clunk the fid, nothing to do for a synthetic directory.
 /// `ns` is unused today — it is in the signature because a future cached
@@ -242,7 +343,10 @@ pub fn syntheticChildren(
 ///      member that fails to walk, open or read is SKIPPED (sysfile.c:340
 ///      "Error causes component of union to be skipped").
 /// There is no de-duplication between members (R-P12d-2): Plan 9 does none, so
-/// a name present in two members appears twice.
+/// a name present in two members appears twice — except inside `dedupScope`
+/// (#60), where the first record of a name (snarf's) is kept and later ones
+/// dropped, and a shadowing mount's members are followed by the host's
+/// (`shadowFall`).
 ///
 /// The union is SNAPSHOT at `open`, like the kernel's refcounted `c->umh`: a
 /// later `bind` or `unmount` does not disturb a reader that is already open.
@@ -267,6 +371,9 @@ pub const DirReader = struct {
     /// i.e. a real union. False when they were reached by walking through an
     /// ancestor mount, where chan.c's walk takes the first success only.
     union_at_mount: bool,
+    /// #60: list each name once (`dedupScope`); `seen` holds what was listed.
+    dedup: bool = false,
+    seen: Seen = .{},
     /// Bytes handed out so far — the only legal non-zero read offset (read(5)).
     pos: u64 = 0,
     /// Cursor: next synthetic child, then `unionread`'s `uri`/`umc` pair.
@@ -300,6 +407,7 @@ pub const DirReader = struct {
         };
         errdefer self.close();
 
+        self.dedup = dedupScope(ns, self.path);
         try self.collectSynthetic(ns);
         try self.collectMembers(ns);
         // Neither a mount point nor a prefix of one — the same verdict `walk`
@@ -310,6 +418,7 @@ pub const DirReader = struct {
 
     pub fn close(self: *DirReader) void {
         self.closeMember();
+        self.seen.deinit(self.allocator);
         for (self.synth.items) |n| self.allocator.free(n);
         self.synth.deinit(self.allocator);
         self.members.deinit(self.allocator);
@@ -377,6 +486,7 @@ pub const DirReader = struct {
             var full: [512]u8 = undefined;
             const fp = self.childPath(&full, name) orelse return error.MessageTooBig;
             const st = syntheticStat(name, fp);
+            if (self.dedup) _ = try self.seen.first(self.allocator, name);
             self.pend_len = st.encode(self.pend) catch return error.MessageTooBig;
             return true;
         }
@@ -396,7 +506,10 @@ pub const DirReader = struct {
                 continue;
             }
             self.umc_off += got;
-            self.pend_len = got;
+            // #60: a name already listed (snarf's, or an earlier member's) is dropped.
+            const kept = if (self.dedup) try self.seen.filter(self.allocator, self.pend[0..got]) else got;
+            if (kept == 0) continue; // the whole chunk was duplicates: read on
+            self.pend_len = kept;
             return true;
         }
         return false;
@@ -444,6 +557,7 @@ pub const DirReader = struct {
         self.pend_start = 0;
         self.pend_len = 0;
         self.pos = 0;
+        self.seen.clear(self.allocator);
     }
 
     /// `<path>/<name>`, for a synthetic child's qid. Null if it does not fit.
@@ -478,6 +592,14 @@ pub const DirReader = struct {
                 .rem = res.remainder,
             });
         }
+        // #60: then the host's view of the same path, after snarf's members.
+        if (shadowFall(ns, res.entry)) |root| for (root.targets.items) |t| {
+            try self.members.append(self.allocator, .{
+                .client = t.client,
+                .base_fid = t.root_fid,
+                .rem = self.path[1..],
+            });
+        };
     }
 };
 

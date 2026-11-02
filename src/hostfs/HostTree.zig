@@ -35,6 +35,10 @@ discard_log: ?*std.Io.Writer = null,
 /// Larry). The host sets `recovery.tmp_dir` from `$TMPDIR`; tests point it
 /// (and `pid`) at a scratch directory.
 recovery: Recovery,
+/// Temps a finished Put could not delete (its directory went read-only
+/// mid-Put; #70 review item 3). Already truncated to zero bytes; the delete
+/// is retried after every later Put and at `endSession` (owned paths).
+strays: std.ArrayList([]u8) = .empty,
 
 /// Per-fid state (`fid.ctx`): the path relative to the export root ("" is
 /// the root) and, between an OTRUNC open and the clunk, the Put in flight.
@@ -61,7 +65,8 @@ pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
 ///     snarf: Put of /path not finished at exit; file left unchanged
 ///     snarf: partial contents saved in /dir/.name.snarf-partial
 ///
-/// (second line instead `snarf: could not save partial contents (<error>)`,
+/// (first line ending `file not created` instead for a Put of a NEW file,
+/// #70, which leaves nothing under its name; second line instead `snarf: could not save partial contents (<error>)`,
 /// or absent for a Put of zero bytes). Paths are absolute namespace paths
 /// under the `/` mount — the real paths on native, where the root is `/` —
 /// so a B3 on either opens it. Nothing is written or printed when nothing is
@@ -71,7 +76,55 @@ pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) vo
     self.hangUp(log);
     defer self.discard_log = null;
     srv.releaseFids();
+    self.sweepStrays();
+    self.reportStrays();
+    for (self.strays.items) |p| self.gpa.free(p);
+    self.strays.deinit(self.gpa);
+    self.strays = .empty;
     if (log) |w| w.flush() catch {};
+}
+
+/// A stray temp that still refuses to go at exit is named on `discard_log`,
+/// one line each, never left behind silently (SnarfProdd, PR #74 Q2):
+///
+///     snarf: could not remove temp file /dir/.name.snarf-put.N
+///
+/// The path is the namespace path under the `/` mount (the real path on
+/// native), bare and last on its line, as the #68 lines are, so B3 opens it.
+fn reportStrays(self: *HostTree) void {
+    if (self.discard_log == null or self.strays.items.len == 0) return;
+    const root = self.fs.root.realPathFileAlloc(self.fs.io, ".", self.gpa) catch null;
+    defer if (root) |r| self.gpa.free(r);
+    for (self.strays.items) |p| {
+        const shown = if (root) |r| nsPath(r, p) else p;
+        if (shown.len != 0 and shown[0] == '/')
+            self.note("snarf: could not remove temp file {s}\n", .{shown})
+        else
+            self.note("snarf: could not remove temp file /{s}\n", .{shown});
+    }
+}
+
+/// `abs` relative to the export root `root` ("" → the path itself is under
+/// it, returned without the root and its '/'); `abs` unchanged otherwise.
+fn nsPath(root: []const u8, abs: []const u8) []const u8 {
+    const r = std.mem.trimEnd(u8, root, "/");
+    if (r.len == 0) return abs; // root is `/`: already the namespace path
+    if (abs.len > r.len and std.mem.startsWith(u8, abs, r) and abs[r.len] == '/') return abs[r.len + 1 ..];
+    return abs;
+}
+
+/// Retry deleting every stray temp; keep the ones that still refuse.
+fn sweepStrays(self: *HostTree) void {
+    var i: usize = 0;
+    while (i < self.strays.items.len) {
+        const p = self.strays.items[i];
+        if (self.fs.root.deleteFile(self.fs.io, p)) |_| {
+            self.gpa.free(self.strays.swapRemove(i));
+        } else |e| switch (e) {
+            error.FileNotFound => self.gpa.free(self.strays.swapRemove(i)),
+            else => i += 1,
+        }
+    }
 }
 
 /// First half of `endSession`: from here on no Tclunk commits a Put. One that
@@ -100,7 +153,9 @@ fn keepPartial(self: *HostTree, p: *Replace, rel: []const u8) void {
         return self.note("snarf: Put of /{s} not finished at exit; written in place and may be incomplete\n", .{rel});
     const saved = self.recovery.save(self.fs, self.gpa, temp, rel);
     defer saved.deinit(self.gpa);
-    self.note("snarf: Put of /{s} not finished at exit; file left unchanged\n", .{rel});
+    // #70 / SnarfProdd 2026-11-02: a NEW file was never there to be "unchanged".
+    const outcome = if (p.created) "file not created" else "file left unchanged";
+    self.note("snarf: Put of /{s} not finished at exit; {s}\n", .{ rel, outcome });
     switch (saved) {
         .empty => {},
         .saved => |path| self.note("snarf: partial contents saved in {s}\n", .{path}),
@@ -188,6 +243,7 @@ fn open(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) OpError!
     const acc = mode & 3;
     const wants_write = acc == msg.OWRITE or acc == msg.ORDWR or (mode & msg.OTRUNC) != 0;
     const qid = try self.fs.qidOf(node.rel);
+    if (!try self.fs.isPlain(node.rel)) return error.NotSupported; // device/fifo/socket (#60, #76)
     if (qid.qtype.dir) {
         if (wants_write) return error.PermissionDenied;
     } else if ((mode & msg.OTRUNC) != 0) {
@@ -198,17 +254,25 @@ fn open(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) OpError!
 
 /// Tcreate of a plain file: exclusive (an existing name is `file already
 /// exists`; the client's open-OTRUNC path handles that case), mode
-/// `0666 & ~umask` (PM Q5). Directories are refused.
+/// `0666 & ~umask` (PM Q5). Directories are refused. The fid is then a Put
+/// like an OTRUNC open (`Replace.beginNew`, #70): its bytes reach the name
+/// only at the Tclunk, and a Put cut off at exit leaves no file under the
+/// name, keeps its bytes in a recovery file, and is reported like any other.
 fn create(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, name: []const u8, perm: u32, _: u8) server.OpBlockError!server.CreateResult {
     const self = self_(ctx);
     if (perm & Stat.DMDIR != 0) return error.PermissionDenied;
     const node = nodeOf(fid);
     const child = try self.join(node.rel, name);
     errdefer self.gpa.free(child);
-    try self.fs.createFile(child);
-    const qid = try self.fs.qidOf(child);
+    var put = try Replace.beginNew(self.fs, self.gpa, child);
+    const qid = self.fs.qidOf(child) catch |e| {
+        put.failed = true;
+        put.end(self.fs, self.gpa);
+        return e;
+    };
     self.gpa.free(node.rel);
     node.rel = child;
+    node.put = put;
     return .{ .qid = qid };
 }
 
@@ -235,7 +299,9 @@ fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
             if (!p.failed) self.keepPartial(p, node.rel);
             p.failed = true;
         }
-        p.end(self.fs, self.gpa); // commit or discard
+        if (p.finish(self.fs, self.gpa)) |stray| // commit or discard
+            self.strays.append(self.gpa, stray) catch self.gpa.free(stray);
+        self.sweepStrays();
     }
     self.gpa.free(node.rel);
     self.gpa.destroy(node);

@@ -260,10 +260,11 @@ pub fn redraw(self: *Text) Error!void {
     try self.fr.redraw();
 }
 
-/// `textinsert` (text.c:366-413), SINGLE-Text subset: insert `bytes` (valid
+/// `textinsert` (text.c:366-413): insert `bytes` (valid
 /// UTF-8) at FILE offset `q0`. When `tofile`, record it through `File.insert`
-/// (undoable); then slide `iq1`/the selection/the origin (text.c:393-402, the
-/// multi-Text/window-event paths dropped) and, if the edit lands inside the
+/// (undoable) and, for a file other windows show too (Zerox), replay it into
+/// each of them with `tofile=FALSE` (text.c:381-390); then slide `iq1`/the
+/// selection/the origin (text.c:393-402, the window-event path dropped) and, if the edit lands inside the
 /// displayed region, `frinsert` at the SCREEN offset `q0-org`. The `q0<org`
 /// origin-shift arm is now LIVE (phase 7 scrolling — an edit above the view
 /// slides `org` down by `n`).
@@ -276,6 +277,14 @@ pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!v
     if (tofile and self.what == .body) if (self.w) |w| {
         w.dirty = true;
     };
+    if (tofile and self.file.shared()) { // text.c:381-390: the other views (Zerox)
+        for (self.file.texts.items) |u| if (u != self) {
+            if (u.w) |uw| uw.dirty = true; // always a body
+            try u.insertAt(q0, bytes, false);
+            try u.setSelect(u.q0, u.q1);
+            try u.scrDraw();
+        };
+    }
     if (q0 < self.iq1) self.iq1 += n; // text.c:393-394
     if (q0 < self.q1) self.q1 += n; // text.c:395-396
     if (q0 < self.q0) self.q0 += n; // text.c:397-398
@@ -287,10 +296,11 @@ pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!v
     }
 }
 
-/// `textdelete` (text.c:460-508), SINGLE-Text subset: delete FILE range
+/// `textdelete` (text.c:460-508): delete FILE range
 /// `[q0, q1)`. When `tofile`, record it through `File.delete` (undoable, which
-/// also captures the doomed text for undo); then slide `iq1`/the selection/the
-/// origin (text.c:488-495, multi-Text/window-event paths dropped) and, if the
+/// also captures the doomed text for undo) and replays it into the other
+/// views of a shared file (text.c:477-486); then slide `iq1`/the selection/the
+/// origin (text.c:488-495, window-event path dropped) and, if the
 /// range overlaps the displayed region, `frdelete` the clipped screen range
 /// (text.c:496-505) and `textfill` to top the frame back up (text.c:506). The
 /// `q1<=org` arm that re-anchors the origin is now LIVE (phase 7 scrolling).
@@ -301,6 +311,14 @@ pub fn deleteRange(self: *Text, q0: usize, q1: usize, tofile: bool) Error!void {
     if (tofile and self.what == .body) if (self.w) |w| {
         w.dirty = true; // text.c:474 `w->dirty = TRUE` (BODY edits only)
     };
+    if (tofile and self.file.shared()) { // text.c:477-486: the other views (Zerox)
+        for (self.file.texts.items) |u| if (u != self) {
+            if (u.w) |uw| uw.dirty = true; // always a body
+            try u.deleteRange(q0, q1, false);
+            try u.setSelect(u.q0, u.q1);
+            try u.scrDraw();
+        };
+    }
     if (q0 < self.iq1) self.iq1 -= @min(n, self.iq1 - q0); // text.c:488-489
     if (q0 < self.q0) self.q0 -= @min(n, self.q0 - q0); // text.c:490-491
     if (q0 < self.q1) self.q1 -= @min(n, self.q1 - q0); // text.c:492-493

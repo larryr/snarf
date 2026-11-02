@@ -150,7 +150,9 @@ test "recovery: a read-only directory falls back to $TMPDIR as snarf-partial-<pi
     try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
     defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
     const want = try std.fmt.allocPrint(r.a, "snarf: Put of /ro/g not finished at exit; file left unchanged\n" ++
-        "snarf: partial contents saved in {s}/snarf-partial-4242-g.1\n", .{r.alt_path});
+        "snarf: partial contents saved in {s}/snarf-partial-4242-g.1\n" ++
+        // The read-only directory also keeps the empty temp (PR #74 Q2).
+        "snarf: could not remove temp file /ro/.g.snarf-put.0\n", .{r.alt_path});
     defer r.a.free(want);
     try testing.expectEqualStrings(want, r.end());
     try r.expectFile(r.alt.dir, "snarf-partial-4242-g", "someone else's");
@@ -169,7 +171,8 @@ test "recovery: when nowhere takes it, the notice keeps its wording and adds the
     defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
     try testing.expectEqualStrings(
         "snarf: Put of /ro/g not finished at exit; file left unchanged\n" ++
-            "snarf: could not save partial contents (FileNotFound)\n",
+            "snarf: could not save partial contents (FileNotFound)\n" ++
+            "snarf: could not remove temp file /ro/.g.snarf-put.0\n",
         r.end(),
     );
     try r.expectFile(r.tmp.dir, "ro/g", "old");
@@ -234,4 +237,171 @@ test "hangUp: a Put whose Tclunk was already queued commits when the host drains
     r.tree.hangUp(&r.log.writer);
     try r.expectFile(r.tmp.dir, "f", "finished\n");
     try testing.expectEqual(@as(usize, 0), r.log.written().len); // nothing was unfinished
+}
+
+// #70 (SnarfProdd ruling 2026-11-02): a Put of a NEW file (Tcreate) is handled
+// like one of an existing file. Cut off at exit, the real name must not exist,
+// the partial bytes go to the recovery file, and both notice lines print.
+
+/// A Tcreate Put of the new file `name` (in the root) that has received `data`.
+fn createPut(r: *Rig, name: []const u8, data: []const u8) !u32 {
+    const d = try r.cl.walk(r.root, &.{});
+    _ = try r.cl.create(d.fid, name, 0o666, msg.OWRITE);
+    if (data.len != 0) _ = try r.cl.write(d.fid, 0, data);
+    return d.fid;
+}
+
+/// The names in `dir` (sorted, joined by spaces) — to catch temp litter.
+fn listing(r: *Rig, dir: std.Io.Dir, sub: []const u8) ![]u8 {
+    var d = try dir.openDir(io, sub, .{ .iterate = true });
+    defer d.close(io);
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| r.a.free(n);
+        names.deinit(r.a);
+    }
+    var it = d.iterate();
+    while (try it.next(io)) |e| try names.append(r.a, try r.a.dupe(u8, e.name));
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lt(_: void, x: []u8, y: []u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.lt);
+    return std.mem.join(r.a, " ", names.items);
+}
+
+fn expectListing(r: *Rig, dir: std.Io.Dir, sub: []const u8, want: []const u8) !void {
+    const got = try listing(r, dir, sub);
+    defer r.a.free(got);
+    try testing.expectEqualStrings(want, got);
+}
+
+test "#70: a Put of a NEW file cut off at exit leaves no file under its name, keeps the bytes, prints both lines" {
+    const r = try Rig.create(&.{});
+    defer r.destroy();
+    _ = try createPut(r, "new.txt", "half of a new file");
+    // While the Put is in flight the name holds an empty placeholder only.
+    try r.expectFile(r.tmp.dir, "new.txt", "");
+    try testing.expectEqualStrings(
+        "snarf: Put of /new.txt not finished at exit; file not created\n" ++
+            "snarf: partial contents saved in /.new.txt.snarf-partial\n",
+        r.end(),
+    );
+    try testing.expectError(error.FileNotFound, r.tmp.dir.statFile(io, "new.txt", .{}));
+    try r.expectFile(r.tmp.dir, ".new.txt.snarf-partial", "half of a new file");
+    try Rig.expectMode0600(r.tmp.dir, ".new.txt.snarf-partial");
+    try expectListing(r, r.tmp.dir, ".", ".new.txt.snarf-partial"); // no temp litter
+}
+
+test "#70: a zero-byte Put of a NEW file cut off at exit: the notice, and no file at all" {
+    const r = try Rig.create(&.{});
+    defer r.destroy();
+    _ = try createPut(r, "empty.txt", "");
+    try testing.expectEqualStrings("snarf: Put of /empty.txt not finished at exit; file not created\n", r.end());
+    try expectListing(r, r.tmp.dir, ".", "");
+}
+
+test "#70: a finished Put of a NEW file commits its bytes under the name, no litter" {
+    const r = try Rig.create(&.{});
+    defer r.destroy();
+    const fid = try createPut(r, "n", "whole\n");
+    _ = try r.cl.write(fid, 6, "more\n");
+    try r.expectFile(r.tmp.dir, "n", ""); // not visible before the Tclunk
+    try r.cl.clunk(fid);
+    try r.expectFile(r.tmp.dir, "n", "whole\nmore\n");
+    try expectListing(r, r.tmp.dir, ".", "n");
+    try testing.expectEqualStrings("", r.end());
+}
+
+test "#70: a finished zero-byte Put of a NEW file makes an empty file" {
+    const r = try Rig.create(&.{});
+    defer r.destroy();
+    const fid = try createPut(r, "e", "");
+    try r.cl.clunk(fid);
+    try r.expectFile(r.tmp.dir, "e", "");
+    try expectListing(r, r.tmp.dir, ".", "e");
+}
+
+test "#70: Tcreate of an existing name still fails and leaves the file alone" {
+    const r = try Rig.create(&.{.{ "f", "keep" }});
+    defer r.destroy();
+    const d = try r.cl.walk(r.root, &.{});
+    try testing.expectError(error.FileExists, r.cl.create(d.fid, "f", 0o666, msg.OWRITE));
+    try r.expectFile(r.tmp.dir, "f", "keep");
+    try expectListing(r, r.tmp.dir, ".", "f");
+}
+
+test "#70: a NEW-file Put whose write fails leaves no file under the name" {
+    const r = try Rig.create(&.{});
+    defer r.destroy();
+    const fid = try createPut(r, "w", "abc");
+    // Pull the temp out from under the Put: the next Twrite fails.
+    var d = try r.tmp.dir.openDir(io, ".", .{ .iterate = true });
+    var it = d.iterate();
+    var nb: [128]u8 = undefined;
+    var temp: []const u8 = "";
+    while (try it.next(io)) |e| if (std.mem.startsWith(u8, e.name, ".w.snarf-put.")) {
+        @memcpy(nb[0..e.name.len], e.name);
+        temp = nb[0..e.name.len];
+    };
+    d.close(io);
+    try testing.expect(temp.len != 0);
+    try r.tmp.dir.deleteFile(io, temp);
+    try testing.expect(std.meta.isError(r.cl.write(fid, 3, "def")));
+    try r.cl.clunk(fid);
+    try expectListing(r, r.tmp.dir, ".", "");
+    try testing.expectEqualStrings("", r.end());
+}
+
+test "#70 item 3: a temp the read-only directory keeps is emptied, then removed once it can be" {
+    if (isRoot()) return error.SkipZigTest;
+    const r = try Rig.create(&.{ .{ "ro/g", "old" }, .{ "ro/h", "h" } });
+    defer r.destroy();
+    const f = try r.cl.walk(r.root, &.{ "ro", "g" });
+    _ = try r.cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(f.fid, 0, "new bytes");
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
+    try r.cl.clunk(f.fid); // rename refused: saved in place, temp undeletable
+    try r.expectFile(r.tmp.dir, "ro/g", "new bytes");
+    try expectListing(r, r.tmp.dir, "ro", ".g.snarf-put.0 g h");
+    try r.expectFile(r.tmp.dir, "ro/.g.snarf-put.0", ""); // no stray copy of the bytes
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{});
+    // The next Put to finish sweeps it.
+    const h = try r.cl.walk(r.root, &.{ "ro", "h" });
+    _ = try r.cl.open(h.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(h.fid, 0, "H");
+    try r.cl.clunk(h.fid);
+    try expectListing(r, r.tmp.dir, "ro", "g h");
+    try testing.expectEqualStrings("", r.end());
+}
+
+test "#70 item 3: endSession retries the stray temp's delete" {
+    if (isRoot()) return error.SkipZigTest;
+    const r = try Rig.create(&.{.{ "ro/g", "old" }});
+    defer r.destroy();
+    const f = try r.cl.walk(r.root, &.{ "ro", "g" });
+    _ = try r.cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(f.fid, 0, "new");
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
+    try r.cl.clunk(f.fid);
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{});
+    try testing.expectEqual(@as(usize, 1), r.tree.strays.items.len);
+    try testing.expectEqualStrings("", r.end());
+    try expectListing(r, r.tmp.dir, "ro", "g");
+    try testing.expectEqual(@as(usize, 0), r.tree.strays.items.len);
+}
+
+test "PR #74 Q2: a stray temp that still can't be removed at exit is named on its own line" {
+    if (isRoot()) return error.SkipZigTest;
+    const r = try Rig.create(&.{.{ "ro/g", "old" }});
+    defer r.destroy();
+    defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
+    const f = try r.cl.walk(r.root, &.{ "ro", "g" });
+    _ = try r.cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(f.fid, 0, "new");
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
+    try r.cl.clunk(f.fid); // committed in place; the temp can't be deleted
+    try testing.expectEqual(@as(usize, 1), r.tree.strays.items.len);
+    try testing.expectEqualStrings("snarf: could not remove temp file /ro/.g.snarf-put.0\n", r.end());
+    try r.expectFile(r.tmp.dir, "ro/g", "new");
 }

@@ -37,6 +37,7 @@
 const std = @import("std");
 const ninep = @import("ninep");
 const Buffer = @import("Buffer.zig");
+const Text = @import("text/Text.zig");
 
 const File = @This();
 
@@ -80,6 +81,13 @@ unread: bool = false,
 /// text.c:277-284) or a Put (exec.c:790-799) records it. Read by `Put`'s stale
 /// check and by `RowDump`'s existence test (R-P17-4). `reset` leaves it alone.
 disk: ?Disk = null,
+/// `f->text[0..ntext]` (dat.h; `fileaddtext`/`filedeltext`, file.c:41-70):
+/// the window BODIES showing this file — one per window, more than one after
+/// `Zerox` (#13). A tag File and a bare Text keep it empty. Registered by
+/// `Window.init`, dropped by `Window.deinit`, which frees the File with its
+/// last view. Every fan-out over it is guarded by `len > 1`, as acme guards
+/// by `ntext > 1`, so a single-view File never walks it.
+texts: std.ArrayList(*Text) = .empty,
 
 /// The disk identity of a file (dat.h `File.qidpath/dev/mtime/sha1`). `dev`
 /// has no 9P analog — the qid carries the server's identity.
@@ -100,8 +108,30 @@ pub fn deinit(self: *File) void {
     self.freeTexts(&self.epsilon);
     self.epsilon.deinit(self.allocator);
     self.name.deinit(self.allocator);
+    self.texts.deinit(self.allocator);
     self.buffer.deinit();
     self.* = undefined;
+}
+
+/// `fileaddtext` (file.c:41-52): `t` now shows this file.
+pub fn addText(f: *File, t: *Text) error{OutOfMemory}!void {
+    try f.texts.append(f.allocator, t);
+}
+
+/// `filedeltext` (file.c:54-70): `t` no longer shows this file; returns how
+/// many views remain (acme frees the File at 0 — here `Window.deinit` does).
+/// A Text that was never registered is ignored.
+pub fn delText(f: *File, t: *Text) usize {
+    for (f.texts.items, 0..) |u, i| if (u == t) {
+        _ = f.texts.orderedRemove(i);
+        break;
+    };
+    return f.texts.items.len;
+}
+
+/// True when more than one window shows this file (`ntext > 1`).
+pub fn shared(f: *const File) bool {
+    return f.texts.items.len > 1;
 }
 
 /// `filesetname` (file.c:139-148): replace the file's name. With `seq > 0` the

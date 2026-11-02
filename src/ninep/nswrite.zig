@@ -192,7 +192,7 @@ pub const WriteFileJob = struct {
     /// The walk said "no such file": walk to the parent instead, then Tcreate.
     fn startParentWalk(self: *WriteFileJob) Error!Status {
         self.walk.deinit();
-        self.walk = try WalkJob.init(self.ns, dirName(self.path));
+        self.walk = try WalkJob.initPreferHost(self.ns, dirName(self.path)); // #60 ruling #5
         self.phase = .parent_walking;
         return .pending;
     }

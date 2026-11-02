@@ -68,6 +68,10 @@ pub const OpError = error{
     // distinct from the generic `BadCtl` since it is not an ill-formed
     // message. [ref: acme/xfid.c:764]
     FileDirty,
+    /// A host object the server lists and stats but will not open: a device
+    /// node, fifo or socket under hostfs (#60 ruling 2026-11-02 #2; device I/O
+    /// is #76).
+    NotSupported,
     Other,
 };
 
@@ -105,6 +109,7 @@ pub fn errorString(e: OpError) []const u8 {
         error.DirNotEmpty => "directory not empty",
         error.NoSpace => "no space on device",
         error.WstatProhibited => "wstat prohibited",
+        error.NotSupported => "not supported",
         error.Other => "i/o error",
     };
 }
@@ -144,6 +149,7 @@ pub fn errorFromString(s: []const u8) OpError {
     if (eq(u8, s, "directory not empty")) return error.DirNotEmpty;
     if (eq(u8, s, "no space on device")) return error.NoSpace;
     if (eq(u8, s, "wstat prohibited")) return error.WstatProhibited;
+    if (eq(u8, s, "not supported")) return error.NotSupported;
     return error.Other;
 }
 
@@ -181,6 +187,7 @@ test "errors: round-trip every member" {
         error.DirNotEmpty,
         error.NoSpace,
         error.WstatProhibited,
+        error.NotSupported,
     };
     for (named) |e| {
         try std.testing.expectEqual(e, errorFromString(errorString(e)));

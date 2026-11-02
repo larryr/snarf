@@ -1,7 +1,7 @@
 //! The native host's teardown (#58): `shutdown` frees everything
 //! `main_native.boot` built, as recorded in `App.built`. Split out of
 //! `main_native.zig` along the boot/shutdown seam (S-07 P-2). `main` defers
-//! it right after the devdraw spawn; #13's `Exit` will call it too.
+//! it right after the devdraw spawn; #13's `Exit` ends the loop into it.
 const std = @import("std");
 const core = @import("core");
 const App = @import("main_native.zig").App;

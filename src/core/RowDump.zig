@@ -15,7 +15,8 @@
 //!  * `access(name, 0)` (rows.c:406) is `file.disk != null` (R-P17-4): a
 //!    window loaded or Put successfully has a disk identity; an unread or
 //!    dirty one is dumped inline as an `F` record with its body.
-//!  * No `x` (zerox) or `e` (external-program) records — Snarf has neither.
+//!  * No `x` (zerox) records yet (#81) and no `e` (external-program) ones —
+//!    Snarf has no external programs.
 //!  * One font: lines 2-3 both carry its name, and every window record's
 //!    font field is empty (acme's "the default font", rows.c:388-390).
 //!
