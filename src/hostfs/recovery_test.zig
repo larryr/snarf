@@ -187,3 +187,51 @@ test "recovery: a Put of zero bytes still gets the notice but leaves no file" {
     var it = d.iterate();
     try testing.expect((try it.next(io)) == null);
 }
+
+// #68 review finding 1: the teardown's own Tclunks sit in the pipe, and any
+// later write that blocks pumps the server. `hangUp` (called by `shutdown`
+// before teardown) must turn every such Tclunk into a discard.
+
+/// An OTRUNC Put of `rel` that has received `data`; returns its fid.
+fn putFid(r: *Rig, rel: []const u8, data: []const u8) !u32 {
+    const f = try r.cl.walk(r.root, &.{rel});
+    _ = try r.cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(f.fid, 0, data);
+    return f.fid;
+}
+
+test "hangUp: a Tclunk pumped after hangUp discards the Put, keeps the partial bytes, and says so (#68 finding 1)" {
+    const r = try Rig.create(&.{.{ "f", "old\n" }});
+    defer r.destroy();
+    const fid = try putFid(r, "f", "half-written");
+    ninep.tickets.discardClunk(&r.cl, fid); // what teardown queues; the server has not seen it
+    r.tree.hangUp(&r.log.writer);
+    _ = try r.srv.poll(); // what a blocked write's pump does
+    try r.expectFile(r.tmp.dir, "f", "old\n"); // NOT committed
+    try r.expectFile(r.tmp.dir, ".f.snarf-partial", "half-written");
+    try testing.expectEqualStrings(
+        "snarf: Put of /f not finished at exit; file left unchanged\n" ++
+            "snarf: partial contents saved in /.f.snarf-partial\n",
+        r.log.written(),
+    );
+}
+
+test "hangUp: control — the same pumped Tclunk WITHOUT hangUp commits (why shutdown must hang up first)" {
+    const r = try Rig.create(&.{.{ "f", "old\n" }});
+    defer r.destroy();
+    const fid = try putFid(r, "f", "all of it\n");
+    ninep.tickets.discardClunk(&r.cl, fid);
+    _ = try r.srv.poll();
+    try r.expectFile(r.tmp.dir, "f", "all of it\n");
+}
+
+test "hangUp: a Put whose Tclunk was already queued commits when the host drains first (shutdown's order)" {
+    const r = try Rig.create(&.{.{ "f", "old\n" }});
+    defer r.destroy();
+    const fid = try putFid(r, "f", "finished\n");
+    ninep.tickets.discardClunk(&r.cl, fid); // the client really did close the file
+    _ = try r.srv.poll(); // shutdown drains BEFORE hanging up
+    r.tree.hangUp(&r.log.writer);
+    try r.expectFile(r.tmp.dir, "f", "finished\n");
+    try testing.expectEqual(@as(usize, 0), r.log.written().len); // nothing was unfinished
+}
