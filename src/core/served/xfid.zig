@@ -25,8 +25,6 @@ const fsys_mod = @import("fsys.zig");
 const wintag = @import("../wintag.zig");
 const cmd_get = @import("../exec/cmd_get.zig");
 const cmd_put = @import("../exec/cmd_put.zig");
-const cmd_session = @import("../exec/cmd_session.zig");
-const cmd_window = @import("../exec/cmd_window.zig");
 
 const Fsys = fsys_mod.Fsys;
 const Q = fsys_mod.Q;
@@ -195,7 +193,9 @@ fn sanitizeUtf8(a: Allocator, data: []const u8) error{OutOfMemory}![]u8 {
 
 // ===========================================================================
 // ctl write (xfidctlwrite, xfid.c:622-844) — v1 subset (R-P10-H): clean,
-// dirty, delete, del, name, get, put; plus the port's sort/kill/exit (#13). Commands are packed back-to-back in one write;
+// dirty, delete, del, name, get, put — acme's own verbs only (SnarfProdd, PR #74
+// Q3: no port-only verbs; quitting the editor through a file is an M5 grant
+// question). Commands are packed back-to-back in one write;
 // each consumes its own prefix (+ argument for `name`), trailing '\n's are
 // skipped between commands (xfid.c:827-828), and the FIRST failure aborts
 // the whole write (xfid.c:835-838: `err` set ⇒ the reported count is 0 — Zig
@@ -217,12 +217,6 @@ const ctltab = [_]CtlCmd{
     .{ .name = "name ", .takes_arg = true, .run = cmdName },
     .{ .name = "get", .takes_arg = false, .run = cmdGet }, // xfid.c:770-773
     .{ .name = "put", .takes_arg = false, .run = cmdPut }, // xfid.c:774-777
-    // #13, roadmap process rule 1 (a ctl verb per builtin, R-EDIT-17). acme's
-    // ctl has none of these; the names are the port's (lower-case tag word).
-    .{ .name = "sort", .takes_arg = false, .run = cmdSort },
-    .{ .name = "kill ", .takes_arg = true, .run = cmdKill },
-    .{ .name = "exit", .takes_arg = false, .run = cmdExit },
-    .{ .name = "zerox", .takes_arg = false, .run = cmdZerox },
 };
 
 /// `get` (xfid.c:770-773): `get(&w->body, nil, nil, FALSE, XXX, nil, 0)`.
@@ -233,30 +227,6 @@ fn cmdGet(f: *Fsys, w: *Window, _: []const u8) OpError!void {
 /// `put` (xfid.c:774-777): `put(&w->body, nil, nil, XXX, XXX, nil, 0)`.
 fn cmdPut(f: *Fsys, w: *Window, _: []const u8) OpError!void {
     cmd_put.put(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
-}
-
-/// `sort` (#13): the `Sort` word on this window — `colsort(w->col)`.
-fn cmdSort(f: *Fsys, w: *Window, _: []const u8) OpError!void {
-    cmd_session.sort(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
-}
-
-/// `zerox` (#13): the `Zerox` word on this window — another view of its file
-/// in the same column (exec.c:540-577; a directory is refused with a warning).
-fn cmdZerox(f: *Fsys, w: *Window, _: []const u8) OpError!void {
-    cmd_window.zerox(f.ed, &w.body, &w.body, null, false, false, "") catch return error.IoError;
-}
-
-/// `kill <names>\n` (#13): the `Kill` word with that argument (exec.c:1239).
-fn cmdKill(f: *Fsys, w: *Window, arg: []const u8) OpError!void {
-    cmd_session.kill(f.ed, &w.body, null, null, false, false, arg) catch return error.IoError;
-}
-
-/// `exit` (#13): the `Exit` word (exec.c:1148). Like `del`, a refused
-/// first strike (some window dirty: warned, strike taken) fails the write
-/// with "file dirty", so a client sees it; a second `exit` goes through.
-fn cmdExit(f: *Fsys, w: *Window, _: []const u8) OpError!void {
-    cmd_session.exit(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
-    if (!f.ed.exit_requested) return error.FileDirty;
 }
 
 fn ctlWrite(f: *Fsys, w: *Window, data: []const u8) OpError!usize {
@@ -698,56 +668,18 @@ test "served: body write appends" {
     try testing.expectEqualStrings("hello\nMORE!", w.body.file.buffer.read(0, nc2, &rbuf));
 }
 
-test "served: ctl sort, kill and exit do what the tag words do (#13 BI-12)" {
-    const h = try Harness.create(testing.allocator, "/c", "cee\n");
-    defer h.destroy();
-    try h.connect();
-    _ = try h.tree.addWindow("/b", "");
-    _ = try h.tree.addWindow("/a", "");
-    const col = h.tree.row.col.items[0];
-    _ = try h.walk(0, 1, &.{ "1", "ctl" }); // window 1 is /c
-    _ = try h.open(1, msg.ORDWR);
-
-    // sort: the window's column restacks by name, as `Sort` does.
-    const rs = try h.write(1, 0, "sort\n");
-    try testing.expect(rs.body == .rwrite);
-    try testing.expectEqualStrings("/a", col.w.items[0].body.file.name.items);
-    try testing.expectEqualStrings("/b", col.w.items[1].body.file.name.items);
-    try testing.expectEqualStrings("/c", col.w.items[2].body.file.name.items);
-
-    // kill <names>: nothing runs, so each name gets acme's "no process" line;
-    // `kill` with no name is ill-formed (the argument verbs' rule).
-    const rk = try h.write(1, 0, "kill  cc  make\n");
-    try testing.expect(rk.body == .rwrite);
-    try testing.expectEqualStrings("Kill: no process cc\nKill: no process make\n", h.ed.warningText());
-    const rk0 = try h.write(1, 0, "kill \n");
-    try testing.expect(rk0.body == .rerror);
-
-    // exit: a dirty window refuses the first one with "file dirty" (the
-    // strike is taken), the second is accepted — `Exit`'s two-strike.
-    const w = col.w.items[2];
-    h.ed.seq += 1;
-    w.body.file.mark(h.ed.seq);
-    try w.body.insertAt(0, "X", true);
-    const re1 = try h.write(1, 0, "exit\n");
-    try testing.expect(re1.body == .rerror);
-    try testing.expectEqualStrings("file dirty", re1.body.rerror.ename);
-    try testing.expect(!h.ed.exit_requested);
-    const re2 = try h.write(1, 0, "exit\n");
-    try testing.expect(re2.body == .rwrite);
-    try testing.expect(h.ed.exit_requested and h.ed.exitReady());
-}
-
-test "served: ctl zerox opens a second view of the window's file (#13 BI-12)" {
+test "served: ctl has acme's verbs only — sort, kill, exit and zerox are ill-formed (PR #74 Q3)" {
     const h = try Harness.create(testing.allocator, "/c", "cee\n");
     defer h.destroy();
     try h.connect();
     const col = h.tree.row.col.items[0];
     _ = try h.walk(0, 1, &.{ "1", "ctl" });
     _ = try h.open(1, msg.ORDWR);
-    const rz = try h.write(1, 0, "zerox\n");
-    try testing.expect(rz.body == .rwrite);
-    try testing.expectEqual(@as(usize, 2), col.w.items.len);
-    try testing.expect(col.w.items[0].body.file == col.w.items[1].body.file);
-    try testing.expectEqualStrings("/c", col.w.items[1].body.file.name.items);
+    for ([_][]const u8{ "sort\n", "kill cc\n", "exit\n", "zerox\n" }) |verb| {
+        const r = try h.write(1, 0, verb);
+        try testing.expect(r.body == .rerror);
+        try testing.expectEqualStrings("ill-formed control message", r.body.rerror.ename);
+    }
+    try testing.expect(!h.ed.exit_requested);
+    try testing.expectEqual(@as(usize, 1), col.w.items.len);
 }

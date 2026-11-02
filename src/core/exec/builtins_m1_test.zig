@@ -1,7 +1,8 @@
 //! Acceptance tests for issue #13 — small builtins Sort, Zerox, Kill, Exit.
 //! Requirements: R-EDIT-02 (tag words), R-EDIT-11 (shared undo across views),
-//! R-EDIT-17 + roadmap process rule 1 (ctl verb per builtin — added once the
-//! verbs exist). Plan: `notes/snarfdev2/test-plans/M1-13-builtins.md`.
+//! R-EDIT-17 + roadmap process rule 1 (ctl verb per builtin) — superseded for
+//! these four by SnarfProdd, PR #74 Q3: the ctl file keeps acme's set only.
+//! Plan: `notes/snarfdev2/test-plans/M1-13-builtins.md`.
 //! PM rule (2026-10-14, Q4): ACME behaviour — two-strike Exit (wind.c:666
 //! winclean via rowclean), colsort order (cols.c), Zerox as acme allows
 //! (exec.c zeroxx: refused on a directory window).
