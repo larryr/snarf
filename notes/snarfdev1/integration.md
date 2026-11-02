@@ -198,3 +198,10 @@ is on snarfdev1/load-typing and may be in use elsewhere. Gates script: `~/snarf-
   with the old hold(). The mutation "merge moves while a button is held" is killed by the
   drag test.
 - Not folded together yet (SnarfDev2 re-passes #85 first).
+
+## 2026-11-02 10:05 ET — #85 folded in
+- SnarfDev2 approved #85 (d64dabf) and #74 (42a83e2).
+- f5689ed: boot's doc comment re-attached to `boot` (it had slid onto `ArgsDir`); "files as typed".
+- e7e85dd: #85's two commits squashed into one commit (Fixes #83). #85 closed in favour of #74.
+- Gates: fmt ok, build ok, 981/983 tests (2 skipped), native ok, smoke 40/0.
+- Load speed (~8 KB per frame) is #86, P3, not part of #74.
