@@ -182,3 +182,19 @@ is on snarfdev1/load-typing and may be in use elsewhere. Gates script: `~/snarf-
 - `git merge-tree --write-tree origin/snarfdev1/load-typing HEAD` is clean (exit 0). The
   merged tree builds and tests 976/978 (2 skipped).
 - Gates after `aac4ebe`: fmt ok, build 0, tests 972/974 (2 skipped), native 0, smoke 40/0.
+
+## SnarfDev2 review round (8:51 AM)
+
+- #74 (issuecomment-6578852205) `bd67076` (Refs #84): `cwd` was typed `[]u8`, which
+  dropped currentPathAlloc's sentinel, so DebugAllocator reported a size mismatch at every
+  exit with file arguments. Now `main_native.ArgsDir { path: [:0]u8 }` (dupeZ "/" when there
+  are no args) with init/deinit. Test under std.testing.allocator plus a source pin. The
+  mutation `path: []u8` is killed (Invalid free). exe_path, Replace.target and
+  HostTree.reportStrays checked: all keep [:0]u8.
+- #85 (issuecomment-6578851752) `d64dabf` on snarfdev1/load-typing, pushed from a detached
+  worktree `/workspace/snarfdev1-wt-load-typing` because `/workspace/snarfdev1` holds the
+  branch. hold() merges only a bare move (no buttons, and the previous queued mouse sample
+  had none). Tests: B1 click + move, B2 Newcol + move, B1 drag, release kept. All are red
+  with the old hold(). The mutation "merge moves while a button is held" is killed by the
+  drag test.
+- Not folded together yet (SnarfDev2 re-passes #85 first).
