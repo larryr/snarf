@@ -13,7 +13,7 @@
 //! landing window first" loop (cols.c:81-87) is still deferred, because it
 //! changes `coladd`'s geometry and the accept goldens pin it — the buggered
 //! fallback still fires when the clamped landing position can't fit.
-//! `colsort`/`coldragwin` remain later phases.
+//! `colsort` lives in `core/colsort.zig` (#13); `coldragwin` remains a later phase.
 //!
 //! Windows are individually HEAP-allocated (`allocator.create`) and stored as
 //! pointers so their addresses stay stable — a `Text`'s `SelectState` aliases
@@ -318,6 +318,9 @@ pub fn relayout(c: *Column, r: Rect) Error!void {
 /// decl alias keeps `c.grow(w)` resolving as a method. See that file for what
 /// the other `but` arms are and why they are still out.
 pub const grow = @import("colgrow.zig").grow;
+
+/// `colsort` (cols.c:293-331), the `Sort` builtin (#13) — see `core/colsort.zig`.
+pub const sort = @import("colsort.zig").sort;
 
 /// `colwhich` (cols.c:558-580): the `Text` at `p` — the column tag, a window's
 /// tag (its collapsed `tagtop` or full tag rect), or its body — or `null` when

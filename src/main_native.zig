@@ -163,7 +163,7 @@ pub fn main(init: std.process.Init) !void {
     try a.conn.armMouse();
     try a.conn.armKbd();
 
-    while (!a.conn.isClosed()) {
+    while (running(a)) {
         _ = a.conn.poll(frame_timeout_ms) catch |e| switch (e) {
             error.Closed => break,
             else => return e,
@@ -171,6 +171,16 @@ pub fn main(init: std.process.Init) !void {
         try pumpWindowSystem(a);
         try tick(a);
     }
+}
+
+/// The main loop's test: devdraw is still up (closing the window hangs it
+/// up), and `Exit` (#13, `cexit`) has not been accepted — or was, but a Put
+/// or Dump it followed is still writing (`Editor.exitReady`: acme's are
+/// synchronous, so one issued before Exit has always finished). Either way
+/// out, `main`'s deferred `shutdown` (#58/#68) frees the session and
+/// `conn.deinit` ends devdraw.
+pub fn running(a: *App) bool {
+    return !a.conn.isClosed() and !a.editor.exitReady();
 }
 
 /// `DevdrawPath.Probe` over the real file system: an `access(2)` existence
@@ -357,4 +367,5 @@ fn inputDevices(a: *App) input_pump.Devices {
 test {
     _ = @import("main_native_test.zig"); // #58: boot → session → shutdown, leak-checked
     _ = @import("main_native_clipboard_test.zig"); // #12/#31: Snarf/Paste ↔ the pasteboard
+    _ = @import("main_native_exit_test.zig"); // #13: Exit ends the loop through the #58/#68 shutdown
 }

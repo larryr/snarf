@@ -6,10 +6,10 @@
 //! The C's 28-entry table reduces to: Cut, Del, Delcol, Delete, Dump, Get,
 //! Load, Look, New, Newcol, Paste, Put, Putall, Redo, Snarf, Undo (exec.c:98-130,
 //! alphabetical; Dump/Load/Put/Putall since phase 17), plus the port's own
-//! Reconnect and the Edit language. Deferred per R-P9-7: the
-//! external `run` path (unknown word ⇒ silent no-op) and Sort/Zerox/Exit (need
-//! multi-Text-per-File or session work). The command functions live in the
-//! sibling `cmd_edit.zig`/`cmd_window.zig`.
+//! Reconnect and the Edit language, plus Exit, Kill and Sort (#13,
+//! `cmd_session.zig`). Deferred per R-P9-7: the external `run` path (unknown
+//! word ⇒ silent no-op) and Zerox (needs multi-Text-per-File). The command
+//! functions live in the sibling `cmd_*.zig` files.
 //!
 //! The `mark` column mirrors exec.c exactly: only Cut/Paste mark here (Send is
 //! deferred); Snarf does NOT mark (no edit); Undo/Redo manage seq themselves;
@@ -30,6 +30,7 @@ const cmd_look = @import("cmd_look.zig");
 const cmd_origin = @import("cmd_origin.zig");
 const cmd_put = @import("cmd_put.zig");
 const cmd_window = @import("cmd_window.zig");
+const cmd_session = @import("cmd_session.zig");
 const edit = @import("../edit/edit.zig");
 
 /// One `exectab` row (exec.c:59-67). `fn_` is the C's `void (*fn)(Text*, Text*,
@@ -69,10 +70,12 @@ pub const exectab = [_]Entry{
     // exec.c:106 — Edit manages its own transaction (seq++ in the builtin,
     // File.mark lazily in the first Elog.apply), so mark=FALSE (R-P10-8).
     .{ .name = "Edit", .fn_ = edit.builtin, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:106
+    .{ .name = "Exit", .fn_ = cmd_session.exit, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:107 (flag1/flag2 XXX unused)
     // exec.c:109 — Get reads a file or directory into the window's body (the
     // file arm since phase 17). flag1 is the C's TRUE ("require a window"),
     // flag2 its unused XXX.
     .{ .name = "Get", .fn_ = cmd_get.get, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:109
+    .{ .name = "Kill", .fn_ = cmd_session.kill, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:113 (flag1/flag2 XXX unused)
     .{ .name = "Load", .fn_ = cmd_dump.dump, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:114 (isdump=FALSE; flag2 XXX unused)
     // exec.c:116 — Look searches the executing window's body (R-EDIT-07); both
     // flags are XXX-unused (exec.c:1080-1081 `USED(_0); USED(_1);`).
@@ -89,40 +92,51 @@ pub const exectab = [_]Entry{
     .{ .name = "Reconnect", .fn_ = cmd_origin.reconnect, .mark = false, .flag1 = false, .flag2 = false },
     .{ .name = "Redo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:122 (isundo=FALSE; flag2 XXX unused)
     .{ .name = "Snarf", .fn_ = cmd_edit.cut, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:124 (docut=FALSE)
+    .{ .name = "Sort", .fn_ = cmd_session.sort, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:125 (flag1/flag2 XXX unused)
     .{ .name = "Undo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:127 (isundo=TRUE; flag2 XXX unused)
 };
 
 test "builtins: table shape and flags match exec.c" {
     const testing = std.testing;
-    // Grew by four rows (phase 17): Dump (exec.c:105), Load (:114), Put (:120)
+    // Grew by three rows (#13): Exit (exec.c:107), Kill (:113), Sort (:125).
+    // Phase 17 added four: Dump (exec.c:105), Load (:114), Put (:120)
     // and Putall (:121), each in its exec.c alphabetical slot. Earlier growth:
     // Get (R-P13b-5), Look (R-P12b-1), Reconnect (R-P12-7), Edit (R-P10-8).
-    try testing.expectEqual(@as(usize, 18), exectab.len);
+    try testing.expectEqual(@as(usize, 21), exectab.len);
     // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Get", "Load", "Look", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Undo" };
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Exit", "Get", "Kill", "Load", "Look", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Sort", "Undo" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
+    const E = struct {
+        fn at(name: []const u8) *const Entry {
+            for (&exectab) |*e| if (std.mem.eql(u8, e.name, name)) return e;
+            unreachable;
+        }
+    };
+    const at = E.at;
     // Cut marks + snarfs + cuts; Snarf marks NOT, snarfs, does not cut.
-    try testing.expect(exectab[0].mark and exectab[0].flag1 and exectab[0].flag2); // Cut
-    try testing.expect(!exectab[16].mark and exectab[16].flag1 and !exectab[16].flag2); // Snarf
+    try testing.expect(at("Cut").mark and at("Cut").flag1 and at("Cut").flag2);
+    try testing.expect(!at("Snarf").mark and at("Snarf").flag1 and !at("Snarf").flag2);
     // Paste's flag2 (tobody) is the truthy XXX.
-    try testing.expect(exectab[11].mark and exectab[11].flag1 and exectab[11].flag2); // Paste
+    try testing.expect(at("Paste").mark and at("Paste").flag1 and at("Paste").flag2);
     // Undo/Redo differ only in flag1 (isundo).
-    try testing.expect(exectab[17].flag1 and !exectab[15].flag1); // Undo vs Redo
+    try testing.expect(at("Undo").flag1 and !at("Redo").flag1);
     // Delete = Del with flag1 (skip-clean twin).
-    try testing.expect(exectab[3].flag1 and !exectab[1].flag1);
+    try testing.expect(at("Delete").flag1 and !at("Del").flag1);
     // Dump/Load share `dump` and differ only in flag1 (isdump); neither marks.
-    try testing.expectEqual(exectab[4].fn_, exectab[7].fn_);
-    try testing.expect(!exectab[4].mark and exectab[4].flag1 and !exectab[7].mark and !exectab[7].flag1);
+    try testing.expectEqual(at("Dump").fn_, at("Load").fn_);
+    try testing.expect(!at("Dump").mark and at("Dump").flag1 and !at("Load").mark and !at("Load").flag1);
     // Edit manages its own seq, so it never marks (R-P10-8).
-    try testing.expect(!exectab[5].mark and std.mem.eql(u8, exectab[5].name, "Edit"));
+    try testing.expect(!at("Edit").mark);
     // Get requires a window (flag1 TRUE, exec.c:109) and never marks.
-    try testing.expect(!exectab[6].mark and exectab[6].flag1 and !exectab[6].flag2);
+    try testing.expect(!at("Get").mark and at("Get").flag1 and !at("Get").flag2);
     // Look never marks and never edits; both flags are unused (exec.c:116).
-    try testing.expect(!exectab[8].mark and !exectab[8].flag1 and !exectab[8].flag2);
+    try testing.expect(!at("Look").mark and !at("Look").flag1 and !at("Look").flag2);
     // Put/Putall never mark (exec.c:120-121).
-    try testing.expect(!exectab[12].mark and !exectab[13].mark);
+    try testing.expect(!at("Put").mark and !at("Putall").mark);
     // Reconnect touches the session, never a buffer: it marks nothing.
-    try testing.expect(!exectab[14].mark and !exectab[14].flag1 and !exectab[14].flag2);
+    try testing.expect(!at("Reconnect").mark and !at("Reconnect").flag1 and !at("Reconnect").flag2);
+    // #13: Exit/Kill/Sort are FALSE-marked with XXX flags (exec.c:107/113/125).
+    inline for (.{ "Exit", "Kill", "Sort" }) |n| try testing.expect(!at(n).mark and !at(n).flag1 and !at(n).flag2);
 }
 
 test "builtins: Look is named in the table and resolves to cmd_look.look (T6)" {

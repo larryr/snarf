@@ -482,11 +482,13 @@ test "edit: builtin row" {
     try testing.expect(!builtins.exectab[ei].mark);
     // Phase 17 inserted Dump (exec.c:105) before Edit and Load (:114) after Get.
     try testing.expectEqualStrings("Dump", builtins.exectab[ei - 1].name);
-    // Phase 12b inserted Look (exec.c:116) and phase 13b Get (exec.c:109), so
-    // Edit's successor is now Get, exactly as exec.c:109 follows :106.
-    try testing.expectEqualStrings("Get", builtins.exectab[ei + 1].name);
-    try testing.expectEqualStrings("Load", builtins.exectab[ei + 2].name);
-    try testing.expectEqualStrings("Look", builtins.exectab[ei + 3].name);
+    // Phase 12b inserted Look (exec.c:116), phase 13b Get (exec.c:109) and
+    // #13 Exit (:107) and Kill (:113), so Edit's successors follow exec.c:107-116.
+    try testing.expectEqualStrings("Exit", builtins.exectab[ei + 1].name);
+    try testing.expectEqualStrings("Get", builtins.exectab[ei + 2].name);
+    try testing.expectEqualStrings("Kill", builtins.exectab[ei + 3].name);
+    try testing.expectEqualStrings("Load", builtins.exectab[ei + 4].name);
+    try testing.expectEqualStrings("Look", builtins.exectab[ei + 5].name);
 
     // Inline-arg path: sweeping "Edit ,d" in the tag runs `,d` against the BODY.
     {

@@ -167,6 +167,12 @@ loads: std.ArrayList(*Load) = .empty,
 /// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
 pending_look: ?*pendinglook.PendingLook = null,
 puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
+/// `Exit` passed its `rowclean` (exec.c:1158-1160, #13): acme's `sendul(cexit, 0)`.
+/// The host ends its loop on it and runs its normal shutdown (#58/#68) — but
+/// only once `exitReady` holds, because acme's Put and Dump are synchronous:
+/// in acme a Put that started before Exit has always finished by then, so the
+/// port lets one in flight finish rather than discard it at teardown.
+exit_requested: bool = false,
 session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
@@ -175,6 +181,13 @@ needs_flush: bool = false,
 /// cache spans Edit invocations (regx.c:16,203-204), so it hangs off the Editor
 /// rather than being rebuilt per command.
 regx: Regx,
+
+/// True when the host should stop: `Exit` was accepted and no Put or Dump
+/// is still writing (see `exit_requested`). Loads are abandoned, as acme's
+/// exit would abandon a read.
+pub fn exitReady(self: *const Editor) bool {
+    return self.exit_requested and self.puts.items.len == 0 and self.session.dump == null;
+}
 
 pub fn init(allocator: std.mem.Allocator) Editor {
     return .{ .allocator = allocator, .regx = Regx.init(allocator) };
