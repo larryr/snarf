@@ -72,8 +72,9 @@ Refs #13 (Zerox still to come).
 - Exit: rowclean → `Editor.exit_requested`; native loop `running()` stops once Exit is
   accepted and no Put/Dump is in flight (acme's are synchronous), then the #58/#68
   shutdown. Divergence: async Put leaves the window dirty until commit, so Exit right
-  after Put takes a strike.
-- ctl verbs `sort`, `kill <names>`, `exit` (port names; acme has none).
+  after Put takes a strike. **Superseded by `aecb0bd`** (Exit waits for the Put; PR #74 Q4).
+- ctl verbs `sort`, `kill <names>`, `exit` (port names; acme has none). **Removed in
+  `05db334`** (PR #74 Q3: ctl keeps acme's set only).
 
 ## #13 part 2 — Zerox (Fixes #13)
 
@@ -82,8 +83,8 @@ Commit `2d686d1` (pushed, gates green: 939/940, 1 skipped; smoke 40/0). `File.te
 ntext>1 site, guarded by `File.shared()`: insert/delete (text.c:381/477), Undo/Redo
 (wind.c:355-372), settag/setname (wind.c:393/577), Del (exec.c:408), Put commit
 (exec.c:807), Get dir refusal + dirty (exec.c:614/647), Edit's settag (edit.c:134).
-Zerox builtin (exec.c:540-577) + ctl `zerox`. Divergences: Dump writes each Zerox view as
-its own window (acme's `x` records, rows.c:371-415/727-758, not ported); Edit `D` is not
+Zerox builtin (exec.c:540-577) + ctl `zerox` (ctl verb removed in `05db334`). Divergences: Dump writes each Zerox view as
+its own window (acme's `x` records, rows.c:371-415/727-758, not ported; filed as #81); Edit `D` is not
 implemented, so its ntext>1 arm (ecmd.c:236) is moot; no autoindent in v1. The commit
 message's last paragraph lost a line in an amend after the push (only "dump has no zerox
 record either way in the port yet)." is left); the correct text is here. I didn't
@@ -119,13 +120,14 @@ smoke 40/0), on top of SnarfDev2's UD suite from PR #75 cherry-picked as `a61b4f
 `/dev/draw` server (`src/host/devdraw/dev_draw.zig:233`) returns 0 bytes for every directory
 read (`.root, .conn => return 0`), although walk resolves `new` and the live connection
 directory (`isConnName`, = the editor's own connection). So B3 on `/dev/draw/` is empty
-even while snarf's own connection is open; Plan 9 would list `new` and `1/`. Not changed.
+even while snarf's own connection is open; Plan 9 would list `new` and `1/`. Fixed in
+`e663a00` (PR #74 Q6).
 
 ## #77 — --help / --version (Fixes #77)
 
 Commit `296162f` (gates green: 964/966; smoke 40/0). `native_args.infoFlag` (flags only;
 `-h` = `--help`); handled before devdraw lookup/spawn; stdout, exit 0. Version =
-`-Dversion=` or `git describe --tags --always --dirty` at build time ("unknown" outside a
+`-Dversion=` or (until `690827d`, PR #74 Q8) `git describe --tags --always --dirty` at build time ("unknown" outside a
 checkout), via a `native_options` build module. release.yml unchanged.
 
 ## #78 — non-runnable bundled devdraw (Fixes #78)
@@ -134,3 +136,29 @@ Commit `899d2fa` (gates green: 965/967; smoke 40/0). `DevdrawPath.Probe` returns
 `Verdict`; a bundled/`$PLAN9` candidate that exists but isn't a runnable regular file is
 recorded in `skipped` and logged (`snarf: devdraw: skipping <path> (<source>): <reason>`),
 then lookup falls through. Checked by hand with a 0644 `devdraw` beside the binary.
+
+## PR #74 rulings (SnarfProdd, issuecomment-6576974694)
+
+Small commits on top, no force-push; the 2d686d1 message stays as is (ruling).
+- Q1 `0229e08` (Refs #70): a cut-off Put of a NEW file says `file not created`
+  (`HostTree.keepPartial`, `Replace.created`); an existing file still says `file left unchanged`.
+- Q2 `632f7bc` (Refs #70): `HostTree.reportStrays` after `sweepStrays` prints
+  `snarf: could not remove temp file /<ns path>` per leftover (namespace path = realpath
+  minus the export root). New recovery test; three expectations gained the line, one in
+  SnarfDev2's `recovery_snarfdev2_test.zig` (`expectTmpFallbackToSlashTmp`), flagged to them.
+- Q3 `05db334` (Refs #13): ctl verbs sort/kill/exit/zerox and their handlers removed; one test
+  checks all four are "ill-formed control message". Tag/B2 commands unchanged. SnarfDev2's
+  plan `M1-13-builtins.md` BI-12 still lists them (theirs to update).
+- Q4 `aecb0bd` (Refs #13): Exit during a Put/Dump waits (`Editor.exit_waiting`), then
+  `cmd_session.exitStep` runs rowclean from `frameEnd`; a second Exit while waiting sets
+  `exit_now` → loop stops → #58/#68 shutdown. Tests: wait-then-clean (one Exit), dirty after
+  the wait → strike, second Exit cuts a 1 MiB Put mid-write.
+- Q5: filed #81 (P3, M2, type:feature); not implemented. `8cd24a3` points RowDump's header at it.
+- Q6 `e663a00` (Fixes #79): `/dev/draw` dir reads list `new` + the conn folder, and
+  ctl/data/refresh inside it; whole stat records per read, BadOffset inside a record.
+  statOp's conn name no longer points at a dead stack buffer.
+- Q7: no change.
+- Q8 `690827d` (Refs #77): `build/version.zig` — `<latest tag> (<short hash>[-dirty])`, or the
+  tag alone for a clean build exactly at a non-`-dev` tag; `untagged (<hash>)` with no tag.
+  `-Dversion=` still wins.
+- Gates after `8cd24a3`: fmt ok, build 0, tests 969/971 (2 skipped), native 0, smoke 40/0.
