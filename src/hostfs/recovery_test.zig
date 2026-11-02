@@ -280,7 +280,7 @@ test "#70: a Put of a NEW file cut off at exit leaves no file under its name, ke
     // While the Put is in flight the name holds an empty placeholder only.
     try r.expectFile(r.tmp.dir, "new.txt", "");
     try testing.expectEqualStrings(
-        "snarf: Put of /new.txt not finished at exit; file left unchanged\n" ++
+        "snarf: Put of /new.txt not finished at exit; file not created\n" ++
             "snarf: partial contents saved in /.new.txt.snarf-partial\n",
         r.end(),
     );
@@ -294,7 +294,7 @@ test "#70: a zero-byte Put of a NEW file cut off at exit: the notice, and no fil
     const r = try Rig.create(&.{});
     defer r.destroy();
     _ = try createPut(r, "empty.txt", "");
-    try testing.expectEqualStrings("snarf: Put of /empty.txt not finished at exit; file left unchanged\n", r.end());
+    try testing.expectEqualStrings("snarf: Put of /empty.txt not finished at exit; file not created\n", r.end());
     try expectListing(r, r.tmp.dir, ".", "");
 }
 

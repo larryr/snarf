@@ -65,7 +65,8 @@ pub fn init(gpa: std.mem.Allocator, fs: *HostFs) HostTree {
 ///     snarf: Put of /path not finished at exit; file left unchanged
 ///     snarf: partial contents saved in /dir/.name.snarf-partial
 ///
-/// (second line instead `snarf: could not save partial contents (<error>)`,
+/// (first line ending `file not created` instead for a Put of a NEW file,
+/// #70, which leaves nothing under its name; second line instead `snarf: could not save partial contents (<error>)`,
 /// or absent for a Put of zero bytes). Paths are absolute namespace paths
 /// under the `/` mount — the real paths on native, where the root is `/` —
 /// so a B3 on either opens it. Nothing is written or printed when nothing is
@@ -122,7 +123,9 @@ fn keepPartial(self: *HostTree, p: *Replace, rel: []const u8) void {
         return self.note("snarf: Put of /{s} not finished at exit; written in place and may be incomplete\n", .{rel});
     const saved = self.recovery.save(self.fs, self.gpa, temp, rel);
     defer saved.deinit(self.gpa);
-    self.note("snarf: Put of /{s} not finished at exit; file left unchanged\n", .{rel});
+    // #70 / SnarfProdd 2026-11-02: a NEW file was never there to be "unchanged".
+    const outcome = if (p.created) "file not created" else "file left unchanged";
+    self.note("snarf: Put of /{s} not finished at exit; {s}\n", .{ rel, outcome });
     switch (saved) {
         .empty => {},
         .saved => |path| self.note("snarf: partial contents saved in {s}\n", .{path}),
