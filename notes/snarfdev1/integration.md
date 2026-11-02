@@ -162,3 +162,23 @@ Small commits on top, no force-push; the 2d686d1 message stays as is (ruling).
   tag alone for a clean build exactly at a non-`-dev` tag; `untagged (<hash>)` with no tag.
   `-Dversion=` still wins.
 - Gates after `8cd24a3`: fmt ok, build 0, tests 969/971 (2 skipped), native 0, smoke 40/0.
+
+## #82 + #84 — file-argument follow-ups (SnarfProdd 8:12 AM, one mergeable branch)
+
+Work was done in the worktree `/workspace/snarfdev1-wt-integration`. `/workspace/snarfdev1`
+is on snarfdev1/load-typing and may be in use elsewhere. Gates script: `~/snarf-gates.sh`.
+- #82 `01621fb` (Fixes #82): `main_native.boot` runs each file argument's load to the end
+  (`loadNow`: Load.stepAll plus the draw, self and host-fs polls until `ed.loads` is empty)
+  before the next `readFile`. This is acme's synchronous `textload` in readfile
+  (acme.c:292-304). The next coladd's shrink (cols.c:117, Column.zig:162) then sees the
+  loaded nlines, not 0. Load.stepAll is untouched because #85 changes it. Red before: a
+  2-line file had nlines 0. Side effect: a huge file argument holds the first draw until
+  it is loaded, as acme does.
+- #84 `aac4ebe` (Fixes #84): boot takes `cwd` and the args as typed. `openfile.readFileAs`
+  and `Load.startAs` carry the typed name (`Load.shown`) for the warnings (acme.c:299
+  passes `s`). `Load.errstr` maps NotFound/NotMounted to "file does not exist" and the
+  other namespace/transport errors to Plan 9 kernel text. `Rig.bootIn(cwd, files)` is new.
+  Red before: the `/sub/../new.txt` expectation and the errstr test.
+- `git merge-tree --write-tree origin/snarfdev1/load-typing HEAD` is clean (exit 0). The
+  merged tree builds and tests 976/978 (2 skipped).
+- Gates after `aac4ebe`: fmt ok, build 0, tests 972/974 (2 skipped), native 0, smoke 40/0.
