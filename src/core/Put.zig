@@ -332,6 +332,10 @@ fn tail(self: *Put, ed: *Editor) Text.Error!void {
         f.mod = false; // exec.c:804
         w.dirty = false; // exec.c:805, :808
     }
+    if (f.shared()) for (f.texts.items) |u| if (u.w) |v| { // exec.c:807-809: every Zerox view
+        v.putseq = self.seq_at;
+        if (f.seq == self.seq_at) v.dirty = false;
+    };
     f.unread = false; // exec.c:806
     try wintag.setTagCommit(ed, w); // exec.c:818 winsettag
     ed.needs_flush = true;

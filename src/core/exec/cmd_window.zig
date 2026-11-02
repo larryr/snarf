@@ -18,6 +18,7 @@ const Window = @import("../Window.zig");
 const Column = @import("../Column.zig");
 const exec = @import("exec.zig");
 const place = @import("../place.zig");
+const Buffer = @import("../Buffer.zig");
 
 /// `t->col` / `t->row` (dat.h). The canonical definitions moved to
 /// `core/place.zig` in phase 12b (`makenewwindow` and `Editor`'s `activecol`
@@ -39,7 +40,8 @@ pub fn makeWindow(ed: *Editor, c: *Column, name: []const u8) Text.Error!*Window 
 
 /// `del` (exec.c:397-410), Del (flag1=false) and Delete (flag1=true). Close the
 /// executing window; Delete (flag1) skips the two-strike clean check and closes
-/// immediately. The C's `ntext>1` arm is n/a (single Text per File in v1).
+/// immediately. A window whose file another window also shows (Zerox) closes
+/// without the check too: the text survives in the sibling (exec.c:408).
 pub fn del(
     ed: *Editor,
     et: *Text,
@@ -51,9 +53,65 @@ pub fn del(
 ) Text.Error!void {
     const w = et.w orelse return; // exec.c:405-406
     const c = w.col orelse return; // exec.c:405 (et->col==nil guard)
-    if (flag1 or w.clean(ed, false)) { // exec.c:408-409
+    if (flag1 or w.body.file.shared() or w.clean(ed, false)) { // exec.c:408-409
         try c.close(ed, w, true); // colclose(et->col, et->w, TRUE)
     }
+}
+
+/// `zeroxx` (exec.c:540-577), Zerox: another window on the same File in the
+/// same column (`coladd(col, nil, w, -1)` ⇒ `wininit` with a clone,
+/// wind.c:46-90). The target is `seltext`'s window, else the executing
+/// window's; a directory window is refused. The windows then share one
+/// buffer and undo history: an edit in either shows in both (`textinsert`/
+/// `textdelete` fan-out), and `Del` of one skips the clean check.
+/// `xfidlog(nw, "zerox")` has no port — the log file is not served.
+pub fn zerox(
+    ed: *Editor,
+    et: *Text,
+    t_in: ?*Text,
+    _: ?*Text,
+    _: bool,
+    _: bool,
+    _: []const u8,
+) Text.Error!void {
+    const t0 = t_in orelse et; // exec.c:561-562
+    const src = t0.w orelse return; // exec.c:563-564
+    if (src.isdir) { // exec.c:566-567
+        ed.warning("{s} is a directory; Zerox illegal\n", .{src.body.file.name.items});
+        return;
+    }
+    const c = src.col orelse return;
+    _ = try clone(ed, c, src);
+}
+
+/// `coladd(c, nil, clone, -1)` + `wininit`'s clone arm (wind.c:46-55, 62-66,
+/// 84-90): a window over `src`'s body File carrying its tag text, origin,
+/// scratch/dirty state (no autoindent in v1) and selection. Ownership of the File is
+/// shared: whichever view is freed last frees it (`Window.deinit`).
+pub fn clone(ed: *Editor, c: *Column, src: *Window) Text.Error!*Window {
+    const f = src.body.file;
+    const w = try c.add(&c.row.?.winid, f, -1);
+    w.owns_body = src.owns_body;
+    // wind.c:46-55: the tag is a COPY of the clone's contents, not tracked.
+    const tf = &src.tag.file.buffer;
+    const nc = tf.len();
+    const dest = try ed.allocator.alloc(u8, nc * Buffer.max_bytes_per_rune);
+    defer ed.allocator.free(dest);
+    const bytes = tf.read(0, nc, dest);
+    try w.tag.deleteRange(0, w.tag.file.buffer.len(), true);
+    try w.tag.insertAt(0, bytes, true);
+    w.tag.file.reset(); // filereset
+    try w.tag.setSelect(nc, nc);
+    w.body.org = src.body.org; // wind.c:64
+    w.isscratch = src.isscratch; // wind.c:65
+    w.dirty = src.dirty; // wind.c:85
+    try w.body.fill();
+    try w.body.setSelect(src.body.q0, src.body.q1); // wind.c:87
+    try w.setTag(); // wind.c:88 winsettag (every view)
+    try w.tag.fill();
+    try w.body.scrDraw();
+    ed.needs_flush = true;
+    return w;
 }
 
 /// `new` (look.c:901-942), v1 (R-P9-9): make named/unnamed EMPTY windows in the

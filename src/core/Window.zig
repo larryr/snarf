@@ -120,6 +120,7 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     w.body = try Text.init(body_file, a, r1, font, screen, chrome.body_cols);
     w.body.what = .body; // wind.c:70
     w.body.w = w; // wind.c:29
+    try body_file.addText(&w.body); // wind.c:69 fileaddtext
 
     // 1px PURPLEBLUE divider above the body (wind.c:72-74 — tagcols[BORD], NOT
     // black).
@@ -145,9 +146,11 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
 
 /// Free the two Texts and the tag's File. The body's File is freed here only when
 /// `owns_body` (R-P9-5 — Del must destroy a window+file with no external
-/// registry); otherwise it is caller-owned.
+/// registry) AND this was its last view (`filedeltext`, file.c:64-68: a Zerox
+/// sibling keeps it alive); otherwise it is caller-owned.
 pub fn deinit(w: *Window) void {
-    const owned_body: ?*File = if (w.owns_body) w.body.file else null;
+    const views_left = w.body.file.delText(&w.body); // text.c:105 filedeltext
+    const owned_body: ?*File = if (w.owns_body and views_left == 0) w.body.file else null;
     // `windirfree` (wind.c:646-660) — the directory listing's entry names.
     for (w.dirnames.items) |n| w.chrome.allocator.free(n);
     w.dirnames.deinit(w.chrome.allocator);

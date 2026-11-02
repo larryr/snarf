@@ -26,6 +26,7 @@ const wintag = @import("../wintag.zig");
 const cmd_get = @import("../exec/cmd_get.zig");
 const cmd_put = @import("../exec/cmd_put.zig");
 const cmd_session = @import("../exec/cmd_session.zig");
+const cmd_window = @import("../exec/cmd_window.zig");
 
 const Fsys = fsys_mod.Fsys;
 const Q = fsys_mod.Q;
@@ -221,6 +222,7 @@ const ctltab = [_]CtlCmd{
     .{ .name = "sort", .takes_arg = false, .run = cmdSort },
     .{ .name = "kill ", .takes_arg = true, .run = cmdKill },
     .{ .name = "exit", .takes_arg = false, .run = cmdExit },
+    .{ .name = "zerox", .takes_arg = false, .run = cmdZerox },
 };
 
 /// `get` (xfid.c:770-773): `get(&w->body, nil, nil, FALSE, XXX, nil, 0)`.
@@ -236,6 +238,12 @@ fn cmdPut(f: *Fsys, w: *Window, _: []const u8) OpError!void {
 /// `sort` (#13): the `Sort` word on this window — `colsort(w->col)`.
 fn cmdSort(f: *Fsys, w: *Window, _: []const u8) OpError!void {
     cmd_session.sort(f.ed, &w.body, null, null, false, false, "") catch return error.IoError;
+}
+
+/// `zerox` (#13): the `Zerox` word on this window — another view of its file
+/// in the same column (exec.c:540-577; a directory is refused with a warning).
+fn cmdZerox(f: *Fsys, w: *Window, _: []const u8) OpError!void {
+    cmd_window.zerox(f.ed, &w.body, &w.body, null, false, false, "") catch return error.IoError;
 }
 
 /// `kill <names>\n` (#13): the `Kill` word with that argument (exec.c:1239).
@@ -728,4 +736,18 @@ test "served: ctl sort, kill and exit do what the tag words do (#13 BI-12)" {
     const re2 = try h.write(1, 0, "exit\n");
     try testing.expect(re2.body == .rwrite);
     try testing.expect(h.ed.exit_requested and h.ed.exitReady());
+}
+
+test "served: ctl zerox opens a second view of the window's file (#13 BI-12)" {
+    const h = try Harness.create(testing.allocator, "/c", "cee\n");
+    defer h.destroy();
+    try h.connect();
+    const col = h.tree.row.col.items[0];
+    _ = try h.walk(0, 1, &.{ "1", "ctl" });
+    _ = try h.open(1, msg.ORDWR);
+    const rz = try h.write(1, 0, "zerox\n");
+    try testing.expect(rz.body == .rwrite);
+    try testing.expectEqual(@as(usize, 2), col.w.items.len);
+    try testing.expect(col.w.items[0].body.file == col.w.items[1].body.file);
+    try testing.expectEqualStrings("/c", col.w.items[1].body.file.name.items);
 }

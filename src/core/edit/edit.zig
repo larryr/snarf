@@ -68,7 +68,7 @@ fn runAll(x: *cmd.Ctx, ct: *Text, runes: []const u21) ast.Error!void {
     if (!x.elog.empty()) try x.elog.apply(ct); // elog.c: elogapply on the target body
     try ct.setSelect(ct.q0, ct.q1); // edit.c:132 textsetselect
     try ct.scrDraw(); // edit.c:133 textscrdraw (no-op when w==null)
-    if (ct.w) |w| try w.setTag1(); // edit.c:134 winsettag (windows only)
+    if (ct.w) |w| try w.setTag(); // edit.c:134 winsettag (windows only; every Zerox view)
 }
 
 /// Decode `command` to runes and guarantee the trailing `\n` `editcmd` needs

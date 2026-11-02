@@ -234,6 +234,12 @@ pub fn step(self: *Load, ed: *Editor) Text.Error!void {
             self.stat_copy = .{ .qid = j.result.qid, .mtime = j.result.mtime, .length = j.result.length };
             j.deinit();
             const ns = ed.ns.?; // `start` refused to create a Load without one
+            if (isdir and self.w.body.file.shared()) {
+                // exec.c:614-622: Get of a directory into a Zerox'd window.
+                ed.warning("{s} is a directory; can't read with multiple windows on it\n", .{self.name});
+                self.finished = true;
+                return;
+            }
             if (isdir) {
                 self.job = .{ .dir = nsjob.ListDirJob.init(self.allocator, ns, self.name) catch |e|
                     return self.fail(ed, e) };
@@ -318,8 +324,11 @@ fn finishTail(self: *Load, ed: *Editor) Text.Error!void {
     const samename = if (self.get) |g| g.samename else true;
     t.file.mod = !samename; // look.c:866 / exec.c:640-646
     w.dirty = !samename; // look.c:867 / exec.c:647-648
+    if (t.file.shared()) for (t.file.texts.items) |u| { // exec.c:647-648, every Zerox view
+        if (u.w) |v| v.dirty = !samename;
+    };
     t.file.unread = false; // look.c:858-859 / exec.c:652
-    try w.setTag1(); // look.c:868 winsettag / exec.c:651
+    try w.setTag(); // look.c:868 winsettag / exec.c:651
     const tnc = w.tag.file.buffer.len();
     try w.tag.setSelect(tnc, tnc); // look.c:869 / exec.c:655
     w.tag_state = .{

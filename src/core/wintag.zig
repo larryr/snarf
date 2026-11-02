@@ -233,10 +233,12 @@ fn shiftClamp(v: usize, shift: isize) usize {
     return if (r < 0) 0 else @intCast(r);
 }
 
-/// `winsettag` (wind.c:577-593): the `file->ntext` fan-out collapses to one
-/// `setTag1` (a single Text per File in v1).
+/// `winsettag` (wind.c:577-588): `winsettag1` on every window showing the
+/// body's file — just `w` unless `Zerox` made more (#13).
 pub fn setTag(w: *Window) Error!void {
-    try w.setTag1();
+    const f = w.body.file;
+    if (!f.shared()) return w.setTag1();
+    for (f.texts.items) |u| if (u.w) |v| try v.setTag1(); // wind.c:584-587
 }
 
 /// `winsettag1` WITH its wind.c:485-486 entry: a tag whose text changed since
@@ -245,7 +247,7 @@ pub fn setTag(w: *Window) Error!void {
 /// sites that hold an `Editor` (the sweep, Put, Undo).
 pub fn setTagCommit(ed: *Editor, w: *Window) Error!void {
     if (w.tag_file.mod) try commit(ed, w); // wind.c:485-486
-    try setTag1(w);
+    try setTag(w);
 }
 
 /// `winsetname` (wind.c:376-398): equal ⇒ nothing; else `isscratch` from the
@@ -257,7 +259,12 @@ pub fn setName(w: *Window, name: []const u8) Error!void {
     if (std.mem.eql(u8, name, w.body.file.name.items)) return; // wind.c:385-386
     w.isscratch = std.mem.endsWith(u8, name, "/guide") or std.mem.endsWith(u8, name, "+Errors"); // wind.c:387-391
     try w.body.file.setName(name); // wind.c:392
-    try setTag1(w); // wind.c:393-396
+    const f = w.body.file;
+    if (!f.shared()) return setTag1(w); // wind.c:393-396
+    for (f.texts.items) |u| if (u.w) |v| { // wind.c:393-396, every view
+        try setTag1(v);
+        v.isscratch = w.isscratch;
+    };
 }
 
 /// `wincommit`'s TAG half (wind.c:608-616): the tag's name half differs from

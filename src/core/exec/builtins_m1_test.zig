@@ -23,7 +23,7 @@ const proto = draw.proto;
 
 const exit_landed = true;
 const sort_landed = true;
-const zerox_landed = false;
+const zerox_landed = true;
 const kill_landed = true;
 
 fn entry(comptime name: []const u8, comptime landed: bool) !*const builtins.Entry {
@@ -194,6 +194,100 @@ test "builtins #13 BI-05/06: Zerox opens a second view sharing the same File" {
     };
     try testing.expect(other.?.body.file == w.body.file); // one File, two views
     try testing.expectEqualStrings(w.body.file.name.items, other.?.body.file.name.items);
+}
+
+/// The Zerox sibling of `w` in its column (BI-05..09).
+fn zeroxOf(h: *Rig, w: *Window) !*Window {
+    const e = try entry("Zerox", zerox_landed);
+    try run(&h.ed, e, &w.tag, "");
+    const c = w.col.?;
+    for (c.w.items) |x| if (x != w and x.body.file == w.body.file) return x;
+    return error.NoZerox;
+}
+
+fn bodyText(w: *Window, buf: []u8) []const u8 {
+    const f = &w.body.file.buffer;
+    return f.read(0, f.len(), buf);
+}
+
+test "builtins #13 BI-07: typing into one view shows in the other (text.c:381 fan-out)" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    const a = h.tree.row.col.items[0].w.items[0];
+    const b = try zeroxOf(&h, a);
+    try testing.expectEqual(@as(usize, 2), a.body.file.texts.items.len);
+    h.ed.seq += 1;
+    a.body.file.mark(h.ed.seq);
+    try a.body.insertAt(0, "X", true);
+    try testing.expect(a.dirty and b.dirty);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("Xcee\n", bodyText(b, &buf));
+    // b's FRAME holds the new rune too, not just the shared buffer.
+    try testing.expectEqual(a.body.fr.nchars, b.body.fr.nchars);
+    try b.body.deleteRange(0, 1, true); // and back the other way (text.c:477)
+    try testing.expectEqual(@as(usize, 4), a.body.fr.nchars);
+}
+
+test "builtins #13 BI-08: Undo in either view undoes the shared history (wind.c:355)" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    const a = h.tree.row.col.items[0].w.items[0];
+    const b = try zeroxOf(&h, a);
+    h.ed.seq += 1;
+    a.body.file.mark(h.ed.seq);
+    try a.body.insertAt(4, "new\n", true);
+    const undo = try entry("Undo", true);
+    try run(&h.ed, undo, &b.tag, "");
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("cee\n", bodyText(a, &buf));
+    try testing.expectEqual(@as(usize, 4), a.body.fr.nchars);
+    try testing.expectEqual(@as(usize, 4), b.body.fr.nchars);
+    try testing.expect(!a.dirty and !b.dirty); // seq back at putseq for both
+}
+
+test "builtins #13 BI-09: Del of one dirty view skips the clean check; the other keeps the File (exec.c:408)" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    const c = h.tree.row.col.items[0];
+    const a = c.w.items[0];
+    const b = try zeroxOf(&h, a);
+    h.ed.seq += 1;
+    a.body.file.mark(h.ed.seq);
+    try a.body.insertAt(0, "X", true);
+    const n = c.w.items.len;
+    const del = try entry("Del", true);
+    try run(&h.ed, del, &b.tag, "");
+    try testing.expectEqual(n - 1, c.w.items.len); // gone at the first Del
+    try testing.expect(!h.ed.warningsPending());
+    try testing.expectEqual(@as(usize, 1), a.body.file.texts.items.len);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("Xcee\n", bodyText(a, &buf));
+    // The last view is the clean-checked one again: Del warns first.
+    try run(&h.ed, del, &a.tag, "");
+    try testing.expectEqual(n - 1, c.w.items.len);
+}
+
+test "builtins #13: Zerox copies the tag, selection and dirt; a rename retags both (wind.c:46-90, :393)" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    const a = h.tree.row.col.items[0].w.items[0];
+    try a.body.setSelect(1, 3);
+    a.dirty = true;
+    const b = try zeroxOf(&h, a);
+    try testing.expect(b.dirty);
+    try testing.expectEqual(@as(usize, 1), b.body.q0);
+    try testing.expectEqual(@as(usize, 3), b.body.q1);
+    try @import("../wintag.zig").setName(a, "/tmp/z.txt");
+    var ba: [256]u8 = undefined;
+    var bb: [256]u8 = undefined;
+    const ta = a.tag.file.buffer.read(0, a.tag.file.buffer.len(), &ba);
+    const tb = b.tag.file.buffer.read(0, b.tag.file.buffer.len(), &bb);
+    try testing.expect(std.mem.startsWith(u8, tb, "/tmp/z.txt "));
+    try testing.expectEqualStrings(ta, tb);
 }
 
 test "builtins #13 BI-10: Zerox on a directory window is refused (acme zeroxx)" {

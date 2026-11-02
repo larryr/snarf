@@ -7,8 +7,9 @@
 //! Load, Look, New, Newcol, Paste, Put, Putall, Redo, Snarf, Undo (exec.c:98-130,
 //! alphabetical; Dump/Load/Put/Putall since phase 17), plus the port's own
 //! Reconnect and the Edit language, plus Exit, Kill and Sort (#13,
-//! `cmd_session.zig`). Deferred per R-P9-7: the external `run` path (unknown
-//! word ⇒ silent no-op) and Zerox (needs multi-Text-per-File). The command
+//! `cmd_session.zig`) and Zerox (#13, `cmd_window.zig`, over `File.texts`).
+//! Deferred per R-P9-7: the external `run` path (unknown word ⇒ silent
+//! no-op). The command
 //! functions live in the sibling `cmd_*.zig` files.
 //!
 //! The `mark` column mirrors exec.c exactly: only Cut/Paste mark here (Send is
@@ -94,17 +95,19 @@ pub const exectab = [_]Entry{
     .{ .name = "Snarf", .fn_ = cmd_edit.cut, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:124 (docut=FALSE)
     .{ .name = "Sort", .fn_ = cmd_session.sort, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:125 (flag1/flag2 XXX unused)
     .{ .name = "Undo", .fn_ = cmd_edit.undo, .mark = false, .flag1 = true, .flag2 = false }, // exec.c:127 (isundo=TRUE; flag2 XXX unused)
+    .{ .name = "Zerox", .fn_ = cmd_window.zerox, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:128 (flag1/flag2 XXX unused)
 };
 
 test "builtins: table shape and flags match exec.c" {
     const testing = std.testing;
-    // Grew by three rows (#13): Exit (exec.c:107), Kill (:113), Sort (:125).
+    // Grew by four rows (#13): Exit (exec.c:107), Kill (:113), Sort (:125),
+    // Zerox (:128).
     // Phase 17 added four: Dump (exec.c:105), Load (:114), Put (:120)
     // and Putall (:121), each in its exec.c alphabetical slot. Earlier growth:
     // Get (R-P13b-5), Look (R-P12b-1), Reconnect (R-P12-7), Edit (R-P10-8).
-    try testing.expectEqual(@as(usize, 21), exectab.len);
+    try testing.expectEqual(@as(usize, 22), exectab.len);
     // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Exit", "Get", "Kill", "Load", "Look", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Sort", "Undo" };
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Exit", "Get", "Kill", "Load", "Look", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Sort", "Undo", "Zerox" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
     const E = struct {
         fn at(name: []const u8) *const Entry {
