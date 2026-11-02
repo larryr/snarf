@@ -7,6 +7,14 @@
 //! `mnt/` list snarf's entries first, then the host's, so host paths under
 //! them stay reachable.
 //!
+//! PM rulings on #60 (SnarfProdd, 2026-11-02, decisions README): dedup only
+//! at `/`, `dev/`, `mnt/` (other unions keep R-9P-03, UD-17/18); host device
+//! nodes, fifos and sockets are listed and stat-able, open ⇒ "not supported"
+//! (UD-19..23; device I/O is #76); collisions list snarf's record (UD-03);
+//! no nested union, `/dev/draw` stays snarf-only (UD-25, out of scope); a new
+//! file in a shadowed folder is created on the host (UD-24); "snarf first"
+//! is the raw stream only, windows keep dircmp order (UD-02/04).
+//!
 //! The host mount point is ONE parameter, `host_mtpt` below. The ruling is
 //! interim pending Larry's `/` vs `/n/local` call (#11 Q1). With
 //! `host_mtpt = "/n/local"` nothing of snarf's shadows a host directory, so
@@ -92,6 +100,12 @@ const Rig = struct {
 
     /// `seed` runs on the host tmp root before anything is mounted.
     fn create(seed: *const fn (d: Io.Dir) anyerror!void) !*Rig {
+        return createAt(seed, null);
+    }
+
+    /// `root` overrides the host root (a real directory such as `/dev`,
+    /// opened read-only by the tests); the tmp dir still exists for `seed`.
+    fn createAt(seed: *const fn (d: Io.Dir) anyerror!void, root: ?[]const u8) !*Rig {
         const a = testing.allocator;
         const r = try a.create(Rig);
         errdefer a.destroy(r);
@@ -100,7 +114,7 @@ const Rig = struct {
         try seed(r.tmp.dir);
         const path = try r.tmp.dir.realPathFileAlloc(testing.io, ".", a);
         defer a.free(path);
-        r.host = try hostfs.HostFs.open(testing.io, path);
+        r.host = try hostfs.HostFs.open(testing.io, root orelse path);
         r.fs = hostfs.HostTree.init(a, &r.host);
         r.pipe = try ninep.chan.Pipe.init(a, 65536);
         r.srv = try ninep.server.Server.init(a, r.pipe.serverEnd(), &hostfs.HostTree.ops, &r.fs, 8192);
@@ -566,10 +580,11 @@ test "union UD-16: unreadable host entries — an unreadable shadowed dir drops 
 }
 
 // ===========================================================================
-// UD-17 — scope: no host at the root (WASM, /n/local) keeps R-9P-03 as is
+// UD-17/18 — scope (PM ruling 2026-11-02 #1): dedup only at `/`, `dev/`,
+// `mnt/`; every other union keeps R-9P-03 (duplicates listed)
 // ===========================================================================
 
-test "union UD-17 (guard): without a host at `/`, member unions keep R-9P-03 (no de-dup) and `/` is synthetic" {
+test "union UD-17 (guard): browser shape (no host) — `/` is synthetic and the /bin union keeps R-9P-03 duplicates (ruling #1)" {
     const a = testing.allocator;
     const FakeTree = ninep.nsdir.FakeTree;
     var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
@@ -606,4 +621,251 @@ test "union UD-17 (guard): without a host at `/`, member unions keep R-9P-03 (no
     const second = try Stat.decode(buf[first.encodedSize()..bn]);
     try testing.expectEqualStrings("rc", first.name);
     try testing.expectEqualStrings("rc", second.name); // R-9P-03: still listed twice
+}
+
+test "union UD-18 (guard): host at `/` — a union outside `/`, `dev/`, `mnt/` (here /bin) still lists duplicates (ruling #1, R-9P-03)" {
+    if (!shadowing()) return error.SkipZigTest;
+    const a = testing.allocator;
+    const FakeTree = ninep.nsdir.FakeTree;
+    var t1 = FakeTree{ .names = &.{"rc"}, .tag = "one\n" };
+    var t2 = FakeTree{ .names = &.{"rc"}, .tag = "two\n" };
+    var s1 = try ninep.nsdir.FakeServer.init(a, &t1);
+    defer s1.deinit();
+    var s2 = try ninep.nsdir.FakeServer.init(a, &t2);
+    defer s2.deinit();
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    try r.ns.bind("/bin", s1.client, s1.root_fid, .after);
+    try r.ns.bind("/bin", s2.client, s2.root_fid, .after);
+    const l = try r.list("/bin", 8192);
+    defer freeList(r.a, l);
+    try testing.expectEqual(@as(usize, 2), count(l, "rc"));
+}
+
+// ===========================================================================
+// UD-19..23 — host device nodes, fifos, sockets (PM ruling 2026-11-02 #2):
+// listed, stat-able, open ⇒ a clear "not supported" error. Device I/O is a
+// later feature (#76).
+// ===========================================================================
+
+const Special = enum { fifo, sock, chr };
+
+/// Make a fifo / unix socket / char device (1,3) at `rel` under the rig's
+/// host tmp root. `error.SkipZigTest` where the platform or path can't.
+fn mkSpecial(r: *Rig, rel: []const u8, kind: Special) !void {
+    const root = try r.tmp.dir.realPathFileAlloc(testing.io, ".", r.a);
+    defer r.a.free(root);
+    const abs = try std.fmt.allocPrintSentinel(r.a, "{s}/{s}", .{ root, rel }, 0);
+    defer r.a.free(abs);
+    switch (builtin.os.tag) {
+        .linux => {
+            const L = std.os.linux;
+            switch (kind) {
+                .fifo => if (L.errno(L.mknodat(L.AT.FDCWD, abs, L.S.IFIFO | 0o644, 0)) != .SUCCESS) return error.SkipZigTest,
+                .chr => if (L.errno(L.mknodat(L.AT.FDCWD, abs, L.S.IFCHR | 0o666, (1 << 8) | 3)) != .SUCCESS) return error.SkipZigTest,
+                .sock => {
+                    var sa = L.sockaddr.un{ .path = @splat(0) };
+                    if (abs.len >= sa.path.len) return error.SkipZigTest;
+                    @memcpy(sa.path[0..abs.len], abs);
+                    const fd = L.socket(L.AF.UNIX, L.SOCK.STREAM, 0);
+                    if (L.errno(fd) != .SUCCESS) return error.SkipZigTest;
+                    defer _ = L.close(@intCast(fd));
+                    if (L.errno(L.bind(@intCast(fd), @ptrCast(&sa), @sizeOf(L.sockaddr.un))) != .SUCCESS) return error.SkipZigTest;
+                },
+            }
+        },
+        .macos => {
+            const C = struct {
+                extern "c" fn mkfifo(path: [*:0]const u8, mode: std.c.mode_t) c_int;
+                extern "c" fn mknod(path: [*:0]const u8, mode: std.c.mode_t, dev: i32) c_int;
+                extern "c" fn socket(domain: c_int, ty: c_int, proto: c_int) c_int;
+            };
+            switch (kind) {
+                .fifo => if (C.mkfifo(abs, 0o644) != 0) return error.SkipZigTest,
+                .chr => if (C.mknod(abs, std.c.S.IFCHR | 0o666, (3 << 24) | 2) != 0) return error.SkipZigTest,
+                .sock => {
+                    var sa = std.c.sockaddr.un{ .path = @splat(0) };
+                    if (abs.len >= sa.path.len) return error.SkipZigTest;
+                    @memcpy(sa.path[0..abs.len], abs);
+                    const fd = C.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
+                    if (fd < 0) return error.SkipZigTest;
+                    defer _ = std.c.close(fd);
+                    if (std.c.bind(fd, @ptrCast(&sa), @sizeOf(std.c.sockaddr.un)) != 0) return error.SkipZigTest;
+                },
+            }
+        },
+        else => return error.SkipZigTest,
+    }
+}
+
+/// Raw 9P open (OREAD) of `path` through the namespace: true iff it FAILS and
+/// the server's error string says "not supported" (case-insensitive).
+fn openNotSupported(r: *Rig, path: []const u8) !bool {
+    const h = ninep.nsdir.walk(&r.ns, path) catch return false; // not even walkable
+    defer ninep.nsdir.close(&r.ns, h);
+    const f = switch (h) {
+        .fid => |f| f,
+        .dir => return false,
+    };
+    _ = f.client.open(f.fid, 0) catch {
+        return std.ascii.indexOfIgnoreCase(f.client.lastErrorString(), "not supported") != null;
+    };
+    return false;
+}
+
+/// Walk + Tstat succeed, the name matches and it is not a directory.
+fn statsAsFile(r: *Rig, path: []const u8) bool {
+    const h = ninep.nsdir.walk(&r.ns, path) catch return false;
+    defer ninep.nsdir.close(&r.ns, h);
+    const f = switch (h) {
+        .fid => |f| f,
+        .dir => return false,
+    };
+    const st = f.client.stat(f.fid) catch return false;
+    return std.mem.eql(u8, st.name, std.fs.path.basename(path)) and st.mode & Stat.DMDIR == 0;
+}
+
+/// Hold the fifo open read-write so a (buggy) blocking open of it by the
+/// server cannot hang the suite.
+fn holdFifo(r: *Rig, rel: []const u8) !?std.posix.fd_t {
+    const root = try r.tmp.dir.realPathFileAlloc(testing.io, ".", r.a);
+    defer r.a.free(root);
+    const abs = try std.fmt.allocPrintSentinel(r.a, "{s}/{s}", .{ root, rel }, 0);
+    defer r.a.free(abs);
+    switch (builtin.os.tag) {
+        .linux => {
+            const rc = std.os.linux.open(abs, .{ .ACCMODE = .RDWR, .NONBLOCK = true }, 0);
+            if (std.os.linux.errno(rc) != .SUCCESS) return null;
+            return @intCast(rc);
+        },
+        .macos => {
+            const fd = std.c.open(abs, .{ .ACCMODE = .RDWR, .NONBLOCK = true });
+            return if (fd < 0) null else fd;
+        },
+        else => return null,
+    }
+}
+
+fn unhold(fd: ?std.posix.fd_t) void {
+    const f = fd orelse return;
+    switch (builtin.os.tag) {
+        .linux => _ = std.os.linux.close(f),
+        .macos => _ = std.c.close(f),
+        else => {},
+    }
+}
+
+test "union UD-19: host fifos and unix sockets are LISTED, in the host tree and in the /dev union (ruling #2)" {
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    try mkSpecial(r, "dev/pipe", .fifo);
+    try mkSpecial(r, "dev/sock", .sock);
+    const l = try r.list("/mnt/host/dev", 8192);
+    defer freeList(r.a, l);
+    // Guard: regular entries still list beside them.
+    try testing.expect(index(l, "hostonly.txt") != null);
+    var ok = count(l, "pipe") == 1 and count(l, "sock") == 1;
+    for (l) |x| if (std.mem.eql(u8, x.name, "pipe") or std.mem.eql(u8, x.name, "sock")) {
+        ok = ok and x.mode & Stat.DMDIR == 0;
+    };
+    if (shadowing()) {
+        const u = try r.list("/dev", 8192);
+        defer freeList(r.a, u);
+        ok = ok and count(u, "pipe") == 1 and count(u, "sock") == 1;
+    }
+    try flagged(ok, "UD-19 fifo + socket listed once");
+}
+
+test "union UD-20: stat (walk + Tstat) works on a host fifo and unix socket (ruling #2)" {
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    try mkSpecial(r, "dev/pipe", .fifo);
+    try mkSpecial(r, "dev/sock", .sock);
+    var ok = statsAsFile(r, "/mnt/host/dev/pipe") and statsAsFile(r, "/mnt/host/dev/sock");
+    if (shadowing()) ok = ok and statsAsFile(r, "/dev/pipe") and statsAsFile(r, "/dev/sock");
+    try flagged(ok, "UD-20 stat of fifo + socket");
+}
+
+test "union UD-21: opening a host fifo or socket fails with a clear \"not supported\" error — 9P and B3 (ruling #2)" {
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    try mkSpecial(r, "dev/pipe", .fifo);
+    try mkSpecial(r, "dev/sock", .sock);
+    const held = try holdFifo(r, "dev/pipe");
+    defer unhold(held);
+    var ok = try openNotSupported(r, "/mnt/host/dev/sock");
+    ok = ok and try openNotSupported(r, "/mnt/host/dev/pipe");
+    const p = if (shadowing()) "/dev/sock" else "/mnt/host/dev/sock";
+    _ = try r.openWin(p);
+    ok = ok and (try r.bodiesContain("not supported") or try r.bodiesContain("Not supported"));
+    try flagged(ok, "UD-21 open of fifo/socket = not supported");
+}
+
+test "union UD-22: a host char device (mknod 1,3) is listed, stats, and refuses open (ruling #2; needs root)" {
+    if (!isRoot()) return error.SkipZigTest;
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    try mkSpecial(r, "dev/null", .chr);
+    const l = try r.list("/mnt/host/dev", 8192);
+    defer freeList(r.a, l);
+    const ok = count(l, "null") == 1 and statsAsFile(r, "/mnt/host/dev/null") and try openNotSupported(r, "/mnt/host/dev/null");
+    try flagged(ok, "UD-22 char device listed/stat/not supported");
+}
+
+test "union UD-23: the REAL host /dev — `null` is listed, stats, and refuses open (ruling #2; no root, read-only)" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const S = struct {
+        fn none(_: Io.Dir) anyerror!void {}
+    };
+    const r = try Rig.createAt(S.none, "/dev");
+    defer r.destroy();
+    const l = try r.list("/mnt/host", 65536);
+    defer freeList(r.a, l);
+    const ok = count(l, "null") == 1 and statsAsFile(r, "/mnt/host/null") and try openNotSupported(r, "/mnt/host/null");
+    try flagged(ok, "UD-23 real /dev/null listed/stat/not supported");
+}
+
+// ===========================================================================
+// UD-24 — create in a shadowed folder goes to the host (ruling #5, Plan 9
+// MCREATE). UD-25 — no nested union (ruling #4, out of scope).
+// ===========================================================================
+
+test "union UD-24: Put of a NEW file in a shadowed folder (/dev/new.txt) creates it on the host (ruling #5)" {
+    if (!shadowing()) return error.SkipZigTest;
+    const r = try Rig.create(seedStd);
+    defer r.destroy();
+    const w = try r.openWin("/dev/hostonly.txt");
+    try core.wintag.setName(w, "/dev/new.txt");
+    r.ed.seq += 1;
+    w.body.file.mark(r.ed.seq);
+    try w.body.insertAt(0, "fresh ", true);
+    try r.tick();
+    try r.run(&w.tag, "Put");
+    try r.settle();
+    const d = r.disk("dev/new.txt") catch "";
+    defer if (d.len != 0) r.a.free(d);
+    // Guard: the source file is untouched whatever happens.
+    const src = try r.disk("dev/hostonly.txt");
+    defer r.a.free(src);
+    try testing.expectEqualStrings("host-only\n", src);
+    try flagged(std.mem.eql(u8, d, "fresh host-only\n") and !w.dirty, "UD-24 /dev/new.txt created on the host");
+}
+
+test "union UD-25 (guard): no nested union — /dev/draw stays snarf-only; the host's dev/draw is only at /mnt/host (ruling #4, out of scope)" {
+    if (!shadowing()) return error.SkipZigTest;
+    const S = struct {
+        fn seed(d: Io.Dir) anyerror!void {
+            try seedStd(d);
+            try mk(d, "dev/draw/hostdraw.txt", "host draw\n");
+        }
+    };
+    const r = try Rig.create(S.seed);
+    defer r.destroy();
+    const l = try r.list("/dev/draw", 8192);
+    defer freeList(r.a, l);
+    try testing.expectEqual(@as(usize, 1), l.len);
+    try testing.expectEqualStrings("new", l[0].name);
+    try testing.expectError(error.NotFound, ninep.nsdir.walk(&r.ns, "/dev/draw/hostdraw.txt"));
+    const h = try ninep.nsdir.walk(&r.ns, "/mnt/host/dev/draw/hostdraw.txt");
+    ninep.nsdir.close(&r.ns, h);
 }
