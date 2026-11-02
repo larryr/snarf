@@ -250,13 +250,6 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
     return env.get("winsize") orelse "1024x768";
 }
 
-/// Build the whole stack in place (pointer-capture hazards — see `App`).
-/// `host_root` is the host directory served at `/` and `/mnt/host` — the
-/// real `/` in `main`, a scratch directory in the tests. `files` are the
-/// command line's file arguments as rooted names in the namespace (acme.c:
-/// 261-266); none opens the `/` directory window (acme.c:258-259). Each
-/// allocating step sets its `a.built` flag, so `shutdown` can undo a partial
-/// boot.
 /// The directory the file arguments are rooted at (acme's `wdir`): the working
 /// directory when there are any, else `/` (unused). It owns `path` and frees
 /// it with the sentinel `currentPathAlloc` allocated. Typing it `[]u8` frees
@@ -273,8 +266,13 @@ pub const ArgsDir = struct {
     }
 };
 
-/// `files` are the file arguments as typed; `cwd` (acme's `wdir`) roots the
-/// relative ones (acme.c:293-296).
+/// Build the whole stack in place (pointer-capture hazards — see `App`).
+/// `host_root` is the host directory served at `/` and `/mnt/host` — the
+/// real `/` in `main`, a scratch directory in the tests. `files` are the
+/// command line's file arguments as typed (acme.c:261-266); `cwd` (acme's
+/// `wdir`) roots the relative ones (acme.c:293-296). No file arguments opens
+/// the `/` directory window (acme.c:258-259). Each allocating step sets its
+/// `a.built` flag, so `shutdown` can undo a partial boot.
 pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palette, host_root: []const u8, cwd: []const u8, files: []const []const u8) !void {
     // ---- draw stack ----
     a.dd = DevDraw9.init(&a.conn);
