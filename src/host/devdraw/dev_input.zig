@@ -46,6 +46,11 @@ pub const MouseRec = dev.input.MouseRec;
 /// write restores the arrow (devmouse.c:381-393, cursor(6)).
 pub const cursor_rec_len: usize = 2 * 4 + 2 * 16 + 2 * 16;
 
+/// The largest `/dev/snarf` write buffered for one fid: what one `Twrsnarf`
+/// frame can carry (`wsys.max_msg` less its 4+1+1+4-byte header and string
+/// count). Past it a Twrite is an I/O error, not a silent cut.
+pub const max_snarf: usize = wsys.max_msg - 16;
+
 const Node = enum(u4) { root = 0, mouse = 1, kbd = 2, cursor = 3, snarf = 4, label = 5 };
 
 fn qidFor(node: Node) Qid {
@@ -212,7 +217,7 @@ pub const DevInput9 = struct {
         }
     }
 
-    fn writeOp(ctx: *anyopaque, _: *Server, fid: *Fid, _: u64, data: []const u8) OpError!usize {
+    fn writeOp(ctx: *anyopaque, _: *Server, fid: *Fid, offset: u64, data: []const u8) OpError!usize {
         const self = devOf(ctx);
         switch (nodeOf(fid.qid.path)) {
             // THE WARP (mouse(3):41-48, devmouse.c:458-476 `case Qmouse`).
@@ -238,8 +243,24 @@ pub const DevInput9 = struct {
                 self.conn.cursor(c) catch return error.IoError;
                 return cursor_rec_len;
             },
+            // Buffered until the Tclunk (S-02 §3: "Write (OTRUNC): replace
+            // clipboard on clunk"; #31). A client writing more than one 9P
+            // message sends several Twrites at increasing offsets; each lands
+            // at its offset in this fid's buffer, and the clunk sends the
+            // whole thing as ONE `Twrsnarf` — the clipboard is the file's
+            // complete contents, as on Plan 9 (acme.c:1088-1091: "/dev/snarf
+            // updates when the file is closed").
             .snarf => {
-                self.conn.wrSnarf(data) catch return error.IoError;
+                const w = try self.snarfWriter(fid);
+                const off = std.math.cast(usize, offset) orelse return error.IoError;
+                const end = std.math.add(usize, off, data.len) catch return error.IoError;
+                if (end > max_snarf) return error.IoError;
+                if (end > w.items.len) {
+                    const old = w.items.len;
+                    w.resize(self.allocator, end) catch return error.IoError;
+                    @memset(w.items[old..off], 0); // a gap reads as NULs (never happens for acme)
+                }
+                @memcpy(w.items[off..end], data);
                 return data.len;
             },
             .label => {
@@ -250,7 +271,32 @@ pub const DevInput9 = struct {
         }
     }
 
-    fn clunkOp(_: *anyopaque, _: *Server, _: *Fid) void {}
+    /// The per-fid `/dev/snarf` write buffer (`fid.ctx`), made by the first
+    /// Twrite — an OTRUNC open and a plain OWRITE one both start empty.
+    fn snarfWriter(self: *Self, fid: *Fid) OpError!*std.ArrayListUnmanaged(u8) {
+        if (fid.ctx) |c| return @ptrCast(@alignCast(c));
+        const w = self.allocator.create(std.ArrayListUnmanaged(u8)) catch return error.IoError;
+        w.* = .empty;
+        fid.ctx = w;
+        return w;
+    }
+
+    /// A `/dev/snarf` fid that was written: its bytes become the clipboard,
+    /// in one `Twrsnarf` (#31). Clunk cannot report an error (`Ops.clunk` is
+    /// void); a refused `Twrsnarf` leaves the pasteboard as it was, never
+    /// half-replaced. A fid only read (or opened and never written) sends
+    /// nothing.
+    fn clunkOp(ctx: *anyopaque, _: *Server, fid: *Fid) void {
+        const self = devOf(ctx);
+        const c = fid.ctx orelse return;
+        fid.ctx = null;
+        const w: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(c));
+        defer {
+            w.deinit(self.allocator);
+            self.allocator.destroy(w);
+        }
+        if (nodeOf(fid.qid.path) == .snarf) self.conn.wrSnarf(w.items) catch {};
+    }
 
     fn statOp(_: *anyopaque, _: *Server, fid: *Fid) OpError!Stat {
         const info: struct { name: []const u8, mode: u32 } = switch (nodeOf(fid.qid.path)) {

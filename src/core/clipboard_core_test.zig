@@ -17,7 +17,7 @@ const Frame = draw.Frame;
 const proto = draw.proto;
 
 /// Flip to true in the PR that lands #12's core sync.
-const clipboard_sync_landed = false;
+const clipboard_sync_landed = true;
 
 fn xfail(ok: bool) !void {
     if (clipboard_sync_landed) {

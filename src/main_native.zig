@@ -356,4 +356,5 @@ fn inputDevices(a: *App) input_pump.Devices {
 
 test {
     _ = @import("main_native_test.zig"); // #58: boot → session → shutdown, leak-checked
+    _ = @import("main_native_clipboard_test.zig"); // #12/#31: Snarf/Paste ↔ the pasteboard
 }

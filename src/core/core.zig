@@ -12,6 +12,9 @@ pub const Gesture = @import("Gesture.zig");
 pub const textselect = @import("textselect.zig");
 /// The snarf buffer's single-Text `cut`/`paste` cores (exec.c:947-1073).
 pub const snarf = @import("snarf.zig");
+/// `acmeputsnarf`/`acmegetsnarf` (acme.c:1088-1138): the snarf buffer synced
+/// with `/dev/snarf`, the host clipboard on native (#12).
+pub const clipboard = @import("clipboard.zig");
 pub const Buffer = @import("Buffer.zig");
 pub const File = @import("File.zig");
 pub const Text = @import("text/Text.zig");

@@ -12,7 +12,7 @@
 //! phase-6/7 gesture set (F-9 single-Text; scroll via the wheel/nav keys).
 //!
 //! The snarf buffer and the `cut`/`snarfInsert` ops (exec.c:947-1073) live here;
-//! /dev/snarf + clipboard sync are deferred (R-P7-5, S-05 §7). Phase 12e carved
+//! /dev/snarf sync is `clipboard.zig` (#12; none in the browser, S-05 §7). Phase 12e carved
 //! the mouse gesture machine out to `Gesture.zig` (its doc paragraph went with
 //! it); `handleMouse`/`hitTest` below are one-line forwarders into it.
 const std = @import("std");

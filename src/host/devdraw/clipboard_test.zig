@@ -17,7 +17,7 @@ const Server = ninep.server.Server;
 const Fid = ninep.server.Fid;
 
 /// Flip when chunked /dev/snarf writes are assembled (see CB-07b, issue #31).
-const multi_write_fixed = false;
+const multi_write_fixed = true;
 
 pub const Pasteboard = struct {
     gpa: std.mem.Allocator,
@@ -77,7 +77,12 @@ const Rig = struct {
         r.fid = .{ .fid = 1, .qid = .{ .path = 0 }, .omode = 2, .uname = @constCast("") };
         r.fid.qid = try DevInput9.ops.walk1(&r.d, &r.srv, &r.fid, "snarf");
     }
+    /// The Tclunk: a written fid's bytes become the pasteboard (S-02 §3, #31).
+    fn clunk(r: *Rig) void {
+        DevInput9.ops.clunk.?(&r.d, &r.srv, &r.fid);
+    }
     fn deinit(r: *Rig) void {
+        r.clunk(); // frees a write buffer a test left open
         r.d.deinit();
         r.c.deinit();
         r.pb.deinit();
@@ -125,7 +130,10 @@ test "clipboard CB-03: writing /dev/snarf replaces the host pasteboard via Twrsn
     defer r.deinit();
     try r.pb.set("old");
     _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, "new text");
+    try testing.expectEqualStrings("old", r.pb.contents.items); // buffered until clunk (S-02 §3)
+    r.clunk();
     try testing.expectEqualStrings("new text", r.pb.contents.items);
+    try testing.expectEqual(@as(usize, 1), r.pb.wr);
 }
 
 test "clipboard CB-05: an external pasteboard change is seen on the next read (no stale cache)" {
@@ -147,6 +155,7 @@ test "clipboard CB-06: non-ASCII UTF-8 survives both directions byte-exact" {
     defer r.deinit();
     const s = "caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x98\x80 e\xcc\x81";
     _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, s);
+    r.clunk();
     try testing.expectEqualStrings(s, r.pb.contents.items);
     const got = try r.readAll(3); // small chunks split multi-byte sequences
     defer testing.allocator.free(got);
@@ -180,6 +189,7 @@ test "clipboard CB-07b: a write split across 9P messages lands whole (known bug 
     defer r.deinit();
     _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, "hello, ");
     _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 7, "world");
+    r.clunk();
     const ok = std.mem.eql(u8, r.pb.contents.items, "hello, world");
     if (!multi_write_fixed) {
         if (ok) return error.UnexpectedPassFlipFlag;
@@ -195,6 +205,55 @@ test "clipboard CB-08: a devdraw error surfaces as a 9P error, not silent trunca
     r.pb.fail_next = "pasteboard unavailable";
     var buf: [64]u8 = undefined;
     try testing.expectError(error.IoError, DevInput9.ops.read(&r.d, &r.srv, &r.fid, 0, &buf));
+    // Writes are buffered until the Tclunk (S-02 §3, #31), and a clunk cannot
+    // carry an error (`Ops.clunk` is void). A refused Twrsnarf must therefore
+    // leave the pasteboard exactly as it was — never half-replaced.
+    try r.pb.set("before");
     r.pb.fail_next = "pasteboard unavailable";
-    try testing.expectError(error.IoError, DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, "x"));
+    _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, "x");
+    r.clunk();
+    try testing.expectEqualStrings("before", r.pb.contents.items);
+    // What the device CAN refuse at write time, it does: past one frame.
+    try testing.expectError(error.IoError, DevInput9.ops.write(&r.d, &r.srv, &r.fid, dev_input.max_snarf, "x"));
+}
+
+test "clipboard #31: chunks land by offset in any order; one Twrsnarf per written fid" {
+    var r: Rig = undefined;
+    try r.init();
+    defer r.deinit();
+    _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 6, "world");
+    _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, 0, "hello,");
+    try testing.expectEqual(@as(usize, 0), r.pb.wr);
+    r.clunk();
+    try testing.expectEqualStrings("hello,world", r.pb.contents.items);
+    try testing.expectEqual(@as(usize, 1), r.pb.wr);
+    r.clunk(); // a second clunk of the same (now clean) fid sends nothing
+    try testing.expectEqual(@as(usize, 1), r.pb.wr);
+}
+
+test "clipboard #31: a read-only fid's clunk leaves the pasteboard alone" {
+    var r: Rig = undefined;
+    try r.init();
+    defer r.deinit();
+    try r.pb.set("keep");
+    const got = try r.readAll(64);
+    defer testing.allocator.free(got);
+    r.clunk();
+    try testing.expectEqual(@as(usize, 0), r.pb.wr);
+    try testing.expectEqualStrings("keep", r.pb.contents.items);
+}
+
+test "clipboard #31: a 1 MB write in 8 KB Twrites reaches the pasteboard whole, once" {
+    var r: Rig = undefined;
+    try r.init();
+    defer r.deinit();
+    const big = try testing.allocator.alloc(u8, 1 << 20);
+    defer testing.allocator.free(big);
+    for (big, 0..) |*b, i| b.* = @intCast('a' + i % 26);
+    var off: usize = 0;
+    while (off < big.len) : (off += 8192)
+        _ = try DevInput9.ops.write(&r.d, &r.srv, &r.fid, off, big[off..@min(off + 8192, big.len)]);
+    r.clunk();
+    try testing.expect(std.mem.eql(u8, big, r.pb.contents.items));
+    try testing.expectEqual(@as(usize, 1), r.pb.wr);
 }
