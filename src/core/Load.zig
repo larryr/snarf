@@ -45,6 +45,7 @@ const Text = @import("text/Text.zig");
 const Window = @import("Window.zig");
 const dirwin = @import("dirwin.zig");
 const pendinglook = @import("pendinglook.zig");
+const heldinput = @import("heldinput.zig");
 const getaddr = @import("getaddr.zig");
 const loadaddr = @import("loadaddr.zig");
 
@@ -182,6 +183,7 @@ pub fn stepAll(ed: *Editor) Text.Error!void {
         } else i += 1;
     }
     try pendinglook.stepPending(ed); // the parked B3 look (R-P13b-2)
+    try heldinput.replay(ed); // input that waited for the loads (#83)
 }
 
 /// `textclose`'s backpointer hygiene (text.c:109-118) extended to the
@@ -216,6 +218,7 @@ pub fn deinitAll(ed: *Editor) void {
     }
     ed.loads.deinit(ed.allocator);
     pendinglook.dropPending(ed);
+    heldinput.deinit(ed);
 }
 
 /// One state of this load. Never blocks; never pumps (R-P13a-3) — the entry

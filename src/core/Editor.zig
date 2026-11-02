@@ -38,6 +38,7 @@ const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
 const wintag = @import("wintag.zig");
 const restoremouse = @import("restoremouse.zig");
+const heldinput = @import("heldinput.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -160,6 +161,10 @@ ns: ?*ninep.mount.Namespace = null,
 /// ticket and must never MOVE (nsjob.zig's pointer-stability rule), so the list
 /// may reallocate but the Loads may not. Owned; `Load.deinitAll` frees them.
 loads: std.ArrayList(*Load) = .empty,
+/// Keys and mouse samples that arrived while a load was in flight, handled
+/// once it finishes, as acme's blocked input threads would (#83,
+/// `heldinput.zig`). Freed by `Load.deinitAll`.
+held_input: std.ArrayList(heldinput.Held) = .empty,
 /// The ONE parked B3 look (R-P13b-2). acme decides "is this text a file name?"
 /// with a synchronous `access()` (look.c:706); Snarf can only answer with a
 /// `StatJob` that completes on a later frame, so the look waits here. A newer
@@ -259,7 +264,9 @@ pub fn dropColRef(ed: *Editor, c: *Column) void {
 
 /// Route one mouse sample — forwarder into the gesture machine
 /// (`Gesture.handleMouse`, acme.c:576-672 `mousethread`).
+/// While a window load is in flight the sample waits (`heldinput`, #83).
 pub fn handleMouse(ed: *Editor, ev: MouseEvent) !void {
+    if (try heldinput.hold(ed, .{ .mouse = ev })) return;
     return ed.gesture.handleMouse(ed, ev);
 }
 
@@ -276,8 +283,16 @@ pub fn hitTest(ed: *Editor, p: Point) ?Gesture.Hit {
 /// nil). NOTE: acme's `-b` variant instead types into `barttext` (the last
 /// button-2/3 text); we implement the default. Keys only edit when idle — a live
 /// B1 drag owns the gesture, so keys mid-sweep are FLAG-dropped (text.c: keyboard
-/// and mouse threads interlock on `row.lk`).
+/// and mouse threads interlock on `row.lk`). While a window load is in flight
+/// the key waits for it (`heldinput`, #83): acme's `textload` holds `row.lk`.
 pub fn handleKey(ed: *Editor, r: u21) !void {
+    if (try heldinput.hold(ed, .{ .key = r })) return;
+    return ed.keyNow(r);
+}
+
+/// `handleKey` without the load hold: the key is handled now. `heldinput`'s
+/// replay calls this.
+pub fn keyNow(ed: *Editor, r: u21) !void {
     // rows.c:277 rowtype: clearmouse() runs first, unconditionally — before the
     // C even looks for a Text — so a key that takes either early return below
     // still forgets a saved pop-up (#9).
