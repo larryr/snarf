@@ -105,13 +105,35 @@ pub fn undo(
     // seqof (exec.c:427-434): undo ⇒ the file's current seq, redo ⇒ its redo seq.
     const seq = if (isundo) f.undoSeq() else f.redoSeq();
     if (seq == 0) return; // exec.c:454-457 nothing to undo/redo
-    const r = if (isundo) try f.undo() else try f.redo();
-    // winundo wind.c:361: textshow refills the frame + selects the reversed
-    // range — none for a rename-only transaction (file.c:259-271).
+    // winundo wind.c:360 fileundo: every buffer edit is mirrored into the
+    // frame through textdelete/textinsert(…, tofile=FALSE) (file.c:233-234,
+    // :247-248), so a change inside the visible region repaints in place (#57).
+    // Before this the file op bypassed the frame and `show` only refilled
+    // when the range was off-screen, leaving stale glyphs.
+    const r = try f.undoView(isundo, UndoView{ .texts = &.{&w.body} });
+    // winundo wind.c:361: textshow scrolls to + selects the reversed range —
+    // none for a rename-only transaction (file.c:259-271).
     if (r) |rr| try w.body.show(rr.q0, rr.q1, true);
     w.dirty = (f.seq != w.putseq); // wind.c:366
     try wintag.setTagCommit(ed, w); // wind.c:372 winsettag
 }
+
+/// The `f->text[0..ntext]` loop of `fileundo` (file.c:233-234, :247-248): the
+/// Texts observing the undone file, each told with `tofile=FALSE` so only its
+/// frame/selection/origin follow the already-edited buffer (text.c:460-508,
+/// :366-413). FLAG: v1 has no Zerox (no shared-File views), so the only Text
+/// on a body file is that window's body; a future `File.text` list plugs in
+/// here.
+const UndoView = struct {
+    texts: []const *Text,
+
+    pub fn deleted(v: UndoView, p0: usize, p1: usize) Text.Error!void {
+        for (v.texts) |t| try t.deleteRange(p0, p1, false);
+    }
+    pub fn inserted(v: UndoView, p0: usize, bytes: []const u8) Text.Error!void {
+        for (v.texts) |t| try t.insertAt(p0, bytes, false);
+    }
+};
 
 // ===========================================================================
 // Tests. The edit builtins are driven directly here; the full B2-dispatch

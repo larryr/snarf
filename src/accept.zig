@@ -1088,7 +1088,12 @@ test "phase-10: Edit via B2 scene — s-global, one undo, live tag" {
     // Undo appearing, single-step whole-transaction undo. NEW freeze (R-P2-7).
     // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0xe9014ecfa82cbc4b,
     // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
-    try testing.expectEqual(@as(u64, 0x2e5d14f8ee16c0be), hb.hash());
+    // RE-FROZEN 2026-10-31 (#57): 0x2e5d14f8ee16c0be had frozen the BUG — the
+    // body still painted "X one/X two/X three" after the Undo (the buffer was
+    // undone, the frame was not). Undo now mirrors each edit into the frame via
+    // textdelete/textinsert (file.c:233-234, :247-248), so the body paints
+    // "b one/b two/b three" with the same selection; verified from a PPM dump.
+    try testing.expectEqual(@as(u64, 0x48a109c3e8fe7a0), hb.hash());
 }
 
 // ===========================================================================
