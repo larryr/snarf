@@ -147,7 +147,9 @@ fn expectTmpFallbackToSlashTmp(tmpdir: []const u8, pid: u32) !void {
     defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
     var wb: [256]u8 = undefined;
     const want = try std.fmt.bufPrint(&wb, "snarf: Put of /ro/snarfdev2-58-g not finished at exit; file left unchanged\n" ++
-        "snarf: partial contents saved in {s}\n", .{want_path});
+        "snarf: partial contents saved in {s}\n" ++
+        // PR #74 Q2 (SnarfDev1): the read-only dir's undeletable temp is named too.
+        "snarf: could not remove temp file /ro/.snarfdev2-58-g.snarf-put.0\n", .{want_path});
     try testing.expectEqualStrings(want, r.end());
     try r.expectFile(std.Io.Dir.cwd(), want_path, "part");
     try Rig.expectMode0600(std.Io.Dir.cwd(), want_path);

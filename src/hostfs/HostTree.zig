@@ -77,10 +77,40 @@ pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) vo
     defer self.discard_log = null;
     srv.releaseFids();
     self.sweepStrays();
+    self.reportStrays();
     for (self.strays.items) |p| self.gpa.free(p);
     self.strays.deinit(self.gpa);
     self.strays = .empty;
     if (log) |w| w.flush() catch {};
+}
+
+/// A stray temp that still refuses to go at exit is named on `discard_log`,
+/// one line each, never left behind silently (SnarfProdd, PR #74 Q2):
+///
+///     snarf: could not remove temp file /dir/.name.snarf-put.N
+///
+/// The path is the namespace path under the `/` mount (the real path on
+/// native), bare and last on its line, as the #68 lines are, so B3 opens it.
+fn reportStrays(self: *HostTree) void {
+    if (self.discard_log == null or self.strays.items.len == 0) return;
+    const root = self.fs.root.realPathFileAlloc(self.fs.io, ".", self.gpa) catch null;
+    defer if (root) |r| self.gpa.free(r);
+    for (self.strays.items) |p| {
+        const shown = if (root) |r| nsPath(r, p) else p;
+        if (shown.len != 0 and shown[0] == '/')
+            self.note("snarf: could not remove temp file {s}\n", .{shown})
+        else
+            self.note("snarf: could not remove temp file /{s}\n", .{shown});
+    }
+}
+
+/// `abs` relative to the export root `root` ("" → the path itself is under
+/// it, returned without the root and its '/'); `abs` unchanged otherwise.
+fn nsPath(root: []const u8, abs: []const u8) []const u8 {
+    const r = std.mem.trimEnd(u8, root, "/");
+    if (r.len == 0) return abs; // root is `/`: already the namespace path
+    if (abs.len > r.len and std.mem.startsWith(u8, abs, r) and abs[r.len] == '/') return abs[r.len + 1 ..];
+    return abs;
 }
 
 /// Retry deleting every stray temp; keep the ones that still refuse.

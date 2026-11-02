@@ -150,7 +150,9 @@ test "recovery: a read-only directory falls back to $TMPDIR as snarf-partial-<pi
     try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
     defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
     const want = try std.fmt.allocPrint(r.a, "snarf: Put of /ro/g not finished at exit; file left unchanged\n" ++
-        "snarf: partial contents saved in {s}/snarf-partial-4242-g.1\n", .{r.alt_path});
+        "snarf: partial contents saved in {s}/snarf-partial-4242-g.1\n" ++
+        // The read-only directory also keeps the empty temp (PR #74 Q2).
+        "snarf: could not remove temp file /ro/.g.snarf-put.0\n", .{r.alt_path});
     defer r.a.free(want);
     try testing.expectEqualStrings(want, r.end());
     try r.expectFile(r.alt.dir, "snarf-partial-4242-g", "someone else's");
@@ -169,7 +171,8 @@ test "recovery: when nowhere takes it, the notice keeps its wording and adds the
     defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
     try testing.expectEqualStrings(
         "snarf: Put of /ro/g not finished at exit; file left unchanged\n" ++
-            "snarf: could not save partial contents (FileNotFound)\n",
+            "snarf: could not save partial contents (FileNotFound)\n" ++
+            "snarf: could not remove temp file /ro/.g.snarf-put.0\n",
         r.end(),
     );
     try r.expectFile(r.tmp.dir, "ro/g", "old");
@@ -386,4 +389,19 @@ test "#70 item 3: endSession retries the stray temp's delete" {
     try testing.expectEqualStrings("", r.end());
     try expectListing(r, r.tmp.dir, "ro", "g");
     try testing.expectEqual(@as(usize, 0), r.tree.strays.items.len);
+}
+
+test "PR #74 Q2: a stray temp that still can't be removed at exit is named on its own line" {
+    if (isRoot()) return error.SkipZigTest;
+    const r = try Rig.create(&.{.{ "ro/g", "old" }});
+    defer r.destroy();
+    defer r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o755), .{}) catch {};
+    const f = try r.cl.walk(r.root, &.{ "ro", "g" });
+    _ = try r.cl.open(f.fid, msg.OWRITE | msg.OTRUNC);
+    _ = try r.cl.write(f.fid, 0, "new");
+    try r.tmp.dir.setFilePermissions(io, "ro", .fromMode(0o555), .{});
+    try r.cl.clunk(f.fid); // committed in place; the temp can't be deleted
+    try testing.expectEqual(@as(usize, 1), r.tree.strays.items.len);
+    try testing.expectEqualStrings("snarf: could not remove temp file /ro/.g.snarf-put.0\n", r.end());
+    try r.expectFile(r.tmp.dir, "ro/g", "new");
 }
