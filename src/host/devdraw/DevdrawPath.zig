@@ -6,7 +6,7 @@
 //!      binary deliberately, and a wrong value fails loudly at spawn, exactly
 //!      as libdraw's `getenv("DEVDRAW")` does (drawclient.c:101).
 //!   2. bundled — `<dir of the running executable>/devdraw`, if it exists.
-//!      `zig build native` puts one beside `zig-out/bin/snarf-native`.
+//!      `zig build native` puts one beside `zig-out/bin/snarf`.
 //!   3. `$PLAN9/bin/devdraw`, non-empty `$PLAN9`, if it exists. A derived path
 //!      that does not exist must not shadow `$PATH` (R-P18-5).
 //!   4. bare `devdraw`, for the OS's `PATH` search at spawn (drawclient.c:124).
@@ -62,7 +62,7 @@ pub fn deinit(self: *DevdrawPath, gpa: std.mem.Allocator) void {
 }
 
 /// The `<source>` half of the startup line (R-P18-9):
-/// `snarf-native: devdraw: <path> (<source>)`.
+/// `snarf: devdraw: <path> (<source>)`.
 pub fn describe(self: DevdrawPath) []const u8 {
     return switch (self.source) {
         .env_devdraw => "$DEVDRAW",

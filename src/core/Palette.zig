@@ -1,6 +1,6 @@
 //! A color scheme: the values `Chrome.init` allocates its solids from.
 //! file-as-struct (S-07 P-1): this file *is* the Palette. Four named schemes
-//! ship (ADR-0007); `snarf-native -colors=NAME` selects one by name, every
+//! ship (ADR-0007); `snarf -colors=NAME` (native) selects one by name, every
 //! other boot takes `default`.
 //!
 //! The slot STRUCTURE is acme's `iconinit` (acme.c:1036-1086): per region a

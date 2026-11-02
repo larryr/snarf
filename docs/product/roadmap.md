@@ -31,7 +31,7 @@
   - The allow-list is for remote servers only.
   - Retina is deferred until native is running.
   - M4 scheduling is deferred.
-  - `.app` packaging is deferred; devdraw is resolved relative to the `snarf-native` executable.
+  - `.app` packaging is deferred; devdraw is resolved relative to the `snarf` executable.
 - **M2:** the allow-list is scoped to remote 9P servers (**decided 2026-10-11**), and a headless 9P server is added.
 - **M3:** opens with **Zig build of devdraw + runnable native snarf** (in progress; `.app` packaging deferred), with product done-criteria. Native polish follows.
 - **M4:** reframed as backlog that can be scheduled now.
@@ -64,7 +64,7 @@ The non-users from v0.1 are unchanged (R-NG-04/05/06).
 | **M0** | Ground truth *(Now)* | Trust what's built | CI incl. a WASM-builds check, `restoremouse` warp, a guided walkthrough on native |
 | **M1** | Edit real files on native *(Now)* | Open, edit and save local files, copy/paste with macOS | ~~Put/Get/Dump/Load~~ (shipped), **native file server**, native clipboard, builtins, Retina? |
 | **M2** | Run real commands *(Next)* | `mk`, `zig build`, `git` from B2, output in `+Errors` | Native process service, pipes, `Kill`, remote-only allow-list ADR, **headless 9P server** |
-| **M3** | Native daily-driver polish *(Next)* | Larry stops opening other editors | **Zig-built devdraw + runnable `snarf-native`** (in progress), trackpad chords, native polish, IME |
+| **M3** | Native daily-driver polish *(Next)* | Larry stops opening other editors | **Zig-built devdraw + runnable `snarf`** (in progress), trackpad chords, native polish, IME |
 | **M4** | Programmable editor *(schedulable; timing deferred)* | acme tooling and scripts drive snarf from outside | Full acme(4) served tree (already SHALLed), headless driver; `Tauth`/external attach (ADR-gated) |
 | **M5** | AI harness *(stop-and-ask)* | An agent works beside Larry, visibly and safely | Needs new requirements first |
 | — | Frozen / parked | not scheduled | Browser features (Pointer Lock, Clipboard API, touch, Worker+SAB, HiDPI), dual trackpad |
@@ -111,21 +111,21 @@ Sizes: **S** = less than one pipeline phase · **M** = one phase · **L** = seve
 
 | Feature | User-facing description | Why it matters | Traces to | Size | Depends on |
 |---|---|---|---|---|---|
-| **Zig build of devdraw + runnable native snarf** *(Claude session in progress)* | One command builds `snarf-native` plus a sibling `devdraw` that Larry runs to get native snarf: no separate plan9port install. **`.app` packaging is deferred** (2026-10-11) | The last install step between Larry and a daily driver. With `devdraw` accepted indefinitely (ADR-0005 amendment item 3), this is the distribution answer, not a rendering-ownership question | ADR-0005 amendment; NEXT-PHASES Parked "devdraw built in-tree"; **ADR-0006 (proposed, [PR #3](https://github.com/larryr/snarf/pull/3))**: fetch pinned `larryr/plan9port@337c6ac` via `build.zig.zon` and compile the devdraw closure. It supersedes only ADR-0002's empty-dependency clause, per the immutable-ADR convention. It also sets the `Conn.devdrawPath` resolution order | M | ADR-0006 acceptance (Larry). Done-criteria and checklist below |
+| **Zig build of devdraw + runnable native snarf** *(Claude session in progress)* | One command builds `snarf` plus a sibling `devdraw` that Larry runs to get native snarf: no separate plan9port install. **`.app` packaging is deferred** (2026-10-11) | The last install step between Larry and a daily driver. With `devdraw` accepted indefinitely (ADR-0005 amendment item 3), this is the distribution answer, not a rendering-ownership question | ADR-0005 amendment; NEXT-PHASES Parked "devdraw built in-tree"; **ADR-0006 (proposed, [PR #3](https://github.com/larryr/snarf/pull/3))**: fetch pinned `larryr/plan9port@337c6ac` via `build.zig.zon` and compile the devdraw closure. It supersedes only ADR-0002's empty-dependency clause, per the immutable-ADR convention. It also sets the `Conn.devdrawPath` resolution order | M | ADR-0006 acceptance (Larry). Done-criteria and checklist below |
 | Trackpad chords (D1) | Hold a click and tap another finger: +B2 Cut, +B3 Paste, and 2-1 from B2. Modifier+click stays | Chords on a Mac trackpad without hunting for keys | [touchpad research](research/touchpad-interaction.md) D1; profile P3 in the [input mapping guide](../../notes/snarfprod/input/input-mapping-guide.md) (proposal; recommended default today is P2, the modifier profile) | M | A patch in `devdraw` (Larry's `larryr/plan9port` fork), then a re-pin of the ADR-0006 snapshot. Stock devdraw already gives modifier chords, 2-finger click = B3, 3-finger tap = B2, 4-finger tap = 2-1 |
 | Native polish | Window title, `-b` flag, `Conn` reader on `std.Io` | Feels finished | NEXT-PHASES Tier 2 #6 | S | — |
 | Keyboard / IME | Non-ASCII composition | If Larry needs it | R-IN-11 | M | — |
 | Structure pass | 16 over-cap files | Filler | NEXT-PHASES Tier 4 #0 | S–M | — |
 
 **Product done-criteria: Zig-built devdraw + runnable native snarf**
-1. **One command, then a runnable Mac app.** On a clean Mac with Zig 0.16 and no plan9port, a single documented command (e.g. `zig build native`, plus a packaging step if it's separate) produces `snarf-native` with `devdraw` beside it, which Larry can launch with no `$PLAN9` needed. **devdraw is resolved relative to the `snarf-native` executable**, not the working directory (2026-10-11). A `.app` bundle is deferred. The first fetch may need the network. `zig build` and `zig build test` stay network-free (ADR-0006).
+1. **One command, then a runnable Mac app.** On a clean Mac with Zig 0.16 and no plan9port, a single documented command (e.g. `zig build native`, plus a packaging step if it's separate) produces `snarf` with `devdraw` beside it, which Larry can launch with no `$PLAN9` needed. **devdraw is resolved relative to the `snarf` executable**, not the working directory (2026-10-11). A `.app` bundle is deferred. The first fetch may need the network. `zig build` and `zig build test` stay network-free (ADR-0006).
 2. **Crisp Retina text: check it, but it is not a gate.** Retina is deferred until native is merged and running (2026-10-11). Record what you see on a Retina display. If text is soft, the M1 Retina row becomes real work. If crisp, that row is dropped.
 3. **Trackpad chords work.** On a MacBook trackpad and on a Magic Trackpad:
    - 1-finger click = B1, 2-finger click = B3, Option-click = B2.
    - Mid-sweep, Option adds B2 (Cut), Command adds B3 (Paste), and Control adds B1 (the 2-1 chord).
    - Larry uses three-finger drag, so 3/4-finger taps are not required. Hold-and-tap (D1) is a follow-up, not a gate.
 4. **Real warp works:** B3 on a search hit and opening a file move the pointer.
-5. **devdraw is chosen in ADR-0006's order, and the choice is logged.** The order is `$DEVDRAW` (an exact binary; a deliberate override always wins), then the **bundled** `devdraw` resolved relative to the `snarf-native` executable, then `$PLAN9/bin/devdraw`, then bare `devdraw` on `$PATH`. `$PLAN9` ranks below the bundled default, so a plan9port install that happens to be set in the environment doesn't silently shadow the tested build. `snarf-native` prints which `devdraw` it resolved, and from where, at startup.
+5. **devdraw is chosen in ADR-0006's order, and the choice is logged.** The order is `$DEVDRAW` (an exact binary; a deliberate override always wins), then the **bundled** `devdraw` resolved relative to the `snarf` executable, then `$PLAN9/bin/devdraw`, then bare `devdraw` on `$PATH`. `$PLAN9` ranks below the bundled default, so a plan9port install that happens to be set in the environment doesn't silently shadow the tested build. `snarf` prints which `devdraw` it resolved, and from where, at startup.
 
 **Hands-on checklist for Larry** (about 15 minutes, on the Mac you actually use):
 - [ ] From a fresh clone, run the one documented command. Note wall time and whether it fetched anything. Launch the app.
@@ -216,5 +216,5 @@ For the tech architect. Most of these cost little now and a lot to retrofit late
 
 ## Questions for the architect
 - One transport and auth design for the headless remote server and M4 external attach?
-- devdraw lookup relative to the `snarf-native` executable (decided 2026-10-11): how does it fit ADR-0006's `$DEVDRAW` → bundled → `$PLAN9` → `$PATH` order (revised after SnarfProdd's PR #3 review — bundled now outranks `$PLAN9` so an ambiently-set plan9port install doesn't shadow the tested build)? Where would it look inside a future `.app` (deferred)?
+- devdraw lookup relative to the `snarf` executable (decided 2026-10-11): how does it fit ADR-0006's `$DEVDRAW` → bundled → `$PLAN9` → `$PATH` order (revised after SnarfProdd's PR #3 review — bundled now outranks `$PLAN9` so an ambiently-set plan9port install doesn't shadow the tested build)? Where would it look inside a future `.app` (deferred)?
 - The Retina check: does snarf's font path (R-GFX-05, OQ-GFX-2) need a 2× subfont even under devdraw, or does devdraw's scaling suffice?

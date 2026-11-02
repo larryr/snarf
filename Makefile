@@ -4,7 +4,7 @@
 #   make            build snarf.wasm + web assets into zig-out/www
 #   make run        build, then serve at http://$(BIND):$(PORT) and open the browser
 #   make serve      build, then serve (no browser)
-#   make native     build snarf-native + the bundled devdraw peer (ADR-0006, macOS)
+#   make native     build snarf + the bundled devdraw peer (ADR-0006, macOS)
 #   make run-native run native, then launch it: the editor in a devdraw window
 #   make install    install snarf + devdraw to $(PREFIX)/bin (default ~/.local/bin)
 #   make uninstall  remove them from $(PREFIX)/bin (and a stale snarf-native)
@@ -51,12 +51,12 @@ serve: build
 	@echo "serving $(URL)  (Ctrl-C to stop)"
 	$(ZIG) build serve $(SERVE_FLAGS)
 
-# snarf-native + the bundled devdraw peer, built in-tree from the pinned
+# snarf + the bundled devdraw peer, built in-tree from the pinned
 # plan9port snapshot (ADR-0006, macOS only for now). No $PLAN9 install needed.
 native:
 	$(ZIG) build native
 
-# Builds (if needed) then runs the installed snarf-native, which resolves the
+# Builds (if needed) then runs zig-out/bin/snarf, which resolves the
 # bundled devdraw beside it — a real window, no plan9port install required.
 run-native:
 	$(ZIG) build run-native
@@ -64,10 +64,9 @@ run-native:
 # snarf + devdraw land in the SAME directory ($(PREFIX)/bin) because the
 # bundled-devdraw lookup is resolved relative to the running executable's own
 # path (ADR-0006) — they can't be split across directories. The build artifact
-# is still named snarf-native (build.zig); only the installed copy is renamed.
+# itself is named snarf (build.zig), so nothing is renamed on the way in.
 install:
 	$(ZIG) build native --prefix $(PREFIX)
-	mv -f $(PREFIX)/bin/snarf-native $(PREFIX)/bin/snarf
 	@echo "installed snarf + devdraw to $(PREFIX)/bin"
 	@case ":$$PATH:" in \
 	  *":$(PREFIX)/bin:"*) ;; \

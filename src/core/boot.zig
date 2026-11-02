@@ -62,7 +62,7 @@ pub const Options = struct {
     /// (false) path is the acceptance scenes' and stays byte-for-byte as it was.
     dir_boot: bool = false,
     /// The color scheme `Chrome.init` allocates from (ADR-0007). The hosts pass
-    /// it explicitly — `snarf-native` from `-colors=NAME`, the browser the default.
+    /// it explicitly — native `snarf` from `-colors=NAME`, the browser the default.
     palette: *const Palette = Palette.default,
 };
 

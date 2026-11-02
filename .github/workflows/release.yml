@@ -1,7 +1,10 @@
 # Pre-release builds (profile: publish native binary per milestone, e.g. v0.M0-dev.1).
-# Push a tag `v*` and this builds snarf-native on macOS arm64 (with the bundled
-# devdraw, ADR-0006) and Linux x86_64 (snarf-native only; needs plan9port's
-# devdraw via $PLAN9 or $DEVDRAW), then publishes a GitHub pre-release.
+# Push a tag `v*` and this builds the native `snarf` on macOS arm64 (with the
+# bundled devdraw beside it, ADR-0006) and Linux x86_64 (`snarf` only; needs
+# plan9port's devdraw via $PLAN9 or $DEVDRAW), then publishes a GitHub
+# pre-release. Each tarball holds `snarf` (the name users run, Larry
+# 2026-11-02; releases up to v0.M0-dev.2 shipped it as `snarf-native`) and,
+# on macOS, `devdraw` in the same directory, where snarf looks for it first.
 # `zig build` stays the only build entry point (ADR-0001).
 name: release
 
@@ -46,10 +49,17 @@ jobs:
         run: |
           name="snarf-${GITHUB_REF_NAME}-${{ matrix.asset }}"
           mkdir -p "dist/$name"
-          cp zig-out/bin/snarf-native "dist/$name/"
+          cp zig-out/bin/snarf "dist/$name/"
           if [ -x zig-out/bin/devdraw ]; then cp zig-out/bin/devdraw "dist/$name/"; fi
           cp LICENSE* README* "dist/$name/" 2>/dev/null || true
           tar -C dist -czf "dist/$name.tar.gz" "$name"
+          # The tarball must hold an executable `snarf` (and, on macOS, the
+          # bundled `devdraw` next to it).
+          listing="$(tar -tvzf "dist/$name.tar.gz")"
+          echo "$listing"
+          echo "$listing" | grep -Eq "^-..x.* $name/snarf$"
+          if [ "$RUNNER_OS" = macOS ]; then echo "$listing" | grep -Eq "^-..x.* $name/devdraw$"; fi
+          if echo "$listing" | grep -q "snarf-native"; then echo "stale snarf-native in tarball"; exit 1; fi
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@v4
         with:

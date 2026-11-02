@@ -123,12 +123,16 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_wasm.step);
     b.getInstallStep().dependOn(&install_web.step);
 
-    // --- snarf-native: the NATIVE HOST (ADR-0005). The same editor core, in a
-    //     real window, through a plan9port `devdraw` child process. Everything
-    //     except `shim` (S-07 §6); `core`/`draw`/`ninep` are the SAME module
-    //     objects the wasm build consumes — no -D forks, no host #ifdefs. ---
+    // --- snarf: the NATIVE HOST (ADR-0005), installed as zig-out/bin/snarf —
+    //     the name users run (Larry, 2026-11-02; it was `snarf-native` before).
+    //     The same editor core, in a real window, through a plan9port `devdraw`
+    //     child process. Everything except `shim` (S-07 §6); `core`/`draw`/
+    //     `ninep` are the SAME module objects the wasm build consumes — no -D
+    //     forks, no host #ifdefs. The wasm artifact above is also named `snarf`;
+    //     the two never meet on disk: it installs to zig-out/www/snarf.wasm,
+    //     this one to zig-out/bin/snarf. ---
     const native = b.addExecutable(.{
-        .name = "snarf-native",
+        .name = "snarf",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main_native.zig"),
             .target = target,
@@ -144,7 +148,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(native);
-    const native_step = b.step("native", "Build the native host (snarf-native; on macOS also zig-out/bin/devdraw)");
+    const native_step = b.step("native", "Build the native host (zig-out/bin/snarf; on macOS also zig-out/bin/devdraw beside it)");
     native_step.dependOn(&b.addInstallArtifact(native, .{}).step);
 
     // --- devdraw: the display-server PEER, built from the pinned plan9port
@@ -178,7 +182,7 @@ pub fn build(b: *std.Build) void {
 
     // R-P18-8: run the INSTALLED binary, so the bundled `devdraw` beside it is
     // what `DevdrawPath` finds (a cached exe has no sibling).
-    const run_native = b.addSystemCommand(&.{b.getInstallPath(.bin, "snarf-native")});
+    const run_native = b.addSystemCommand(&.{b.getInstallPath(.bin, "snarf")});
     run_native.step.dependOn(native_step);
     const run_step = b.step("run-native", "Run the native host: the editor in a devdraw window");
     run_step.dependOn(&run_native.step);
@@ -269,7 +273,7 @@ pub fn build(b: *std.Build) void {
     });
     // The native entry point's boot → session → shutdown (#58), over a
     // scripted devdraw peer: no child process, no window. Same imports as
-    // `snarf-native`, so the test sees exactly what the executable sees.
+    // the native `snarf`, so the test sees exactly what the executable sees.
     addModuleTests(b, test_step, target, optimize, "src/main_native.zig", &.{
         .{ .name = "core", .module = core },
         .{ .name = "draw", .module = draw },

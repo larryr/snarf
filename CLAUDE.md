@@ -26,7 +26,7 @@ left as historical record, not retrofitted.)
 2. **Dependencies** (ADR-0002): **Zig standard library only.** The `build.zig.zon`
    dependency table holds exactly one entry — ADR-0006's lazy, pinned plan9port
    snapshot, consumed only by `zig build native`/`zig build devdraw` to build the
-   `devdraw` peer process, never linked into snarf or snarf-native. 9P, the draw client,
+   `devdraw` peer process, never linked into snarf (the wasm module or the native `snarf` binary). 9P, the draw client,
    and the structural-regexp engine are written in-project. Embedded assets (fonts) are
    fine with license notes. Never add an external package without a new ADR that
    supersedes ADR-0002's empty-table clause, approved by the user.
