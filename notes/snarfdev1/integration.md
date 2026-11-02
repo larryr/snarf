@@ -75,6 +75,20 @@ Refs #13 (Zerox still to come).
   after Put takes a strike.
 - ctl verbs `sort`, `kill <names>`, `exit` (port names; acme has none).
 
+## #13 part 2 — Zerox (Fixes #13)
+
+Commit `2d686d1` (pushed, gates green: 939/940, 1 skipped; smoke 40/0). `File.texts`
+(f->text[]) with addText/delText; the last view frees an owned File. Fan-out at every acme
+ntext>1 site, guarded by `File.shared()`: insert/delete (text.c:381/477), Undo/Redo
+(wind.c:355-372), settag/setname (wind.c:393/577), Del (exec.c:408), Put commit
+(exec.c:807), Get dir refusal + dirty (exec.c:614/647), Edit's settag (edit.c:134).
+Zerox builtin (exec.c:540-577) + ctl `zerox`. Divergences: Dump writes each Zerox view as
+its own window (acme's `x` records, rows.c:371-415/727-758, not ported); Edit `D` is not
+implemented, so its ntext>1 arm (ecmd.c:236) is moot; no autoindent in v1. The commit
+message's last paragraph lost a line in an amend after the push (only "dump has no zerox
+record either way in the port yet)." is left); the correct text is here. I didn't
+force-push to fix it.
+
 ## Command-line file arguments (SnarfProdd P1 ruling; issue not filed yet)
 
 Commit `c1d13ea` (pushed, gates green: 932/935, 3 skipped; smoke 40/0). acme.c:241-266 +
