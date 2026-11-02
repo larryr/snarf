@@ -188,7 +188,15 @@ server instead redirects an OTRUNC open of an existing file to a same-directory 
 (keeping the original's mode) and renames it over the original at clunk, so readers see the
 old bytes or the new ones; a failed write discards the temp and leaves the original intact.
 New files are created `0666 & ~umask`. A clean OTRUNC-open + clunk with no writes is an
-empty Put and leaves an empty file, as acme would. The origin's `fs/` export (§5) shares
+empty Put and leaves an empty file, as acme would. On the native root a Put of a NEW file
+(Tcreate) is atomic too (#70, SnarfProdd ruling 2026-11-02): the exclusive create reserves
+the name with an empty placeholder, the bytes go to a same-directory temp renamed over it at
+clunk, and a Put discarded at exit or by a failed write removes the (still empty)
+placeholder, so the name never holds a half-written file; a cut-off one is reported and kept
+in a recovery file exactly like a Put of an existing file (#58). (The origin's `fs/`
+create still writes the new file directly.) A temp that a mid-Put read-only directory will
+not let go of is truncated to zero bytes and its delete retried after later Puts and at
+session end. The origin's `fs/` export (§5) shares
 this code, so the same holds there. Known costs of rename-over: hard links are split, the
 owner becomes the writer; a writable file in an unwritable directory falls back to acme's
 in-place truncate. The native `$home` is the real `$HOME`, so `Dump` writes

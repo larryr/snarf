@@ -35,6 +35,10 @@ discard_log: ?*std.Io.Writer = null,
 /// Larry). The host sets `recovery.tmp_dir` from `$TMPDIR`; tests point it
 /// (and `pid`) at a scratch directory.
 recovery: Recovery,
+/// Temps a finished Put could not delete (its directory went read-only
+/// mid-Put; #70 review item 3). Already truncated to zero bytes; the delete
+/// is retried after every later Put and at `endSession` (owned paths).
+strays: std.ArrayList([]u8) = .empty,
 
 /// Per-fid state (`fid.ctx`): the path relative to the export root ("" is
 /// the root) and, between an OTRUNC open and the clunk, the Put in flight.
@@ -71,7 +75,25 @@ pub fn endSession(self: *HostTree, srv: *server.Server, log: ?*std.Io.Writer) vo
     self.hangUp(log);
     defer self.discard_log = null;
     srv.releaseFids();
+    self.sweepStrays();
+    for (self.strays.items) |p| self.gpa.free(p);
+    self.strays.deinit(self.gpa);
+    self.strays = .empty;
     if (log) |w| w.flush() catch {};
+}
+
+/// Retry deleting every stray temp; keep the ones that still refuse.
+fn sweepStrays(self: *HostTree) void {
+    var i: usize = 0;
+    while (i < self.strays.items.len) {
+        const p = self.strays.items[i];
+        if (self.fs.root.deleteFile(self.fs.io, p)) |_| {
+            self.gpa.free(self.strays.swapRemove(i));
+        } else |e| switch (e) {
+            error.FileNotFound => self.gpa.free(self.strays.swapRemove(i)),
+            else => i += 1,
+        }
+    }
 }
 
 /// First half of `endSession`: from here on no Tclunk commits a Put. One that
@@ -198,17 +220,25 @@ fn open(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, mode: u8) OpError!
 
 /// Tcreate of a plain file: exclusive (an existing name is `file already
 /// exists`; the client's open-OTRUNC path handles that case), mode
-/// `0666 & ~umask` (PM Q5). Directories are refused.
+/// `0666 & ~umask` (PM Q5). Directories are refused. The fid is then a Put
+/// like an OTRUNC open (`Replace.beginNew`, #70): its bytes reach the name
+/// only at the Tclunk, and a Put cut off at exit leaves no file under the
+/// name, keeps its bytes in a recovery file, and is reported like any other.
 fn create(ctx: *anyopaque, _: *server.Server, fid: *server.Fid, name: []const u8, perm: u32, _: u8) server.OpBlockError!server.CreateResult {
     const self = self_(ctx);
     if (perm & Stat.DMDIR != 0) return error.PermissionDenied;
     const node = nodeOf(fid);
     const child = try self.join(node.rel, name);
     errdefer self.gpa.free(child);
-    try self.fs.createFile(child);
-    const qid = try self.fs.qidOf(child);
+    var put = try Replace.beginNew(self.fs, self.gpa, child);
+    const qid = self.fs.qidOf(child) catch |e| {
+        put.failed = true;
+        put.end(self.fs, self.gpa);
+        return e;
+    };
     self.gpa.free(node.rel);
     node.rel = child;
+    node.put = put;
     return .{ .qid = qid };
 }
 
@@ -235,7 +265,9 @@ fn clunk(ctx: *anyopaque, _: *server.Server, fid: *server.Fid) void {
             if (!p.failed) self.keepPartial(p, node.rel);
             p.failed = true;
         }
-        p.end(self.fs, self.gpa); // commit or discard
+        if (p.finish(self.fs, self.gpa)) |stray| // commit or discard
+            self.strays.append(self.gpa, stray) catch self.gpa.free(stray);
+        self.sweepStrays();
     }
     self.gpa.free(node.rel);
     self.gpa.destroy(node);
