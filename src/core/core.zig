@@ -90,6 +90,7 @@ test {
     _ = @import("exec/builtins_m1_test.zig"); // #13 acceptance (SnarfDev2)
     _ = @import("exec/undo_repaint_test.zig"); // #57 regression (SnarfDev2)
     _ = @import("exec/undo_frame_test.zig"); // #57 regression (SnarfDev1)
+    _ = @import("load_typing_test.zig"); // #83 regression (SnarfDev1)
 }
 // Edit language (phase 10). One public type per line, matching the flat style
 // above; later 10x waves add ast/parse/addr/Elog/cmd here.
