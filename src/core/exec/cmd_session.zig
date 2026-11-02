@@ -53,7 +53,34 @@ pub fn rowClean(ed: *Editor, row: *Row) bool {
 /// `sendul(cexit, 0)` is `ed.exit_requested`: the host's loop stops on it
 /// (once `ed.exitReady()`) and runs the #58/#68 shutdown, which frees the
 /// session and ends devdraw.
+///
+/// acme's Put and Dump are synchronous, so `xexit` never meets one still
+/// writing. The port's are not: an Exit issued while one is in flight waits
+/// for them all to finish (`ed.exit_waiting`), and only then runs `rowclean`
+/// (`exitStep`), so a window its Put just saved is clean, exactly as in acme.
+/// A second Exit while that one waits stops at once through the #58/#68
+/// shutdown, which discards the unfinished Put and keeps its bytes
+/// (SnarfProdd, PR #74 Q4).
 pub fn exit(ed: *Editor, et: *Text, _: ?*Text, _: ?*Text, _: bool, _: bool, _: []const u8) Text.Error!void {
     const row = place.rowOf(et) orelse ed.row orelse return; // acme's global `row`
+    if (ed.exit_waiting != null) { // the second Exit: no more waiting
+        ed.exit_waiting = null;
+        ed.exit_now = true;
+        ed.exit_requested = true;
+        return;
+    }
+    if (ed.writing()) {
+        ed.exit_waiting = row;
+        return;
+    }
+    if (rowClean(ed, row)) ed.exit_requested = true; // exec.c:1158-1160
+}
+
+/// Per frame (`Editor.frameEnd`, after the Put/Dump steps): an Exit that was
+/// waiting runs its `rowclean` once nothing is writing any more.
+pub fn exitStep(ed: *Editor) void {
+    const row = ed.exit_waiting orelse return;
+    if (ed.writing()) return;
+    ed.exit_waiting = null;
     if (rowClean(ed, row)) ed.exit_requested = true; // exec.c:1158-1160
 }

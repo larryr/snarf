@@ -33,6 +33,7 @@ const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
 const Load = @import("Load.zig");
 const Put = @import("Put.zig");
+const cmd_session = @import("exec/cmd_session.zig");
 const pendinglook = @import("pendinglook.zig");
 const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
@@ -168,11 +169,18 @@ loads: std.ArrayList(*Load) = .empty,
 pending_look: ?*pendinglook.PendingLook = null,
 puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
 /// `Exit` passed its `rowclean` (exec.c:1158-1160, #13): acme's `sendul(cexit, 0)`.
-/// The host ends its loop on it and runs its normal shutdown (#58/#68) — but
-/// only once `exitReady` holds, because acme's Put and Dump are synchronous:
-/// in acme a Put that started before Exit has always finished by then, so the
-/// port lets one in flight finish rather than discard it at teardown.
+/// The host ends its loop on it (`exitReady`) and runs its normal shutdown
+/// (#58/#68).
 exit_requested: bool = false,
+/// An `Exit` arrived while a Put or Dump was still writing. acme's are
+/// synchronous, so its `xexit` never sees one in flight: the port holds the
+/// Exit here and runs its `rowclean` once they have all finished
+/// (`cmd_session.exitStep`, from `frameEnd`), on the row it was issued in
+/// (SnarfProdd, PR #74 Q4).
+exit_waiting: ?*Row = null,
+/// A second `Exit` while one waits: stop now, through the #58/#68 shutdown,
+/// which discards the unfinished Put and keeps its bytes.
+exit_now: bool = false,
 session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
@@ -182,11 +190,16 @@ needs_flush: bool = false,
 /// rather than being rebuilt per command.
 regx: Regx,
 
-/// True when the host should stop: `Exit` was accepted and no Put or Dump
-/// is still writing (see `exit_requested`). Loads are abandoned, as acme's
-/// exit would abandon a read.
+/// True when the host should stop: `Exit` was accepted (after any Put or
+/// Dump it waited for, `exit_waiting`), or a second Exit forced it
+/// (`exit_now`). Loads are abandoned, as acme's exit would abandon a read.
 pub fn exitReady(self: *const Editor) bool {
-    return self.exit_requested and self.puts.items.len == 0 and self.session.dump == null;
+    return self.exit_requested and (self.exit_now or !self.writing());
+}
+
+/// A Put or the Dump is still writing.
+pub fn writing(self: *const Editor) bool {
+    return self.puts.items.len != 0 or self.session.dump != null;
 }
 
 pub fn init(allocator: std.mem.Allocator) Editor {
@@ -326,6 +339,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try Put.stepAll(ed); // and per in-flight Put (phase 17)
     try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
+    cmd_session.exitStep(ed); // an Exit that waited for them (PR #74 Q4)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a
     // Flush when an editor action marked the tick dirty OR when the display
