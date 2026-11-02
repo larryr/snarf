@@ -1,6 +1,6 @@
 # Native first run: hands-on checklist for Larry
 
-*SnarfProdd (PM) working note, 2026-10-11. Use it once the `zig build native` milestone (ADR-0006, runnable `snarf-native`) lands. It takes about 15–20 minutes.*
+*SnarfProdd (PM) working note, 2026-10-11. Use it once the `zig build native` milestone (ADR-0006, runnable `snarf`) lands. It takes about 15–20 minutes.*
 
 *Setup assumed: your Mac, a Magic Trackpad with **three-finger drag on**, plan9port installed and `$PLAN9` set.*
 
@@ -44,9 +44,9 @@ The system clipboard isn't wired either: the `Trdsnarf`/`Twrsnarf` messages are 
 | # | Step | Expected result | ✓ / notes |
 |---|---|---|---|
 | **Build and start** | | | |
-| 1 | From a fresh clone: `zig build native`. Note the wall time and whether it fetched anything | `zig-out/bin/snarf-native` plus a bundled `zig-out/bin/devdraw`. The first run fetches the pinned `larryr/plan9port@337c6ac` (ADR-0006). If there's no bundled devdraw, the milestone hasn't fully landed | [ ] |
-| 2 | Run `zig-out/bin/snarf-native` (or `zig build run-native`) **with `$PLAN9` still set**. Read the startup log | A log line names the devdraw it used, and it is the **bundled** one, chosen over `$PLAN9`. ADR-0006's order is `$DEVDRAW` → bundled (next to `snarf-native`) → `$PLAN9` → `$PATH`, and it requires the line. *(Today's `Conn.zig` checks `$DEVDRAW` → `$PLAN9` → `$PATH` with no bundled step. If you see `$PLAN9` picked, the change hasn't landed.)* | [ ] |
-| 3 | Run it again from a different directory (`cd /tmp && ~/…/zig-out/bin/snarf-native`) | Still the bundled devdraw: it is resolved relative to the executable, not the cwd | [ ] |
+| 1 | From a fresh clone: `zig build native`. Note the wall time and whether it fetched anything | `zig-out/bin/snarf` plus a bundled `zig-out/bin/devdraw`. The first run fetches the pinned `larryr/plan9port@337c6ac` (ADR-0006). If there's no bundled devdraw, the milestone hasn't fully landed | [ ] |
+| 2 | Run `zig-out/bin/snarf` (or `zig build run-native`) **with `$PLAN9` still set**. Read the startup log | A log line names the devdraw it used, and it is the **bundled** one, chosen over `$PLAN9`. ADR-0006's order is `$DEVDRAW` → bundled (next to `snarf`) → `$PLAN9` → `$PATH`, and it requires the line. *(Today's `Conn.zig` checks `$DEVDRAW` → `$PLAN9` → `$PATH` with no bundled step. If you see `$PLAN9` picked, the change hasn't landed.)* | [ ] |
+| 3 | Run it again from a different directory (`cd /tmp && ~/…/zig-out/bin/snarf`) | Still the bundled devdraw: it is resolved relative to the executable, not the cwd | [ ] |
 | 4 | Look at the window | A devdraw window titled "snarf". The root tag shows `Newcol Kill Putall Dump Exit`. A directory window for `/` lists `dev/ mnt/` | [ ] |
 | **Files** | | | |
 | 5 | B3 (2-finger click) on a path to a real file, e.g. type `/Users/larry/.profile` in a tag and look at it | ⚠ **Expected to fail today**: a not-found or `NotMounted` warning in `+Errors`. It should not crash. *(It passes once the native file server lands.)* | [ ] |
@@ -91,3 +91,4 @@ The system clipboard isn't wired either: the `Trdsnarf`/`Twrsnarf` messages are 
 
 ## Revision log
 - 2026-10-31: Step 21 now expected to pass (#43 merged). Step 20 flags known bug #57. You can run this from the [v0.M0-dev.1 pre-release](https://github.com/larryr/snarf/releases/tag/v0.M0-dev.1) instead of building (first launch: `xattr -d com.apple.quarantine snarf-native devdraw`).
+- 2026-11-02: Binary renamed `snarf-native` to `snarf` (Larry; fix lands on the integration branch, next release picks it up). The v0.M0-dev.1 and v0.M0-dev.2 tarballs still ship `snarf-native`, so with those use `xattr -d com.apple.quarantine snarf-native devdraw`; from the next release on, use `xattr -d com.apple.quarantine snarf devdraw`.
