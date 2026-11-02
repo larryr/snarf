@@ -336,3 +336,17 @@ test "warp_focus WF-10: no /dev/mouse (browser/headless) — New, +Errors and De
     try h.del(e, .{ .x = e.r.min.x + 10, .y = e.r.min.y + 10 });
     try testing.expectEqual(@as(usize, 0), h.sink.writes);
 }
+
+test "warp_focus WF-14: typing right after the creation warp lands in the new window — no host motion event needed" {
+    var h: Rig = undefined;
+    try h.init();
+    defer h.deinit();
+    h.ed.gesture.mouse_pt = h.p0();
+    const w = try h.new();
+    // Deliberately NO `followWarp`: libdraw's moveto sets mc->m.xy itself
+    // (mouse.c:12), so point-to-type already targets the new window.
+    try testing.expect(ptIn(w.r, h.ed.gesture.mouse_pt));
+    try h.ed.handleKey('x');
+    try testing.expectEqual(@as(usize, 1), w.body.file.buffer.len());
+    try testing.expectEqual(@as(u21, 'x'), w.body.file.buffer.runeAt(0));
+}
