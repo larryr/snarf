@@ -61,6 +61,11 @@ pub const Options = struct {
     /// `win_name`/`body` are ignored when it is set. R-P13b-4: the default
     /// (false) path is the acceptance scenes' and stays byte-for-byte as it was.
     dir_boot: bool = false,
+    /// With `dir_boot`: how many columns to make (acme.c:241-251 — 2, or one
+    /// per `WPERCOL` file arguments; the native host computes it). A column
+    /// past the first that does not fit is skipped, as acme ignores a nil
+    /// `rowadd` after the first (acme.c:252-253).
+    ncol: usize = 2,
     /// The color scheme `Chrome.init` allocates from (ADR-0007). The hosts pass
     /// it explicitly — native `snarf` from `-colors=NAME`, the browser the default.
     palette: *const Palette = Palette.default,
@@ -234,9 +239,11 @@ pub fn boot(
 
     var tree = Tree{ .allocator = a, .chrome = chrome, .row = row, .ns = opts.ns };
     if (opts.dir_boot) {
-        // acme.c:249-257 `for(i=0; i<ncol; i++) rowadd(&row, nil, -1)` with
-        // ncol == 2; the window itself is the caller's (see `Options.dir_boot`).
-        _ = (try row.addAtBoot(-1)) orelse return error.ColumnTooNarrow;
+        // acme.c:250-254 `for(i=0; i<ncol; i++) rowadd(&row, nil, -1)`; only
+        // the first column is required. The windows are the caller's (see
+        // `Options.dir_boot`).
+        var i: usize = 1;
+        while (i < opts.ncol) : (i += 1) _ = (try row.addAtBoot(-1)) orelse break;
         return tree;
     }
     _ = try tree.addWinTo(c, opts.win_name, opts.body);

@@ -26,6 +26,11 @@ binaries are unsigned, run `xattr -d com.apple.quarantine snarf devdraw` in that
 and start `./snarf`. The Linux tarball has `snarf` only; point `$PLAN9` or `$DEVDRAW` at a
 plan9port devdraw. (Releases up to v0.M0-dev.2 named the binary `snarf-native`.)
 
+`snarf [-colors=NAME] [file ...]`: like acme, snarf opens a window for each file or
+directory named (relative names are taken from the current directory); a file that does not
+exist yet opens as an empty window under that name, and `Put` creates it. With no names it
+opens the `/` directory.
+
 ### Snarf Palette Options
 
 `snarf -colors=NAME` picks the color scheme at startup (ADR-0007, named after New
