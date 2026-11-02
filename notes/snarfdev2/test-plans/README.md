@@ -36,7 +36,7 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-EDIT-05..10 | walkthrough 9–17 |
 | R-EDIT-11/12 | BI-06, BI-07, NFS-06, walkthrough 19–20 |
 | R-EDIT-14 | CB-02..06, CB-10 |
-| R-EDIT-15 | NFS-02, NFS-05..10, BI-09, UD-07, UD-13 |
+| R-EDIT-15 | NFS-02, NFS-05..10, BI-09, UD-07, UD-13, UD-24 |
 | R-EDIT-16 / R-P17-5 | NFS-11..13 |
 | R-EDIT-17 + process rule 1 | NFS-14, BI-12 |
 | R-EDIT-25 | RM-01..10, WF-01..12, walkthrough 8, 12, 21 |
@@ -44,9 +44,10 @@ Owner: SnarfDev2 (test engineer). Plans trace test cases to requirement IDs (`do
 | R-9P-14 | NFS-11 |
 | R-P9-10 (Undo/Redo), #57 | UR-01..05, walkthrough 20 |
 | #47 (origin port) | OP-01..04 |
-| ADR-0005 §2 | NFS-01, NFS-15, UD-08, UD-10 |
-| #60 (union dir, interim ruling 2026-10-31) | UD-01..17, UD-M1..M4 |
-| R-9P-03 (union read) | UD-15, UD-17 |
+| ADR-0005 §2 | NFS-01, NFS-15, UD-08, UD-10, UD-25 |
+| #60 (union dir, interim ruling 2026-10-31; rulings 2026-11-02) | UD-01..25, UD-M1..M4 |
+| #60 R2 / #76 (host devices, fifos, sockets: list + stat, open = not supported) | UD-19..23 |
+| R-9P-03 (union read) | UD-15, UD-17, UD-18 |
 | R-9P-16 (synthetic dirs) | UD-03, UD-11 |
 | #28 (symlink policy, local) | UD-14 |
 
@@ -68,3 +69,14 @@ Default rule: when unsure, use ACME behaviour.
 - Deleting ANY window clears the saved pointer state, so a later Del of the original pop-up does not warp (RM-03).
 - There is one save slot. A from P0, then B from P1: Del B warps to P1, then Del A does nothing (RM-06). This replaces "innermost / stack".
 - **Second ruling (2026-10-31):** RM-04's pointer-inside gate is dropped. Restore happens whenever the deleted window is the saved one, with no check on whether the pointer is still inside it (util.c:390-402). Q3's "pointer still inside" wording is superseded.
+
+## Product rulings (SnarfProdd, 2026-11-02): #60 union dir (SnarfDev2 Q1–Q9)
+Source: `notes/snarfprod/decisions/README.md`. Applied in M1-60-union-dir.md (R1–R9) and PR #75.
+- R1: dedup only at `/`, `dev/` and `mnt/`. Every other union keeps R-9P-03 duplicates (UD-17, UD-18).
+- R2: host device nodes, fifos and sockets are listed and stat-able; opening one gives "not supported" (UD-19..23). Device I/O is #76.
+- R3: on a collision the listing shows snarf's record (UD-03).
+- R4: no nested union; `/dev/draw` stays snarf-only, out of scope (UD-25 guard).
+- R5: a new file in a shadowed folder is created on the host (UD-24).
+- R6: "snarf first" applies to the raw 9P stream only; windows keep ACME's dircmp order (UD-02, UD-04).
+- R7/R8: confirmed as assumed. Under `/n/local`, `/mnt/host` stays and `/dev` and `/mnt` are snarf-only. Shadowed host entries are reachable only via `/mnt/host`.
+- R9: the S-02 §1.3 revision-log line is fixed by SnarfDev1 (not tested here).
