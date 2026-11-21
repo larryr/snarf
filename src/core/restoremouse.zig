@@ -26,8 +26,9 @@
 //! and `Column.add`'s buggered redraw uses `Column.relayout` because the
 //! `savemouse` at cols.c:150 overwrites the slot right after it.
 //!
-//! REMAINING GAP (R-EDIT-25): `colsort` (cols.c:303), `coldragwin` (:484) and
-//! `rowdragcol` (rows.c:150) have no port yet; they will clear when they land.
+//! REMAINING GAP (R-EDIT-25): `colsort` (cols.c:303) and `coldragwin` (:484)
+//! have no port yet; they will clear when they land. `rowdragcol`'s `clearmouse`
+//! (rows.c:150) is ported (v12, `dragcol.zig`).
 //!
 //! EXACT ACME PARITY (SnarfProdd PM correction, 2026-10-31; R-EDIT-25): restore
 //! whenever `mousew == w`, with no check of where the pointer is now

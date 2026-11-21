@@ -120,6 +120,14 @@ Then, using the rects from before the clamp is applied to them:
 4. `c.resize(ed, {min.x = p.x + Border, max.x = c.r.max.x, y from c.r})`.
 5. `colmousebut(c)`.
 
+If the clamped `x` would make either column narrower than the floor
+`Row.resize` already uses (`Scrollwid + Scrollgap + font.height`, 34px at
+the 9×18 font), do not draw and do not resize. Return as a no-op: no warp,
+no `needs_flush`, and `activecol` is still set. Acme would die in
+`frinsert` on that width. A browser window is allowed to be that narrow
+(the same divergence as `Row.resize`, R-GFX-05). The 80px margins and the
+lower-then-upper order stay when both sides still fit.
+
 `colmousebut` (`cols.c:230-233`) is `warp.to` of the center of
 `c.tag.scrollr` after the resize:
 
@@ -320,6 +328,7 @@ column rects and `row.col.items.len`.
 | C-16 | Two columns, `row.resize` to `(0,0,80,400)`, drag `c0`'s button to `(100, 29)`. `row.col.items.len` is 1 and the remaining pointer is the old `c1`. `activecol` is null. Do not read the freed column or its window. `ed.handleMouse` of a later deadzone click on the survivor's button sets `activecol` to that survivor. |
 | C-17 | B2 click (deadzone) on `c1`'s button does not add a window or a column. |
 | C-18 | Drag the row tag's `scrollr` center to x = 200. Column rects unchanged. |
+| C-19 | Two columns, `row.resize` to `(0,0,80,400)`. Drag `c1`'s button to x = 20 (a resize, not a shuffle, and outside the deadzone). Both rects unchanged. `activecol` is `c1`. `needs_flush` is false. This is the panic guard: the acme clamp would ask for a column narrower than one glyph. |
 
 C-15 may follow `warp_focus_test.zig`'s rig (`MouseSink` ops, a 9P pipe,
 `ed.ns`). The other tests leave `ed.ns` null.
