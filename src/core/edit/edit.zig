@@ -485,8 +485,10 @@ test "edit: builtin row" {
     // Phase 12b inserted Look (exec.c:116) and phase 13b Get (exec.c:109), so
     // Edit's successor is now Get, exactly as exec.c:109 follows :106.
     try testing.expectEqualStrings("Get", builtins.exectab[ei + 1].name);
-    try testing.expectEqualStrings("Load", builtins.exectab[ei + 2].name);
-    try testing.expectEqualStrings("Look", builtins.exectab[ei + 3].name);
+    // #88 inserted Help between Get and Load.
+    try testing.expectEqualStrings("Help", builtins.exectab[ei + 2].name);
+    try testing.expectEqualStrings("Load", builtins.exectab[ei + 3].name);
+    try testing.expectEqualStrings("Look", builtins.exectab[ei + 4].name);
 
     // Inline-arg path: sweeping "Edit ,d" in the tag runs `,d` against the BODY.
     {
