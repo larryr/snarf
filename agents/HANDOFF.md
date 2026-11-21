@@ -16,11 +16,13 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Open PRs (2026-11-01):** #63 (Undo/Redo repaint, #57; SnarfDev1; I merged main into its
-  branch to clear a conflict — pull before continuing; NOT yet reviewed under
-  REVIEW-PROCESS), #72 (fable: `warp.to` sets `gesture.mouse_pt` like libdraw `moveto`; #64
-  review finding 1), #73 (fable: hang up the host session BEFORE teardown + drain first;
-  #68 review finding 1). #72/#73 are fable's own work with no independent review yet.
+- **Open PRs (2026-11-21):** #89 (`grok/issue-88-help`, Help / `+Help` cheat sheet
+  and `snarf -h`/`--help`; owns `src/core/exec/cmd_help.zig`,
+  `src/core/exec/cmd_help_test.zig`, the Help row in `builtins.zig`, the `+Help`
+  scratch suffix in `wintag.zig`, and the early help exit in `main_native.zig`.
+  Not reviewed. Do not add `Help` to the row tag on this branch — that choice is
+  in the PR for Larry). #74 (`snarfdev1/integration`, M0/M1 batch, open since
+  2026-11-02, mergeable, not merged). #63, #72, and #73 merged 2026-11-01.
 - **Review wave 2 (2026-11-01), merged at Larry's instruction:** #64 (warp into new/focused
   windows + #53 clearmouse port), #69 (Redo-after-resize guards), #65 (origin binds
   exclusively, #47), #68 (shutdown teardown + recovery file, #58), #71 (recovery tests).
