@@ -106,6 +106,15 @@ fn pumpServer(ctx: *anyopaque) anyerror!void {
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
+    // #88: -h / --help before palette parsing and before any devdraw work.
+    // --version is #77, not this.
+    if (try helpRequested(gpa, init.minimal.args)) {
+        var buf: [1024]u8 = undefined;
+        var out = std.Io.File.stdout().writer(init.io, &buf);
+        try out.interface.writeAll(core.help.text);
+        try out.flush();
+        return;
+    }
     // ADR-0007 §2: resolved before anything is spawned, so a bad name never
     // opens a window.
     const pal = colorsFromArgs(init.minimal.args) orelse std.process.exit(2);
@@ -180,6 +189,17 @@ fn existsOnDisk(ctx: *anyopaque, path: []const u8) bool {
     const io: *const std.Io = @ptrCast(@alignCast(ctx));
     std.Io.Dir.cwd().access(io.*, path, .{}) catch return false;
     return true;
+}
+
+/// Collect argv (element 0 included; `wantsHelp` skips it). `Args.iterate`
+/// restarts, so `colorsFromArgs` still sees every flag. Slices point at the
+/// process argv and stay valid for this call.
+fn helpRequested(gpa: std.mem.Allocator, args: std.process.Args) !bool {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    var it = args.iterate();
+    while (it.next()) |arg| try argv.append(gpa, arg);
+    return core.help.wantsHelp(argv.items);
 }
 
 /// The scheme `-colors=NAME` selects (last one wins), or `Palette.default`.

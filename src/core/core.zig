@@ -83,6 +83,8 @@ pub const errors = @import("errors.zig");
 /// since phase 16a so the one place `core` touches the transport is named.
 pub const originhook = @import("originhook.zig");
 pub const exec = @import("exec/exec.zig");
+/// The `Help` cheat sheet (#88): `text` for `+Help` and for `snarf -h`.
+pub const help = @import("exec/cmd_help.zig");
 test {
     _ = @import("exec/builtins_m1_test.zig"); // #13 acceptance (SnarfDev2)
     _ = @import("exec/undo_repaint_test.zig"); // #57 regression (SnarfDev2)

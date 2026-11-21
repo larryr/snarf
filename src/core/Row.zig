@@ -31,9 +31,10 @@ const Point = draw.Point;
 
 pub const Error = Text.Error;
 
-/// `Lcolhdr` (rows.c:16-23): the row-tag command band, 29 runes incl. the
-/// trailing space the caret sits after.
-const header = "Newcol Kill Putall Dump Exit ";
+/// Acme's `Lcolhdr` (rows.c:16-23) plus snarf's `Help` (#88). The acme words
+/// stay in their order; `Help` is the last command. The trailing space is
+/// where the caret sits. 34 runes.
+const header = "Newcol Kill Putall Dump Exit Help ";
 
 r: Rect,
 tag: Text,
@@ -411,8 +412,8 @@ test "row: init lays out the rowtag header and caret" {
 
     try testing.expect(row.tag.what == .rowtag);
     try testing.expectEqual(@as(usize, 0), row.col.items.len);
-    try testing.expectEqual(@as(usize, 29), row.tag.file.buffer.len()); // 29-rune header
-    try testing.expectEqual(@as(usize, 29), row.tag.q1);
+    try testing.expectEqual(@as(usize, 34), row.tag.file.buffer.len()); // 34-rune header
+    try testing.expectEqual(@as(usize, 34), row.tag.q1);
     try testing.expectEqual(@as(i32, 18), row.tag.fr.r.max.y);
 }
 

@@ -298,8 +298,8 @@ test "boot: tree shape and default tag strings" {
     try testing.expect(w.tag.w == w and w.body.w == w);
     try testing.expect(w.tag.what == .tag and w.body.what == .body);
 
-    // Byte-exact tag strings (rows.c:16-23, cols.c:15-24, wind.c fresh tag).
-    try expectTag(&tree.row.tag, "Newcol Kill Putall Dump Exit ");
+    // Byte-exact tag strings (rows.c:16-23 plus Help, cols.c:15-24, wind.c fresh tag).
+    try expectTag(&tree.row.tag, "Newcol Kill Putall Dump Exit Help ");
     try expectTag(&c.tag, "New Cut Paste Snarf Sort Zerox Delcol ");
     try expectTag(&w.tag, "scratch Del Snarf | Look ");
     // The window tag caret parks at the end (wind.c winsettag tail).

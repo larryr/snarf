@@ -249,13 +249,13 @@ pub fn setTagCommit(ed: *Editor, w: *Window) Error!void {
 }
 
 /// `winsetname` (wind.c:376-398): equal ⇒ nothing; else `isscratch` from the
-/// `/guide` / `+Errors` suffix, `filesetname` (which records the undoable
+/// `/guide` / `+Errors` / `+Help` suffix, `filesetname` (which records the undoable
 /// rename when `seq > 0`, file.c:139-148) and a retag. The single seam every
 /// Window-level rename goes through (openfile, place, dirwin, served `name`,
 /// `commit`, RowLoad).
 pub fn setName(w: *Window, name: []const u8) Error!void {
     if (std.mem.eql(u8, name, w.body.file.name.items)) return; // wind.c:385-386
-    w.isscratch = std.mem.endsWith(u8, name, "/guide") or std.mem.endsWith(u8, name, "+Errors"); // wind.c:387-391
+    w.isscratch = std.mem.endsWith(u8, name, "/guide") or std.mem.endsWith(u8, name, "+Errors") or std.mem.endsWith(u8, name, "+Help"); // wind.c:387-391; +Help is scratch like +Errors (#88)
     try w.body.file.setName(name); // wind.c:392
     try setTag1(w); // wind.c:393-396
 }
