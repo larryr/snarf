@@ -549,8 +549,8 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     const h: u32 = font.height; // 18
     try testing.expectEqual(@as(u32, 0x000000FF), hb.pixelAt(30, h)); // border band
     // Row tag literal in its File:
-    var tbuf: [128]u8 = undefined;
-    try testing.expectEqualStrings("Newcol Kill Putall Dump Exit ", tree.row.tag.file.buffer.read(0, tree.row.tag.file.buffer.len(), &tbuf));
+    var tbuf: [256]u8 = undefined;
+    try testing.expectEqualStrings("Newcol Kill Putall Dump Exit Help ", tree.row.tag.file.buffer.read(0, tree.row.tag.file.buffer.len(), &tbuf));
 
     // Second window; type into each body via point-to-type (pointer position).
     const w2 = try tree.addWindow("notes", "");
@@ -595,7 +595,8 @@ test "phase-8: boot chrome scene — two windows, tags, scrollbars" {
     // 9d) before that for " Undo". Spot-checks above still hold (R-P2-7).
     // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0xfd8b232d77d1f0bd,
     // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
-    try testing.expectEqual(@as(u64, 0x50f4088420177753), hb.hash());
+    // RE-FROZEN 2026-11-21 (#88): the root tag paints `Help` after `Exit`.
+    try testing.expectEqual(@as(u64, 0xf8f4719358d7ab), hb.hash());
 }
 
 test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows" {
@@ -708,7 +709,8 @@ test "phase-9: B2 exec scene — snarf from tag, two-strike Del, neighbor grows"
     // `ed.warnings` was an invisible sink). Spot-checks immediately above.
     // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x8ca565d7961f44cf,
     // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
-    try testing.expectEqual(@as(u64, 0xed519e1281abe53d), hb.hash());
+    // RE-FROZEN 2026-11-21 (#88): the root tag paints `Help` after `Exit`.
+    try testing.expectEqual(@as(u64, 0xe5133a8176280d8), hb.hash());
 }
 
 test "phase-9: B3 look scene — click cycles occurrences with wraparound" {
@@ -888,7 +890,8 @@ test "phase-12b: +Errors scene — two-strike Del warning surfaces in the rightm
     // within rows [40,57] — w1's tag band (y=[40,58)) — and nowhere else.
     // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x86a3f4679b1b8d21,
     // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
-    try testing.expectEqual(@as(u64, 0xa60814356ac917d4), hb.hash());
+    // RE-FROZEN 2026-11-21 (#88): the root tag paints `Help` after `Exit`.
+    try testing.expectEqual(@as(u64, 0x58b465526526017b), hb.hash());
 }
 
 test "phase-10: served tree scene (T15)" {
@@ -1093,7 +1096,8 @@ test "phase-10: Edit via B2 scene — s-global, one undo, live tag" {
     // undone, the frame was not). Undo now mirrors each edit into the frame via
     // textdelete/textinsert (file.c:233-234, :247-248), so the body paints
     // "b one/b two/b three" with the same selection; verified from a PPM dump.
-    try testing.expectEqual(@as(u64, 0x48a109c3e8fe7a0), hb.hash());
+    // RE-FROZEN 2026-11-21 (#88): the root tag paints `Help` after `Exit`.
+    try testing.expectEqual(@as(u64, 0xc04011acea84229b), hb.hash());
 }
 
 // ===========================================================================
@@ -1361,7 +1365,8 @@ test "phase-13b: acme boot — two columns, the root directory window rightmost 
     // with orchestrator sign-off.
     // RE-FROZEN 2026-10-26 (phase 19, R-P19-6): sunapee default; was 0x35f686fc5162d2cf,
     // which `Palette.acme` still reproduces byte-exact. Spot-checks: expectSunapee.
-    try testing.expectEqual(@as(u64, 0x3b4981b48586f66c), hb.hash());
+    // RE-FROZEN 2026-11-21 (#88): the root tag paints `Help` after `Exit`.
+    try testing.expectEqual(@as(u64, 0x355bb95d515d1485), hb.hash());
 }
 
 test {

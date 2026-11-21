@@ -87,9 +87,9 @@ tag has no Undo/Redo/Put. Set `filemenu` before inserting the body, and call
 `setTag1` again after the insert, so a dirty body does not grow a Put word.
 The body is `text`, inserted once at rune 0 on creation only.
 
-`Help` is not added to the row tag or to a new window's tag. That is the
-discoverability decision, made so this PR does not change the acme tag
-surface. Larry can overturn it in review.
+`Help` is the last word of the root tag (`Newcol Kill Putall Dump Exit Help `,
+`Row.zig`'s `header`). Larry made that the default on 2026-11-21. It is not
+added to column tags or to a new window's tag.
 
 ## CLI
 

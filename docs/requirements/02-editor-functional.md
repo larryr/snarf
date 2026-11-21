@@ -14,7 +14,7 @@ rather than staying silent (R-EDIT-25).
 | ID | Requirement |
 |----|-------------|
 | R-EDIT-01 | The display SHALL be divided into vertical **columns**; each column holds a stack of **windows**. Columns and windows are created, moved, resized, and deleted with the mouse. |
-| R-EDIT-02 | The top of the screen, each column, and each window SHALL have a **tag line**: an editable line of text holding the entity's name, commands, and (right of the `\|` bar) a free scratch area. Pre-loaded tag commands: `Newcol Kill Putall Dump Exit` (root), `New Cut Paste Snarf Sort Zerox Delcol` (column), `Del Snarf \| Look ` (window). The window tag is **live** (paper §User interface, Fig. 2): `Undo`/`Redo` appear only while there is something to undo/redo, `Put` appears only while the window is modified and vanishes once written, `Get` appears only for named windows. Text the user types in any tag is preserved across these recompositions. Tags are not menus: any text anywhere may be executed (R-EDIT-06). |
+| R-EDIT-02 | The top of the screen, each column, and each window SHALL have a **tag line**: an editable line of text holding the entity's name, commands, and (right of the `\|` bar) a free scratch area. Pre-loaded tag commands: `Newcol Kill Putall Dump Exit Help` (root; `Help` is snarf's, the rest are acme's), `New Cut Paste Snarf Sort Zerox Delcol` (column), `Del Snarf \| Look ` (window). The window tag is **live** (paper §User interface, Fig. 2): `Undo`/`Redo` appear only while there is something to undo/redo, `Put` appears only while the window is modified and vanishes once written, `Get` appears only for named windows. Text the user types in any tag is preserved across these recompositions. Tags are not menus: any text anywhere may be executed (R-EDIT-06). |
 | R-EDIT-03 | A window SHALL display either a text buffer (file body) or a **directory listing**: the tag name ends in `/` and the body lists the entry names, subdirectories suffixed `/`. **Looking** (B3, R-EDIT-07) at an entry name opens it, resolved against the window's directory (R-EDIT-20). (v3 wrongly said B2; B2 on a name would try to *execute* it.) |
 | R-EDIT-04 | Windows SHALL indicate modification state (the tag's square/dirty box) and scroll position (scrollbar at the left edge, ACME-style: B1 scrolls up, B3 scrolls down, B2 jumps absolute). |
 
@@ -102,6 +102,9 @@ rather than staying silent (R-EDIT-25).
   (R-EDIT-22), placement heuristics (R-EDIT-23), single-click expansion (R-EDIT-24), and
   the recorded no-warp divergence (R-EDIT-25). Noted the in-memory-buffer divergence on
   R-EDIT-10. Implementation gaps found in the same pass are in `agents/HANDOFF.md`.
+- **v11** (2026-11-21, #88) — no IDs added or renumbered. **R-EDIT-02**: the root tag
+  gains `Help` after acme's `Exit`. Larry's call: `Help` is default snarf
+  behavior, not an acme word.
 - **v10** (2026-10-31, #45 / #53) — no IDs added, changed or renumbered. **R-EDIT-25**:
   the warp into a new window (`coladd`, `cols.c:151-154`) is ported, per Larry's
   2026-10-30 decision that the pointer warps to the focused item (`+Errors` included; an

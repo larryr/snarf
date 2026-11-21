@@ -19,6 +19,8 @@ const place = @import("../place.zig");
 pub const text: []const u8 =
     \\Snarf — mouse, touchpad, and keys
     \\
+    \\The top tag ends with Help. B2 on that word opens this window.
+    \\
     \\Buttons
     \\  B1  Select. Click sets the caret. Drag to sweep a range. A double
     \\      click selects a word, or the text between matching brackets.
