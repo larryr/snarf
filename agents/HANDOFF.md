@@ -16,6 +16,11 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
+- **Column drag (2026-11-21):** `grok/col-resize` (pushed, design commit
+  `c183423`). Owns `src/core/dragcol.zig`, `Gesture.zig`'s scrollbar arm,
+  `Row.attach` (`rowadd`'s existing-column branch), and the `activecol` /
+  `restoremouse` comments those touch. Port of `rowdragcol` only;
+  `coldragwin` stays unported. Do not edit those files on another branch.
 - **Open PRs (2026-11-21):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
   since 2026-11-02, mergeable, not merged). #89 merged 2026-11-21 as `b0a39da`
   (Help / `+Help`, root tag ends with `Help`, `snarf -h`/`--help`). GitHub
