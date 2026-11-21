@@ -16,14 +16,11 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Open PRs (2026-11-21):** #89 (`grok/issue-88-help`, Help / `+Help` cheat sheet
-  and `snarf -h`/`--help`). Owns `src/core/exec/cmd_help.zig`,
-  `src/core/exec/cmd_help_test.zig`, the Help row in `builtins.zig`, the `+Help`
-  scratch suffix in `wintag.zig`, the early help exit in `main_native.zig`, and
-  the root-tag header in `Row.zig`. Not reviewed. Larry (2026-11-21): `Help` is
-  the last word of the default root tag, `Newcol Kill Putall Dump Exit Help`.
-  #74 (`snarfdev1/integration`, M0/M1 batch, open since 2026-11-02, mergeable,
-  not merged). #63, #72, and #73 merged 2026-11-01.
+- **Open PRs (2026-11-21):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
+  since 2026-11-02, mergeable, not merged). #89 merged 2026-11-21 as `b0a39da`
+  (Help / `+Help`, root tag ends with `Help`, `snarf -h`/`--help`). GitHub
+  refused a self-approval because the PR author is larryr; Larry asked for the
+  merge directly. #88 is closed. #63, #72, and #73 merged 2026-11-01.
 - **Review wave 2 (2026-11-01), merged at Larry's instruction:** #64 (warp into new/focused
   windows + #53 clearmouse port), #69 (Redo-after-resize guards), #65 (origin binds
   exclusively, #47), #68 (shutdown teardown + recovery file, #58), #71 (recovery tests).
