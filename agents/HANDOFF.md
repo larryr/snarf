@@ -16,13 +16,15 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Column drag (2026-11-21):** `grok/col-resize` (pushed, design commit
-  `c183423`). Owns `src/core/dragcol.zig`, `Gesture.zig`'s scrollbar arm,
-  `Row.attach` (`rowadd`'s existing-column branch), and the `activecol` /
-  `restoremouse` comments those touch. Port of `rowdragcol` only;
-  `coldragwin` stays unported. Do not edit those files on another branch.
-- **Open PRs (2026-11-21):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
-  since 2026-11-02, mergeable, not merged). #89 merged 2026-11-21 as `b0a39da`
+- **Column drag (2026-11-21):** PR #90 (`grok/col-resize`, `00a9694`),
+  ready for Larry's review, not merged. Owns `src/core/dragcol.zig`,
+  `Gesture.zig`'s scrollbar arm, and `Row.attach`. Port of `rowdragcol`
+  only; `coldragwin` stays unported. A pair too narrow for two columns
+  refuses the resize (C-19) instead of panicking. Do not edit those files
+  on another branch.
+- **Open PRs (2026-11-21):** #74 (`snarfdev1/integration`, M0/M1 batch, open
+  since 2026-11-02, mergeable, not merged) and #90 (column drag, above).
+  #89 merged 2026-11-21 as `b0a39da`
   (Help / `+Help`, root tag ends with `Help`, `snarf -h`/`--help`). GitHub
   refused a self-approval because the PR author is larryr; Larry asked for the
   merge directly. #88 is closed. #63, #72, and #73 merged 2026-11-01.
