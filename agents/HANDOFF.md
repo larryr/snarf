@@ -16,8 +16,14 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Open PRs (2026-11-22):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
-  since 2026-11-02, mergeable, not merged). #90 merged 2026-11-22 as `cf88282`
+- **Cursor (2026-11-22):** PR #91 (`grok/cursor`, `9d342d8`), ready for
+  Larry's review, not merged. Owns `src/core/cursor.zig` and the column-drag
+  call that shows `boxcursor` while the button is held. `/dev/cursor` write
+  is the general path; the browser still has no such file. Do not edit those
+  files on another branch.
+- **Open PRs (2026-11-22):** #74 (`snarfdev1/integration`, M0/M1 batch, open
+  since 2026-11-02, mergeable, not merged) and #91 (cursor, above). #90 merged
+  2026-11-22 as `cf88282`
   (column-tag drag is acme `rowdragcol`: resize against the left neighbor, or
   reorder when the release is outside the column; `coldragwin` still unported;
   a pair too narrow for two columns refuses the resize). #89 merged 2026-11-21
