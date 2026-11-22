@@ -16,18 +16,15 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Column drag (2026-11-21):** PR #90 (`grok/col-resize`, `00a9694`),
-  ready for Larry's review, not merged. Owns `src/core/dragcol.zig`,
-  `Gesture.zig`'s scrollbar arm, and `Row.attach`. Port of `rowdragcol`
-  only; `coldragwin` stays unported. A pair too narrow for two columns
-  refuses the resize (C-19) instead of panicking. Do not edit those files
-  on another branch.
-- **Open PRs (2026-11-21):** #74 (`snarfdev1/integration`, M0/M1 batch, open
-  since 2026-11-02, mergeable, not merged) and #90 (column drag, above).
-  #89 merged 2026-11-21 as `b0a39da`
-  (Help / `+Help`, root tag ends with `Help`, `snarf -h`/`--help`). GitHub
-  refused a self-approval because the PR author is larryr; Larry asked for the
-  merge directly. #88 is closed. #63, #72, and #73 merged 2026-11-01.
+- **Open PRs (2026-11-22):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
+  since 2026-11-02, mergeable, not merged). #90 merged 2026-11-22 as `cf88282`
+  (column-tag drag is acme `rowdragcol`: resize against the left neighbor, or
+  reorder when the release is outside the column; `coldragwin` still unported;
+  a pair too narrow for two columns refuses the resize). #89 merged 2026-11-21
+  as `b0a39da`
+  (Help / `+Help`, root tag ends with `Help`, `snarf -h`/`--help`; GitHub
+  refused a self-approval on #89 because the PR author is larryr, and Larry
+  asked for that merge directly). #88 is closed. #63, #72, and #73 merged 2026-11-01.
 - **Review wave 2 (2026-11-01), merged at Larry's instruction:** #64 (warp into new/focused
   windows + #53 clearmouse port), #69 (Redo-after-resize guards), #65 (origin binds
   exclusively, #47), #68 (shutdown teardown + recovery file, #58), #71 (recovery tests).
