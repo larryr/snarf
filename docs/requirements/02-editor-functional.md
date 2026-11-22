@@ -102,6 +102,7 @@ rather than staying silent (R-EDIT-25).
   (R-EDIT-22), placement heuristics (R-EDIT-23), single-click expansion (R-EDIT-24), and
   the recorded no-warp divergence (R-EDIT-25). Noted the in-memory-buffer divergence on
   R-EDIT-10. Implementation gaps found in the same pass are in `agents/HANDOFF.md`.
+- **v13** (2026-11-22, cursor) — no IDs added or renumbered. **R-GFX-08**: the core sets the pointer image by writing `/dev/cursor` (a 72-byte Plan 9 cursor; an empty write restores the arrow). A column-tag drag shows acme's `boxcursor` while the button is held and restores the arrow when that button changes (`rows.c:151,156`), before the layout moves. `coldragwin` will use the same pair. A host with no `/dev/cursor` (the frozen browser) ignores the write.
 - **v12** (2026-11-21, column drag) — no IDs added or renumbered. **R-EDIT-01**: dragging a column tag's button resizes the shared border, or reorders the column when the release is outside it (`rowdragcol`, `rows.c:140-206`). Window drag (`coldragwin`) is still unported. **R-EDIT-25**: that drag's `clearmouse` (`rows.c:150`) and its `colmousebut` warp (`cols.c:232`) are ported. `colsort` and `coldragwin` are still not.
 - **v11** (2026-11-21, #88) — no IDs added or renumbered. **R-EDIT-02**: the root tag
   gains `Help` after acme's `Exit`. Larry's call: `Help` is default snarf

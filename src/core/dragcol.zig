@@ -4,9 +4,10 @@
 //!
 //! Acme blocks in `readmouse`. Snarf is edge-triggered: one sample is one
 //! `Editor.handleMouse`, and `Gesture` routes every sample here until the
-//! gesture ends (`Drag` lives on `Gesture`, no globals). The host cursor is
-//! not changed — acme's `setcursor2` of `boxcursor` (rows.c:151) has no core
-//! writer. Layout moves only on a clean button-up; there is no rubber-band.
+//! gesture ends (`Drag` lives on `Gesture`, no globals). While the tracked
+//! button is down the pointer is acme's box (`cursor.box`, rows.c:151); it
+//! returns to the arrow when that button changes (rows.c:156), before any
+//! layout. Layout moves only on a clean button-up; there is no rubber-band.
 //!
 //! Imports: `draw` and sibling core files. Does not import `Gesture` (same
 //! cycle shape as `textselect` / `Editor` / `Gesture`). Never dev/shim.
@@ -16,6 +17,7 @@ const Column = @import("Column.zig");
 const Row = @import("Row.zig");
 const Chrome = @import("Chrome.zig");
 const restoremouse = @import("restoremouse.zig");
+const cursor = @import("cursor.zig");
 const warp = @import("warp.zig");
 
 const Point = draw.Point;
@@ -39,6 +41,7 @@ const Release = enum { inert, painted, destroyed };
 /// Press on a column tag's button (rows.c:150-153). No layout, no `activecol`.
 pub fn begin(ed: *Editor, d: *Drag, c: *Column, buttons: u8, pt: Point) void {
     restoremouse.clear(ed); // rows.c:150 clearmouse()
+    cursor.set(ed, cursor.box); // rows.c:151 setcursor2(boxcursor)
     d.* = .{
         .col = c,
         .buttons = buttons,
@@ -57,6 +60,7 @@ pub fn step(ed: *Editor, d: *Drag, ev: MouseEvent) Row.Error!bool {
         return true;
     }
     if (b == d.buttons) return false; // rows.c:154 while(buttons == b)
+    cursor.arrow(ed); // rows.c:156 setcursor(nil), before layout or the drain
     if (b != 0) {
         d.draining = true; // rows.c:157-160 cancel; do not apply
         return false;

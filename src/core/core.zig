@@ -28,6 +28,8 @@ pub const boot = @import("boot.zig");
 pub const shutdown = @import("shutdown.zig");
 pub const look = @import("look.zig");
 pub const warp = @import("warp.zig");
+/// Pointer image — acme's `setcursor`, a write to `/dev/cursor` (R-GFX-08).
+pub const cursor = @import("cursor.zig");
 /// Return-after-Del warp — acme `savemouse`/`restoremouse`/`clearmouse`
 /// (util.c:383-408, cols.c:150/178), issue #9, R-EDIT-25.
 pub const restoremouse = @import("restoremouse.zig");

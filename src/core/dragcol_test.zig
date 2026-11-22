@@ -1,4 +1,4 @@
-//! Column drag, C-01 .. C-19. Binding plan: notes/grok/col-resize.md
+//! Column drag, C-01 .. C-21. Binding plan: notes/grok/col-resize.md
 //! ("Test plan" and "Worked geometry"). Each test drives `Editor.handleMouse`
 //! on a 600×400 boot. No network. `ed.ns` stays null except in C-15.
 const std = @import("std");
@@ -13,6 +13,7 @@ const Buffer = @import("Buffer.zig");
 const boot = @import("boot.zig");
 const restoremouse = @import("restoremouse.zig");
 const warp = @import("warp.zig");
+const cursor = @import("cursor.zig");
 
 const B1: u8 = 1;
 const B2: u8 = 2;
@@ -438,4 +439,87 @@ test "dragcol C-19: a narrow pair refuses a resize that would panic" {
     try testing.expectEqual(right, c1.r);
     try testing.expect(h.ed.activecol == c1);
     try testing.expect(!h.ed.needs_flush);
+}
+
+/// Mount `cursor.Sink` at `/dev` and point `h.ed.ns` at it. Heap-allocated so
+/// the server's pointer to `sink` stays valid. The caller `deinit`s it.
+const CursorMount = struct {
+    sink: cursor.Sink = .{},
+    pipe: *ninep.chan.Pipe,
+    srv: ninep.server.Server,
+    cl: ninep.Client,
+    ns: ninep.mount.Namespace,
+
+    fn deinit(m: *CursorMount) void {
+        m.ns.deinit();
+        m.cl.deinit();
+        m.srv.deinit();
+        m.pipe.deinit();
+        testing.allocator.destroy(m);
+    }
+};
+
+fn mountCursor(h: *Scene) !*CursorMount {
+    const a = testing.allocator;
+    const m = try a.create(CursorMount);
+    errdefer a.destroy(m);
+    m.sink = .{};
+    m.pipe = try ninep.chan.Pipe.init(a, 16384);
+    errdefer m.pipe.deinit();
+    m.srv = try ninep.server.Server.init(a, m.pipe.serverEnd(), &cursor.Sink.ops, &m.sink, 8192);
+    errdefer m.srv.deinit();
+    m.cl = try ninep.Client.init(a, m.pipe.clientEnd(), 8192);
+    errdefer m.cl.deinit();
+    m.cl.pump = .{ .ctx = &m.srv, .run = cursorPump };
+    _ = try m.cl.version(8192);
+    const root = try m.cl.attach("larry", "");
+    m.ns = ninep.mount.Namespace.init(a);
+    errdefer m.ns.deinit();
+    try m.ns.mount("/dev", &m.cl, root.fid);
+    h.ed.ns = &m.ns;
+    return m;
+}
+
+fn cursorPump(ctx: *anyopaque) anyerror!void {
+    const s: *ninep.server.Server = @ptrCast(@alignCast(ctx));
+    _ = try s.poll();
+}
+
+test "dragcol C-20: the box is up while the column button is held" {
+    const h = try openTwo();
+    defer h.deinit();
+    var m = try mountCursor(h);
+    defer m.deinit();
+    const p = btn(h.tree.row.col.items[1]);
+    try ev(h, p.x, p.y, B1);
+    try testing.expectEqual(@as(usize, 1), m.sink.writes);
+    try testing.expectEqual(cursor.rec_len, m.sink.last_len);
+    var want: [cursor.rec_len]u8 = undefined;
+    cursor.format(cursor.box, &want);
+    try testing.expectEqualSlices(u8, &want, m.sink.last[0..cursor.rec_len]);
+    // Still held: the box stays, and nothing is written again.
+    try ev(h, 200, p.y, B1);
+    try testing.expectEqual(@as(usize, 1), m.sink.writes);
+    try expectCols(h, split_l, split_r);
+    // Release restores the arrow before the columns move.
+    try ev(h, 200, p.y, 0);
+    try testing.expectEqual(@as(usize, 2), m.sink.writes);
+    try testing.expectEqual(@as(usize, 0), m.sink.last_len);
+    try expectCols(h, at200_l, at200_r);
+}
+
+test "dragcol C-21: a chord restores the arrow before the drag ends" {
+    const h = try openTwo();
+    defer h.deinit();
+    var m = try mountCursor(h);
+    defer m.deinit();
+    const p = btn(h.tree.row.col.items[1]);
+    try ev(h, p.x, p.y, B1);
+    try ev(h, 200, p.y, B1 | B2);
+    try testing.expectEqual(@as(usize, 2), m.sink.writes);
+    try testing.expectEqual(@as(usize, 0), m.sink.last_len);
+    try expectCols(h, split_l, split_r);
+    try ev(h, 200, p.y, 0);
+    try testing.expectEqual(@as(usize, 2), m.sink.writes);
+    try expectCols(h, split_l, split_r);
 }
