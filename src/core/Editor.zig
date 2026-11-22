@@ -105,9 +105,11 @@ mousew: ?*Window = null,
 ///   * `colcloseall` nils it when the column it names is destroyed
 ///     (cols.c:216-217) — the port does that from `Row.close` via `dropColRef`,
 ///     the R-P9-13 dangling-pointer hygiene lineage.
-/// The C's fourth writer, the scrollbar drag arm (acme.c:640 `rowdragcol`/
-/// `coldragwin`), has no port (R-P8-5, drag deferred). A global in the C; a field
-/// here (S-07 P-3, no globals).
+/// The C's fourth writer is the scrollbar drag arm (acme.c:639-640): a column-tag
+/// drag (`rowdragcol`) sets this when the gesture ends and the column is still in
+/// the row (click, cancel, leftmost no-op, resize, shuffle), not at press time.
+/// `coldragwin` is still unported, so a window-tag drag does not. A global in the
+/// C; a field here (S-07 P-3, no globals).
 activecol: ?*Column = null,
 /// The mouse gesture machine's own state (`Gesture.zig`) — `gesture_text`,
 /// `mouse_pt`, `mouse_state`, the chord and B2/B3-sweep trackers. Carved out of

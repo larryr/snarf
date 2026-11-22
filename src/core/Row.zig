@@ -4,11 +4,12 @@
 //! the Row.
 //!
 //! Ported from larryr/plan9port@337c6ac acme/rows.c; cite as `rows.c:NN`. This is
-//! `rowinit` (rows.c:25-48), `rowadd` (rows.c:50-101), `rowresize`
-//! (rows.c:103-138), `rowwhich` (rows.c:255-266) and `rowwhichcol`
-//! (rows.c:242-253). `rowtype`/`rowdragcol`/`rowclose`/`Dump`/`Load` are phases
-//! 9/10. `rowadd`'s `clearmouse` (rows.c:99) and `colresize`'s (cols.c:242) are
-//! ported (#53); `rowdragcol`'s (rows.c:150) waits for `rowdragcol`.
+//! `rowinit` (rows.c:25-48), `rowadd` (rows.c:50-101: no-clone `add`/`addAtBoot`
+//! and the existing-column `attach`), `rowresize` (rows.c:103-138), `rowclose`
+//! (rows.c:208-239), `rowwhich` (rows.c:255-266) and `rowwhichcol`
+//! (rows.c:242-253). `rowdragcol` (rows.c:140-206) is `dragcol.zig`.
+//! `rowadd`'s `clearmouse` (rows.c:99), `colresize`'s (cols.c:242) and
+//! `rowdragcol`'s (rows.c:150) are ported.
 //!
 //! Columns are individually HEAP-allocated (`allocator.create`) and stored as
 //! pointers for address stability (contract §7-8), owned by the Row.
@@ -107,7 +108,7 @@ pub fn deinit(row: *Row) void {
 /// Ends by forgetting any saved pop-up (`clearmouse`, rows.c:99, #53), as does
 /// the `colresize` of the landing column (cols.c:242).
 pub fn add(row: *Row, ed: *Editor, x_in: i32) Error!?*Column {
-    const c = (try row.addImpl(ed, x_in)) orelse return null; // rows.c:74-75 returns before :99
+    const c = (try row.addImpl(ed, null, x_in)) orelse return null; // rows.c:74-75 returns before :99
     restoremouse.clear(ed); // rows.c:99 clearmouse()
     return c;
 }
@@ -117,10 +118,18 @@ pub fn add(row: *Row, ed: *Editor, x_in: i32) Error!?*Column {
 /// create their Editor. Identical layout, no `clearmouse` (#53). Every runtime
 /// path (Newcol, `makenewwindow`, `+Errors`, Load) calls `add`.
 pub fn addAtBoot(row: *Row, x_in: i32) Error!?*Column {
-    return row.addImpl(null, x_in);
+    return row.addImpl(null, null, x_in);
 }
 
-fn addImpl(row: *Row, ed: ?*Editor, x_in: i32) Error!?*Column {
+/// `rowadd`'s existing-column branch (rows.c:91-99). `c` was detached and is
+/// not in `row.col`. Null means refused: `c` was not inserted and not resized
+/// (landing column narrower than 100px, rows.c:74-75). Otherwise `c` is resized
+/// into the carved rect, spliced, and the saved pop-up is forgotten.
+pub fn attach(row: *Row, ed: *Editor, c: *Column, x: i32) Error!?*Column {
+    return row.addImpl(ed, c, x);
+}
+
+fn addImpl(row: *Row, ed: ?*Editor, existing: ?*Column, x_in: i32) Error!?*Column {
     const a = row.chrome.allocator;
     const screen = &row.chrome.display.image;
     const bd = Chrome.border;
@@ -159,6 +168,17 @@ fn addImpl(row: *Row, ed: ?*Editor, x_in: i32) Error!?*Column {
         r.min.x = r1.max.x; // rows.c:85
     }
 
+    if (existing) |c| {
+        // Detached column (rows.c:91-99). The <100px return above ran first,
+        // so a refusal has not resized `c` or the landing column.
+        const e = ed orelse unreachable; // `attach` always passes the Editor
+        try c.resize(e, r); // rows.c:92
+        c.row = row; // rows.c:93
+        try row.col.insert(a, i, c); // rows.c:95-98
+        restoremouse.clear(e); // rows.c:99
+        return c;
+    }
+
     // heap-create the new column over the freed rect (c==nil branch, rows.c:87-90).
     const c = try a.create(Column);
     errdefer a.destroy(c);
@@ -172,7 +192,9 @@ fn addImpl(row: *Row, ed: ?*Editor, x_in: i32) Error!?*Column {
 }
 
 /// `rowclose` (rows.c:208-239), the x-axis mirror of `Column.close`: find `c`'s
-/// index (assert found); capture `r = c.r`; `dofree` drops the Editor's text
+/// index (assert found while it is still spliced in; a column `rowdragcol`
+/// already detached is freed when `dofree` is set — rows.c:179 — and the C's
+/// error otherwise); capture `r = c.r`; `dofree` drops the Editor's text
 /// refs into EVERY window of the column (R-P9-13 — the C's textclose nils fire
 /// per window inside colcloseall's winclose cascade, text.c:109/113) and then
 /// destroys the whole column (`colcloseall`, cols.c:211-227 — `Column.deinit`
@@ -189,7 +211,15 @@ pub fn close(row: *Row, ed: *Editor, c: *Column, dofree: bool) Error!void {
         for (row.col.items, 0..) |it, idx| {
             if (it == c) break :blk idx;
         }
-        unreachable; // rows.c:215 error("can't find column")
+        // `rowdragcol` detaches with dofree false, then close(dofree=true) if
+        // every reattach refuses (rows.c:174-179). The column is not in the
+        // row then. The C errors; free it and leave the first close's layout.
+        if (!dofree) unreachable; // rows.c:215 error("can't find column")
+        ed.dropColRef(c); // cols.c:216-217 (colcloseall: `activecol = nil`)
+        for (c.w.items) |w| ed.dropTextRefs(w); // R-P9-13; text.c:109/113
+        c.deinit(); // colcloseall (cols.c:211-227): cascades tag + every window
+        a.destroy(c);
+        return;
     };
 
     var r = c.r; // rows.c:216

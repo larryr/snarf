@@ -22,6 +22,7 @@ const Editor = @import("Editor.zig");
 const place = @import("place.zig");
 const exec = @import("exec/exec.zig");
 const textselect = @import("textselect.zig");
+const dragcol = @import("dragcol.zig");
 const wintag = @import("wintag.zig");
 
 const Gesture = @This();
@@ -52,6 +53,9 @@ buttons: u8 = 0,
 /// held (acme.c:603-612 `textscroll`, collapsed per R-P8-8). Reset to 0 on
 /// buttons-up.
 scroll_but: u8 = 0,
+/// A column-tag button drag (`rowdragcol`, rows.c:140-206). `col == null` is
+/// idle. The machine is `dragcol.zig`; this file only routes samples at it.
+col_drag: dragcol.Drag = .{},
 /// The live colored B2/B3 sweep (`xselect`, text.c:1260-1341), non-null only while
 /// `mouse_state` is `.sweeping_b2`/`.sweeping_b3`. Paints a TEMPORARY colored
 /// overlay (never touches the frame's real `p0`/`p1`) that `select23End` fully
@@ -139,9 +143,12 @@ pub fn dropTextRefs(g: *Gesture, tag: *Text, body: *Text) void {
 }
 
 /// Route one mouse sample (acme.c:576-672 `mousethread`, in the C's order).
-/// (1) `mouse_pt` always tracks the sample. (2) A pinned gesture owns every
-/// sample until all buttons release (R-P8-11). (3) hit-test. (4) wheel notch.
-/// (5) body scrollbar click. (6) B1-down begins a gesture. B2/B3 execute/look are
+/// (1) `mouse_pt` always tracks the sample. (2) A pinned text gesture owns every
+/// sample until all buttons release (R-P8-11). A pinned column drag owns every
+/// sample the same way and is checked first, so a body under the pointer cannot
+/// take a selection from it. (3) hit-test. (4) wheel notch.
+/// (5) scrollbar strip: a body scrolls, a column-tag button starts `rowdragcol`.
+/// (6) B1-down begins a text gesture. B2/B3 execute/look are
 /// deferred to phase 9; the C's focus-log / tag-commit / 500ms timer arms are
 /// correctly absent (no tag cache — see the contract's doc note).
 pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
@@ -150,6 +157,14 @@ pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
     const b = ev.buttons;
     g.buttons = b; // acme `mouse->buttons` tracks too (read by cols.c:153)
     if (b == 0) g.scroll_but = 0; // release clears scrollbar edge tracking
+
+    // A column drag owns every sample until it ends, including ones that have
+    // left the button (rows.c:154's readmouse loop). Before the text gesture,
+    // so those samples never hit-test into a body selection.
+    if (g.col_drag.col != null) {
+        if (try dragcol.step(ed, &g.col_drag, ev)) g.col_drag = .{};
+        return;
+    }
 
     // (2) A pinned gesture owns every sample until all buttons release (R-P8-11):
     // a chord that drifts off-window still edits the Text it began on.
@@ -178,10 +193,13 @@ pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
         return;
     }
 
-    // (5) Body scrollbar click (acme.c:603-612 → scrl.c `textscroll`, collapsed to
-    // one action per event, R-P8-8). B1/B3 fire on the press edge; B2 (absolute)
-    // repeats while held so a drag tracks. A tag's scrollr is the window button
-    // square — no-op v1 (dragcol/dragwin deferred, R-P8-5). Wheels never reach
+    // (5) Scrollbar strip (acme.c:603-616 body; acme.c:630-641 tag button).
+    // A body's B1/B3 fire on the press edge; B2 (absolute) repeats while held
+    // (R-P8-8). A column tag's button starts `rowdragcol` on an exact B1, B2,
+    // or B3 (acme.c:632-633); the button number is ignored (rows.c:148). A
+    // chord on that press does not start a drag and does not fall through
+    // into `textselect`. A window tag's square stays a no-op (`coldragwin`
+    // still deferred). The row tag's strip stays a no-op. Wheels never reach
     // here (handled above); a wheel over a body scrollbar therefore scrolls, a
     // benign divergence from the C (which no-ops it).
     if (hit.region == .scrollbar) {
@@ -197,6 +215,10 @@ pub fn handleMouse(g: *Gesture, ed: *Editor, ev: MouseEvent) !void {
                 ed.needs_flush = true;
             }
             g.scroll_but = b;
+        } else if (t.what == .columntag and (b == B1 or b == B2 or b == B3)) {
+            // `t.col` (dat.h) is `place.colOf`; a columntag `rowwhich` returned
+            // is that column.
+            if (place.colOf(t)) |c| dragcol.begin(ed, &g.col_drag, c, b, pt);
         }
         return;
     }
