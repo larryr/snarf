@@ -16,8 +16,9 @@ one fact that had gone stale and wrong (PR creation — see below).
 
 ## ⚠ In-flight claims (check before touching these areas)
 
-- **Open PRs (2026-11-22):** #74 only (`snarfdev1/integration`, M0/M1 batch, open
-  since 2026-11-02, mergeable, not merged). #91 merged 2026-11-22 as `c95a1a1`
+- **Open PRs (2026-11-26):** #74 (`snarfdev1/integration`, M0/M1 batch, open
+  since 2026-11-02, mergeable, not merged) and #92 (`snarfdev/markdown-preview`,
+  read-only Markdown preview, ADR-0008, not merged). #91 merged 2026-11-22 as `c95a1a1`
   (core writes `/dev/cursor`; a column-tag drag shows acme's `boxcursor` while
   the button is held; the browser still has no such file). #90 merged
   2026-11-22 as `cf88282`
@@ -91,6 +92,16 @@ one fact that had gone stale and wrong (PR creation — see below).
   Regression test in `accept_colors.zig`; no goldens changed.
 
 ## Current state (update in place)
+
+- **Markdown preview (Larry, 2026-11-26), PR #92** (`snarfdev/markdown-preview`,
+  not merged): D4–D7 are implemented. ADR-0008 accepts a separate read-only
+  multi-font preview; edit windows stay one-font. `Markdown` opens
+  `<path>+Markdown`. `-web` is a native host hook (`open` / `xdg-open`).
+  `-live` refreshes from `frameEnd` (no timer on wasm32-freestanding). The
+  proposal stays PROPOSED and is not in requirements. Owns `src/core/markdown/`,
+  `src/draw/fontsynth.zig`, `cmd_markdown.zig`, `10x20.0000`, and the preview
+  hooks in Window, Text, scroll, typing, textselect, wintag, Put, Editor,
+  builtins, Help, and `main_native.zig`.
 
 - **Native host is now primary; browser is a frozen secondary** — ADR-0005 amendment accepted
   2026-10-11 (PR #2, merged), prompted by a Larry↔SnarfProdd product sync. Browser SHALL keep
