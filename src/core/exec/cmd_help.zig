@@ -76,6 +76,7 @@ pub const text: []const u8 =
     \\  Cut       cut the selection
     \\  Paste     paste the saved text
     \\  Help      open this window
+    \\  Markdown  preview this window
     \\  Reconnect re-dial the origin server
     \\
     \\Keys

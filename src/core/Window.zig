@@ -22,6 +22,7 @@ const Buffer = @import("Buffer.zig");
 const Column = @import("Column.zig");
 const Editor = @import("Editor.zig");
 const wintag = @import("wintag.zig");
+const mdpreview = @import("markdown/preview.zig");
 
 const Window = @This();
 const Rect = draw.Rect;
@@ -79,6 +80,10 @@ putseq: u32 = 0,
 /// (wind.c:385-389, set by `wintag.setName`). A scratch window never
 /// two-strikes (wind.c:669) and `Putall` skips it (exec.c:1179).
 isscratch: bool = false,
+/// Markdown preview state (ADR-0008). Null on every ordinary window. The
+/// body file still holds the plain rendering; paint and scroll of that body
+/// go through this when it is set. Freed in `deinit`.
+preview: ?*mdpreview.Preview = null,
 /// True when this Window owns its body `File` and must free it in `deinit`
 /// (R-P9-5). Set by the creator (`boot.addWinTo`, and later New/Newcol). When
 /// false the body `File` is borrowed (caller-owned), as in the wave-1 harnesses.
@@ -95,6 +100,9 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
     const screen = &chrome.display.image;
 
     w.chrome = chrome;
+    // Heap windows do not apply field defaults. `scrDraw` below looks at
+    // `preview`, so it has to be null before the first paint (ADR-0008).
+    w.preview = null;
     w.taglines = 1; // wind.c:27
     w.id = id; // wind.c:30
     w.col = null;
@@ -147,6 +155,11 @@ pub fn init(w: *Window, chrome: *const Chrome, body_file: *File, id: u32, r: Rec
 /// `owns_body` (R-P9-5 — Del must destroy a window+file with no external
 /// registry); otherwise it is caller-owned.
 pub fn deinit(w: *Window) void {
+    if (w.preview) |pv| {
+        pv.deinit(w.chrome.allocator);
+        w.chrome.allocator.destroy(pv);
+        w.preview = null;
+    }
     const owned_body: ?*File = if (w.owns_body) w.body.file else null;
     // `windirfree` (wind.c:646-660) — the directory listing's entry names.
     for (w.dirnames.items) |n| w.chrome.allocator.free(n);

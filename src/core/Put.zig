@@ -334,6 +334,7 @@ fn tail(self: *Put, ed: *Editor) Text.Error!void {
     }
     f.unread = false; // exec.c:806
     try wintag.setTagCommit(ed, w); // exec.c:818 winsettag
+    try @import("markdown/markdown.zig").onPut(ed, w); // ADR-0008: refresh the preview
     ed.needs_flush = true;
 }
 

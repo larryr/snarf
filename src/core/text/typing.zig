@@ -33,6 +33,7 @@ const draw = @import("draw");
 const Text = @import("Text.zig");
 const Editor = @import("../Editor.zig");
 const wintag = @import("../wintag.zig");
+const mdpreview = @import("../markdown/preview.zig");
 
 // Plan 9 key runes. THE VALUES ARE THE 4e TREE'S (larryr/plan9@ed1a9c2
 // sys/include/keyboard.h:22-46), which R-P6-7 makes the device contract for
@@ -105,8 +106,31 @@ fn typecommit(t: *Text, ed: *Editor) Text.Error!void {
     }
 }
 
+fn previewLines(t: *Text, r: u21) i32 {
+    const n: usize = switch (r) {
+        Kdown, Kup => @max(t.fr.maxlines / 3, 1),
+        Kpgdown, Kpgup => @max(2 * t.fr.maxlines / 3, 1),
+        else => 1,
+    };
+    return @intCast(n);
+}
+
 /// `texttype` (text.c:668-942) subset — feed one key rune `r` to `t`.
 pub fn typeRune(t: *Text, ed: *Editor, r: u21) Text.Error!void {
+    // A markdown preview body scrolls and does not take text (ADR-0008).
+    if (t.preview_body) if (t.w) |w| {
+        switch (r) {
+            Kdown, Kscrollonedown, Kpgdown => {
+                try mdpreview.scrollLines(w, previewLines(t, r));
+                return;
+            },
+            Kup, Kscrolloneup, Kpgup => {
+                try mdpreview.scrollLines(w, -previewLines(t, r));
+                return;
+            },
+            else => return,
+        }
+    };
     switch (r) {
         // Kleft/Kright: commit the run and move the caret. The C collapses to
         // q0-1 / q1+1 regardless of any selection (text.c:684-693); typecommit

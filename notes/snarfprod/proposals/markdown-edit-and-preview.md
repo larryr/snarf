@@ -1,6 +1,6 @@
 # Proposal: Markdown editing and rendered preview
 
-**Status: PROPOSED** (three points decided by Larry 2026-10-14; see §8). Scheduled after M3. This is a SnarfProdd working note, not a requirement. It would reach `docs/product/` only via a PR once Larry agrees.
+**Status: PROPOSED** (product shape decided by Larry 2026-10-14 and 2026-11-26; see §8). The questions in §7 are closed. The multi-font preview frame is [ADR-0008](../../../docs/spec/adr/0008-markdown-preview.md). Scheduled after M3. This is a SnarfProdd working note, not a requirement. It would reach `docs/product/` only via a PR once Larry agrees.
 **Author:** SnarfProdd (PM). **Date:** 2026-10-14.
 
 ## 1. Editing: plain text in normal windows
@@ -17,7 +17,7 @@
 - The preview opens as a **sibling in a side column**. It reuses the existing column if one is already there; otherwise it creates one at the right edge.
 - The preview window:
   - is read-only;
-  - is named after its source (see §7, file names);
+  - is named `<source path>+Markdown` (D7);
   - has a tag carrying `Markdown` (refresh) and `Del`.
 - **Decided (Larry, 2026-10-14):** running `Markdown` again on the same source re-renders into the existing preview window. There is **one preview per source file**, never a second copy.
 - **Decided (Larry, 2026-10-14): the preview renders styled text from the start** (see §8).
@@ -56,30 +56,29 @@
 ## 6. Fit with the architecture
 
 - **Native-primary via devdraw** (ADR-0005 amendment). The preview is an ordinary snarf window drawn through devdraw, so it needs no new host capability. devdraw already supports multiple fonts and colours. The limit is acme's one-font-per-frame layout, so the preview needs its own multi-font renderer (§8).
-- **Frozen WASM target.** No browser-specific work. The renderer must stay core-side and pure Zig (or a sidecar process), so it doesn't break the "WASM still compiles" CI check (#8). Browser parity is not a goal.
-- **M5 agents.** The preview is **a file in snarf's 9P tree** (e.g. the window's `body`, plus a rendered-text file). Agents can then:
+- **Frozen WASM target.** No browser-specific work. The renderer stays core-side and pure Zig (D4), so the "WASM still compiles" CI check (#8) stays green. Browser parity is not a goal.
+- **M5 agents.** The preview window's `body` is the rendered text (D7). Agents can then:
   - read rendered output the same way they read any window;
-  - trigger a refresh by writing to `ctl`.
+  - trigger a refresh by writing `markdown` to the source window's `ctl`, once ctl can carry that verb.
 
   This fits the M5 draft (agents as namespace clients). It depends on the M4 served tree.
-- **Process service (M2).** If the renderer is external (`cmark` or `pandoc`), it runs through the M2 native process service, local and trusted per the 2026-10-11 decision.
+- **Renderer.** A Zig CommonMark subset inside the module (D4). It does not shell out, so it does not wait on the M2 process service.
 
 ## 7. Open questions
 
-1. **Renderer:** `cmark` (C, CommonMark, small) vs `pandoc` (huge, very capable, external) vs a **Zig CommonMark parser** in core (WASM-safe and dependency-free, but there is work to do).
-2. **Links:** do coloured links stay B3-able in the preview (open the target or plumb the URL)? Images, tables and math go via `-web` (decided); the open part is how the styled preview should mark where they were left out.
-3. **Local-only security:** the renderer must never fetch remote URLs (images, includes) by default. Raw HTML is passed through or stripped? What happens when the source is on a **remote 9P mount**?
-4. **Preview names in the 9P tree:**
-   - `+Markdown` beside the file (like `+Errors`), or `file.md+preview`?
-   - Is there a per-window `rendered` file under `/mnt/snarf/<id>/` for agents?
+None. The four questions that were here are D4–D7 in §8.
 
-## 8. Decisions (Larry, 2026-10-14)
+## 8. Decisions (Larry, 2026-10-14 and 2026-11-26)
 
 | # | Decision |
 |---|---|
 | D1 | **One preview per source file.** Re-running `Markdown` reuses the existing preview window |
 | D2 | **`Markdown -web` is kept.** It plumbs rendered HTML to the external browser, for full fidelity |
 | D3 | **The preview shows styled text from the start, not plain reflow.** See below |
+| D4 | **The renderer is a Zig CommonMark subset in core.** It draws headings, emphasis, code, links, lists, and quotes. It recognizes images, tables, raw HTML, and math well enough to mark them omitted. No cmark, no pandoc, no new dependency, no ADR. The same parse produces the `-web` HTML. The WASM build stays a pure Zig module |
+| D5 | **Coloured links are B3-able through the editor's look path.** A relative path or `path#anchor` opens with look. An `http(s)` link uses the editor's URL path, which today warns that opening URLs is deferred (R-EDIT-13). An image, table, math construct, or raw HTML construct becomes a marker where it stood: `«image: alt»` (`«image»` when there is no alt), `«table»`, `«math»`, `«html»`. Inline where the construct was inline, on its own line where it was a block. The marker is not a link and does not fetch |
+| D6 | **The renderer reads the window buffer and nothing else.** It never fetches a URL, never follows an include, and there is no flag to turn that on. `Markdown -web` emits the rendered constructs plus tables, math, and image tags whose `src` is passed through; the browser may load those images. Raw HTML is escaped text in that page, so a script in the file does not run. A file on a remote 9P mount gets the same result. Snarf does not read the mount to inline images, so a relative image may not resolve |
+| D7 | **The preview window is named `<source path>+Markdown`.** Example: `/Users/larry/notes/foo.md+Markdown`. The tag carries `Markdown` and `Del`. It is not a disk file, and `Put` does not write it. Agents read that window's body. A `markdown` ctl verb on the source window arrives with the builtin, when ctl can carry it. There is no separate `rendered` file. `dir/+Markdown` was rejected: `+Errors` is one window per directory, and two sources in one directory would collide |
 
 **D3 in detail:**
 - devdraw already supports multiple fonts and colours. The limit is acme's **one-font-per-frame** text layout.
@@ -98,3 +97,4 @@
 |---|---|
 | 2026-10-14 | v0.1 created (SnarfProdd). Records the update policy agreed with Larry; status PROPOSED, scheduled after M3 |
 | 2026-10-14 | v0.2: Larry's decisions recorded (§8). D1: one preview per source. D2: `Markdown -web` kept. D3: styled multi-font preview from the start, edit windows stay single-font, tables/images/math via `-web`. These were removed from the open questions, which are renumbered |
+| 2026-11-26 | v0.3: Larry closed the four open questions (§8, D4–D7). Zig CommonMark subset in core; B3 links via look, with short omission markers; renderer is buffer-only and `-web` escapes raw HTML; window name is `<path>+Markdown`, no extra rendered file. §7 is empty. D3's multi-font frame is still an ADR gate |
