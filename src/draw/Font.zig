@@ -218,6 +218,10 @@ info: []Fontchar,
 
 pub const InitError = Display.Error || Image.LoadError || ParseError;
 
+/// Heading face for the markdown preview (ADR-0008): `fixed/10x20.0000`,
+/// public domain, same family as `default_subfont`. Edit windows do not load it.
+pub const heading_subfont: []const u8 = @embedFile("font_fixed10x20");
+
 /// Parse `subfont_data` and build the server-side glyph cache (R-P3-5 identity
 /// layout; font.c:280-317). Allocates a cache image whose rect *is* the strip's,
 /// uploads the strip into a temporary image, then for each non-zero-width glyph
@@ -227,7 +231,12 @@ pub const InitError = Display.Error || Image.LoadError || ParseError;
 pub fn init(allocator: std.mem.Allocator, display: *Display, subfont_data: []const u8) InitError!Font {
     var sub = try Subfont.parse(allocator, subfont_data);
     defer sub.deinit(allocator);
+    return initSubfont(allocator, display, sub);
+}
 
+/// Upload an already-parsed strip. `sub` stays with the caller. The cache
+/// layout is the same identity layout as `init` (R-P3-5).
+pub fn initSubfont(allocator: std.mem.Allocator, display: *Display, sub: Subfont) InitError!Font {
     // Strip first (own 'b' + 'y'), then the cache image, matching libdraw's
     // load order — the string test pins this write sequence.
     var strip = try display.allocImage(sub.r, sub.chan, false, 0);

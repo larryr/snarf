@@ -16,6 +16,7 @@
 const std = @import("std");
 const draw = @import("draw");
 const Text = @import("Text.zig");
+const mdpreview = @import("../markdown/preview.zig");
 
 const Rect = draw.Rect;
 const Point = draw.Point;
@@ -53,6 +54,7 @@ pub fn scrPos(r: Rect, p0_in: usize, p1_in: usize, tot_in: usize) Rect {
 /// over the elevator, then BORD over the elevator's rightmost 1px edge.
 pub fn scrDraw(t: *Text) Text.Error!void {
     if (t.w == null or t.what != .body) return; // scrl.c:61
+    if (t.preview_body) return mdpreview.scrDraw(t);
     const r2 = scrPos(t.scrollr, t.org, t.org + t.fr.nchars, t.file.buffer.len()); // scrl.c:70
     if (eqRect(r2, t.lastsr)) return; // scrl.c:71 !eqrect guard
     t.lastsr = r2; // scrl.c:72
@@ -68,6 +70,7 @@ pub fn scrDraw(t: *Text) Text.Error!void {
 /// up N lines from the top (N = rows above `my`); B3 ⇒ scroll the char under `my`
 /// to the top. `but` is the 1-based button number.
 pub fn scrollClick(t: *Text, but: u3, pt: Point) Text.Error!void {
+    if (t.preview_body) return mdpreview.scrollClick(t, but, pt);
     const s = insetRect(t.scrollr, 1); // scrl.c:114
     const h = s.max.y - s.min.y; // scrl.c:115
     var my = pt.y; // scrl.c:122

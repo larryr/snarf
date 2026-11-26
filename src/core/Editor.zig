@@ -38,6 +38,8 @@ const Regx = @import("edit/Regx.zig");
 const originhook = @import("originhook.zig");
 const wintag = @import("wintag.zig");
 const restoremouse = @import("restoremouse.zig");
+const markdown = @import("markdown/markdown.zig");
+const md_faces = @import("markdown/faces.zig");
 
 const Editor = @This();
 const Point = draw.Point;
@@ -169,6 +171,13 @@ loads: std.ArrayList(*Load) = .empty,
 /// `pendinglook.dropPending` (reached from `Load.dropWindow`/`Load.deinitAll`).
 pending_look: ?*pendinglook.PendingLook = null,
 puts: std.ArrayList(*Put) = .empty, // in-flight Puts (phase 17), heap-pinned like `loads`
+/// Markdown preview faces (ADR-0008). Null until the first `Markdown`.
+/// Freed in `deinit` while the display is still alive.
+md: ?*md_faces.Session = null,
+/// Host hook for `Markdown -web`. The native host opens the HTML file.
+/// The browser host leaves this null and the command warns.
+open_html: ?*const fn (ctx: *anyopaque, html: []const u8) void = null,
+open_html_ctx: ?*anyopaque = null,
 session: @import("Session.zig") = .{}, // `$home` + the Dump/Load in flight (phase 17)
 /// Set by any handler that painted into the display's op buffer this tick;
 /// `frameEnd` performs at most one `display.flush` per tick when it is set.
@@ -183,6 +192,11 @@ pub fn init(allocator: std.mem.Allocator) Editor {
 }
 
 pub fn deinit(self: *Editor) void {
+    if (self.md) |s| {
+        s.deinit();
+        self.allocator.destroy(s);
+        self.md = null;
+    }
     Load.deinitAll(self); // abandon every in-flight window load (phase 13b)
     Put.deinitAll(self);
     self.session.deinit(self.allocator);
@@ -314,6 +328,7 @@ pub fn frameEnd(ed: *Editor, display: *draw.Display) !void {
     // live tag composed by the sweep below, in this same frame (util.c:211-258).
     try Load.stepAll(ed); // one 9P state per in-flight window load (13b, §3b)
     try Put.stepAll(ed); // and per in-flight Put (phase 17)
+    try markdown.flushLive(ed); // opted-in markdown previews (ADR-0008)
     try ed.session.step(ed); // and the Dump/Load in flight (phase 17)
     try errors.flushWarnings(ed);
     try wintag.sweep(ed); // the live-tag sweep (R-P9-4), moved out in phase 16a

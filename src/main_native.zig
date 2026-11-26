@@ -26,6 +26,7 @@
 //! mount-table entries, not host entries. Not here yet (ADR-0005 §5): a
 //! process service, `/n/origin`, `/mnt/opfs`.
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core");
 const dev = @import("dev");
 const draw = @import("draw");
@@ -96,6 +97,8 @@ pub const App = struct {
     // --- namespace ---
     ns: ninep.mount.Namespace,
     self_tree: ns_boot.SelfTree,
+    /// `Markdown -web` writes a file with this Io and asks the OS to open it.
+    html_io: ?std.Io = null,
 };
 
 /// Drive an in-process 9P server one poll at a time (the `main_wasm` pump).
@@ -229,6 +232,25 @@ fn winsizeFromEnv(env: *const std.process.Environ.Map) []const u8 {
     return env.get("winsize") orelse "1024x768";
 }
 
+/// `Markdown -web` (ADR-0008). Write the page and hand it to the OS. Failures
+/// are swallowed: the command has already returned, and a missing opener must
+/// not take the editor down. Tests never install this hook.
+fn openMarkdownHtml(ctx: *anyopaque, html: []const u8) void {
+    const a: *App = @ptrCast(@alignCast(ctx));
+    const io = a.html_io orelse return;
+    var f = std.Io.Dir.createFileAbsolute(io, "/tmp/snarf-markdown.html", .{}) catch return;
+    defer f.close(io);
+    f.writePositionalAll(io, html, 0) catch return;
+    const bin: []const u8 = if (builtin.os.tag == .macos) "/usr/bin/open" else "xdg-open";
+    var child = std.process.spawn(io, .{
+        .argv = &.{ bin, "/tmp/snarf-markdown.html" },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return;
+    _ = child.wait(io) catch {};
+}
+
 /// Build the whole stack in place (pointer-capture hazards — see `App`).
 /// `host_root` is the host directory served at `/` and `/mnt/host` — the
 /// real `/` in `main`, a scratch directory in the tests. Each allocating step
@@ -269,6 +291,9 @@ pub fn boot(gpa: std.mem.Allocator, io: std.Io, a: *App, pal: *const core.Palett
     a.tree.bind(&a.editor);
     a.editor.but2col = a.tree.chrome.but2col;
     a.editor.but3col = a.tree.chrome.but3col;
+    a.html_io = io;
+    a.editor.open_html = openMarkdownHtml;
+    a.editor.open_html_ctx = a;
 
     // ---- input stack ----
     a.devinput = DevInput9.init(gpa, &a.conn);

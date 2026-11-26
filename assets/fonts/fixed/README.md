@@ -6,6 +6,11 @@
 
 sha256: `ac0b4bccf24c92471b0aab8e025fe56c1dcb58f5b8c27c32bf6a1dd49b589481`
 
+`10x20.0000` is the same family's 0x0000–0x00FF subfont, copied unmodified from
+`lib/font/bit/fixed/10x20.0000` in that tree. The markdown preview uses it for
+headings (ADR-0008). sha256:
+`ac85ca1e10e2331052bb1648a752e70cf7f4b1154ba7b7e106395b45415fb889`.
+
 ## License
 
 The controlling notice is `lib/font/bit/fixed/README` in that tree (same text in

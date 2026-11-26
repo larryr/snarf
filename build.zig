@@ -25,11 +25,17 @@ pub fn build(b: *std.Build) void {
     const font_fixed9x18 = b.createModule(.{
         .root_source_file = b.path("assets/fonts/fixed/9x18.0000"),
     });
+    // Heading face for the markdown preview (ADR-0008). Same public-domain
+    // misc-fixed family; edit windows keep 9x18.
+    const font_fixed10x20 = b.createModule(.{
+        .root_source_file = b.path("assets/fonts/fixed/10x20.0000"),
+    });
     const draw = b.addModule("draw", .{
         .root_source_file = b.path("src/draw/draw.zig"),
         .imports = &.{
             .{ .name = "ninep", .module = ninep },
             .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
+            .{ .name = "font_fixed10x20", .module = font_fixed10x20 },
         },
     });
     const core = b.addModule("core", .{
@@ -222,6 +228,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, target, optimize, "src/draw/draw.zig", &.{
         .{ .name = "ninep", .module = ninep },
         .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
+        .{ .name = "font_fixed10x20", .module = font_fixed10x20 },
     });
     addModuleTests(b, test_step, target, optimize, "src/core/core.zig", &.{
         .{ .name = "draw", .module = draw },
@@ -266,6 +273,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "hostfs", .module = hostfs }, // phase 20: the real HostTree behind accept_hostfs.zig
         .{ .name = "shim", .module = shim }, // test_blit seam (phase-5); core's no-shim boundary is separately guarded
         .{ .name = "font_fixed9x18", .module = font_fixed9x18 },
+        .{ .name = "font_fixed10x20", .module = font_fixed10x20 },
     });
     // The native entry point's boot → session → shutdown (#58), over a
     // scripted devdraw peer: no child process, no window. Same imports as

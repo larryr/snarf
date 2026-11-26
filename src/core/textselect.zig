@@ -16,6 +16,7 @@ const Editor = @import("Editor.zig");
 const Gesture = @import("Gesture.zig");
 const exec = @import("exec/exec.zig");
 const look = @import("look.zig");
+const markdown = @import("markdown/markdown.zig");
 const restoremouse = @import("restoremouse.zig");
 
 const Point = draw.Point;
@@ -193,10 +194,21 @@ fn dispatchSel23(g: *Gesture, ed: *Editor, t: *Text) Text.Error!void {
     const q1 = g.sel23_range.q1;
     if (g.sel23_button == B2) {
         if (buts & B3 != 0) return; // text.c:1368-1369 B3-join cancels
+        // ADR-0008: B2 in a preview body refreshes it from the source buffer.
+        if (t.preview_body) if (t.w) |w| {
+            try markdown.refresh(ed, w);
+            return;
+        };
         const argt: ?*Text = if (buts & B1 != 0) ed.argtext else null; // text.c:1370-1373
         try exec.execute(ed, t, q0, q1, argt); // acme.c:662
     } else {
         if (buts & (B1 | B2) != 0) return; // text.c:1382 B1/B2-join cancels
+        if (t.preview_body) if (t.w) |w| {
+            if (markdown.hrefAt(w, g.mouse_pt)) |href| {
+                try markdown.openHref(ed, w, href);
+                return;
+            }
+        };
         try look.look(ed, t, q0, q1, false); // acme.c:666
     }
 }

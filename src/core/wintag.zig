@@ -173,6 +173,9 @@ pub fn setTag1(w: *Window) Error!void {
     // wind.c:520-523: `Get` sits OUTSIDE the filemenu arm, so a directory
     // window — which has `filemenu == FALSE` (text.c:219) — still shows it.
     if (w.isdir) try appendAsciiRunes(&new, a, " Get"); // wind.c:521-522
+    // ADR-0008: the preview tag carries `Markdown` (refresh) immediately
+    // before the bar. Ordinary windows do not, so their tag strings stay put.
+    if (w.preview != null) try appendAsciiRunes(&new, a, " Markdown");
     try appendAsciiRunes(&new, a, " |"); // wind.c:524
     // user-suffix preservation: k = just past the old '|'; else append " Look "
     // for a fresh window (wind.c:526-535).
@@ -255,7 +258,7 @@ pub fn setTagCommit(ed: *Editor, w: *Window) Error!void {
 /// `commit`, RowLoad).
 pub fn setName(w: *Window, name: []const u8) Error!void {
     if (std.mem.eql(u8, name, w.body.file.name.items)) return; // wind.c:385-386
-    w.isscratch = std.mem.endsWith(u8, name, "/guide") or std.mem.endsWith(u8, name, "+Errors") or std.mem.endsWith(u8, name, "+Help"); // wind.c:387-391; +Help is scratch like +Errors (#88)
+    w.isscratch = std.mem.endsWith(u8, name, "/guide") or std.mem.endsWith(u8, name, "+Errors") or std.mem.endsWith(u8, name, "+Help") or std.mem.endsWith(u8, name, "+Markdown"); // wind.c:387-391; +Help and +Markdown are scratch like +Errors
     try w.body.file.setName(name); // wind.c:392
     try setTag1(w); // wind.c:393-396
 }

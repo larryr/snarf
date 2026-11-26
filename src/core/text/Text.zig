@@ -34,6 +34,7 @@ const File = @import("../File.zig");
 const Buffer = @import("../Buffer.zig");
 const chrome = @import("../Chrome.zig");
 const Window = @import("../Window.zig");
+const mdpreview = @import("../markdown/preview.zig");
 
 const Text = @This();
 const Point = draw.Point;
@@ -83,8 +84,12 @@ what: What = .body,
 /// The owning `Window`, or null for a standalone Text (F-9 tests / pre-boot).
 /// The `Text`↔`Window` import cycle is intended and legal in Zig — same
 /// precedent as the Display↔Image cycle (see Image.zig's header). `scrDraw`
-/// only ever null-checks `w`, never dereferences it (R-P8-1).
+/// only ever null-checks `w`, never dereferences it (R-P8-1), unless
+/// `preview_body` is set — that flag is only set on a window `init` built.
 w: ?*Window = null,
+/// Body is a markdown preview (ADR-0008). Kept on the Text so `scrDraw` can
+/// branch without reading a dummy `w` (scroll.zig).
+preview_body: bool = false,
 /// The Text's whole rectangle before the scrollbar strip is carved off
 /// (dat.h:187); `fr.r`/`fr.entire` cover only the text area to its right.
 all: draw.Rect = zerorect,
@@ -131,6 +136,7 @@ pub fn init(
         .all = r,
         .scrollr = scrollr,
         .lastsr = zerorect,
+        .preview_body = false,
     };
     // textredraw's tab width (text.c:53-60). libframe's `frinit` leaves
     // `maxtab = 8*stringwidth("0")`; acme OVERRIDES it on every `textredraw`
@@ -187,6 +193,10 @@ fn textRedraw(self: *Text, r: draw.Rect) Error!void {
     try self.backfill(); // text.c:48-51
     try self.fill(); // text.c:69 textfill
     try self.setSelect(self.q0, self.q1); // text.c:70 textsetselect
+    if (self.preview_body) if (self.w) |w| {
+        try mdpreview.relayout(w);
+        try mdpreview.paint(w);
+    };
 }
 
 /// `textresize` (text.c:73-98), single-Text: relayout into `r`, trimming to a
@@ -257,6 +267,10 @@ pub fn fill(self: *Text) Error!void {
 /// Full-frame redraw (text.c calls through `frame.c`'s `frredraw`; P4 has no
 /// selection, so this is a thin pass-through).
 pub fn redraw(self: *Text) Error!void {
+    if (self.preview_body) if (self.w) |w| {
+        try mdpreview.paint(w);
+        return;
+    };
     try self.fr.redraw();
 }
 
@@ -268,6 +282,7 @@ pub fn redraw(self: *Text) Error!void {
 /// origin-shift arm is now LIVE (phase 7 scrolling — an edit above the view
 /// slides `org` down by `n`).
 pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!void {
+    if (mdpreview.blocksEdit(self)) return;
     const n = std.unicode.utf8CountCodepoints(bytes) catch unreachable; // valid by contract
     if (n == 0) return; // text.c:373-374
     if (tofile) try self.file.insert(q0, bytes); // text.c:376 fileinsert
@@ -275,6 +290,7 @@ pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!v
     // tag-sweep (frameEnd, 9d) and `Window.clean` read it. Tag edits never dirty.
     if (tofile and self.what == .body) if (self.w) |w| {
         w.dirty = true;
+        if (!self.preview_body) mdpreview.noteSourceEdit(w);
     };
     if (q0 < self.iq1) self.iq1 += n; // text.c:393-394
     if (q0 < self.q1) self.q1 += n; // text.c:395-396
@@ -295,11 +311,13 @@ pub fn insertAt(self: *Text, q0: usize, bytes: []const u8, tofile: bool) Error!v
 /// (text.c:496-505) and `textfill` to top the frame back up (text.c:506). The
 /// `q1<=org` arm that re-anchors the origin is now LIVE (phase 7 scrolling).
 pub fn deleteRange(self: *Text, q0: usize, q1: usize, tofile: bool) Error!void {
+    if (mdpreview.blocksEdit(self)) return;
     const n = q1 - q0; // text.c:468
     if (n == 0) return; // text.c:469-470
     if (tofile) try self.file.delete(q0, n); // text.c:472 filedelete
     if (tofile and self.what == .body) if (self.w) |w| {
         w.dirty = true; // text.c:474 `w->dirty = TRUE` (BODY edits only)
+        if (!self.preview_body) mdpreview.noteSourceEdit(w);
     };
     if (q0 < self.iq1) self.iq1 -= @min(n, self.iq1 - q0); // text.c:488-489
     if (q0 < self.q0) self.q0 -= @min(n, self.q0 - q0); // text.c:490-491

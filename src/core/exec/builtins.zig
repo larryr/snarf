@@ -6,7 +6,7 @@
 //! The C's 28-entry table reduces to: Cut, Del, Delcol, Delete, Dump, Get,
 //! Load, Look, New, Newcol, Paste, Put, Putall, Redo, Snarf, Undo (exec.c:98-130,
 //! alphabetical; Dump/Load/Put/Putall since phase 17), plus the port's own
-//! Reconnect, Help (#88), and the Edit language. Deferred per R-P9-7: the
+//! Reconnect, Help (#88), Markdown (ADR-0008), and the Edit language. Deferred per R-P9-7: the
 //! external `run` path (unknown word ⇒ silent no-op) and Sort/Zerox/Exit (need
 //! multi-Text-per-File or session work). The command functions live in the
 //! sibling `cmd_edit.zig`/`cmd_window.zig`/`cmd_help.zig`.
@@ -28,6 +28,7 @@ const cmd_dump = @import("cmd_dump.zig");
 const cmd_get = @import("cmd_get.zig");
 const cmd_help = @import("cmd_help.zig");
 const cmd_look = @import("cmd_look.zig");
+const cmd_markdown = @import("cmd_markdown.zig");
 const cmd_origin = @import("cmd_origin.zig");
 const cmd_put = @import("cmd_put.zig");
 const cmd_window = @import("cmd_window.zig");
@@ -80,6 +81,8 @@ pub const exectab = [_]Entry{
     // exec.c:116 — Look searches the executing window's body (R-EDIT-07); both
     // flags are XXX-unused (exec.c:1080-1081 `USED(_0); USED(_1);`).
     .{ .name = "Look", .fn_ = cmd_look.look, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:116
+    // ADR-0008. Snarf-only. Does not mark or edit the source window.
+    .{ .name = "Markdown", .fn_ = cmd_markdown.markdownCmd, .mark = false, .flag1 = false, .flag2 = false },
     .{ .name = "New", .fn_ = cmd_window.new, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:117 (flag1/flag2 XXX unused)
     .{ .name = "Newcol", .fn_ = cmd_window.newcol, .mark = false, .flag1 = false, .flag2 = false }, // exec.c:118 (flag1/flag2 XXX unused)
     // exec.c:119 — flag2 is the C's XXX==2, TRUTHY (dat.h:488-493): tobody=TRUE is
@@ -100,18 +103,19 @@ test "builtins: table shape and flags match exec.c" {
     // Grew by four rows (phase 17): Dump (exec.c:105), Load (:114), Put (:120)
     // and Putall (:121), each in its exec.c alphabetical slot. Earlier growth:
     // Get (R-P13b-5), Look (R-P12b-1), Reconnect (R-P12-7), Edit (R-P10-8).
-    // Help (#88) is the 19th row, between Get and Load.
-    try testing.expectEqual(@as(usize, 19), exectab.len);
-    // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect + Help).
-    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Get", "Help", "Load", "Look", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Undo" };
+    // Help (#88) sits between Get and Load. Markdown (ADR-0008) is the 20th
+    // row, between Look and New.
+    try testing.expectEqual(@as(usize, 20), exectab.len);
+    // Alphabetical order (exec.c:98-130 subset + Edit at :106 + Reconnect + Help + Markdown).
+    const names = [_][]const u8{ "Cut", "Del", "Delcol", "Delete", "Dump", "Edit", "Get", "Help", "Load", "Look", "Markdown", "New", "Newcol", "Paste", "Put", "Putall", "Reconnect", "Redo", "Snarf", "Undo" };
     for (names, 0..) |n, i| try testing.expectEqualStrings(n, exectab[i].name);
     // Cut marks + snarfs + cuts; Snarf marks NOT, snarfs, does not cut.
     try testing.expect(exectab[0].mark and exectab[0].flag1 and exectab[0].flag2); // Cut
-    try testing.expect(!exectab[17].mark and exectab[17].flag1 and !exectab[17].flag2); // Snarf
+    try testing.expect(!exectab[18].mark and exectab[18].flag1 and !exectab[18].flag2); // Snarf
     // Paste's flag2 (tobody) is the truthy XXX.
-    try testing.expect(exectab[12].mark and exectab[12].flag1 and exectab[12].flag2); // Paste
+    try testing.expect(exectab[13].mark and exectab[13].flag1 and exectab[13].flag2); // Paste
     // Undo/Redo differ only in flag1 (isundo).
-    try testing.expect(exectab[18].flag1 and !exectab[16].flag1); // Undo vs Redo
+    try testing.expect(exectab[19].flag1 and !exectab[17].flag1); // Undo vs Redo
     // Delete = Del with flag1 (skip-clean twin).
     try testing.expect(exectab[3].flag1 and !exectab[1].flag1);
     // Dump/Load share `dump` and differ only in flag1 (isdump); neither marks.
@@ -124,9 +128,11 @@ test "builtins: table shape and flags match exec.c" {
     // Look never marks and never edits; both flags are unused (exec.c:116).
     try testing.expect(!exectab[9].mark and !exectab[9].flag1 and !exectab[9].flag2);
     // Put/Putall never mark (exec.c:120-121).
-    try testing.expect(!exectab[13].mark and !exectab[14].mark);
+    try testing.expect(!exectab[14].mark and !exectab[15].mark);
     // Reconnect touches the session, never a buffer: it marks nothing.
-    try testing.expect(!exectab[15].mark and !exectab[15].flag1 and !exectab[15].flag2);
+    try testing.expect(!exectab[16].mark and !exectab[16].flag1 and !exectab[16].flag2);
+    // Markdown opens a preview and does not mark the source.
+    try testing.expect(!exectab[10].mark and std.mem.eql(u8, exectab[10].name, "Markdown"));
 }
 
 test "builtins: Look is named in the table and resolves to cmd_look.look (T6)" {
